@@ -9,16 +9,7 @@ use MatthiasMullie\Minify;
 
 class PwaxController extends Controller
 {
-    /**
-     * Create a new controller instance.
-     */
-    public function __construct() {}
 
-    /**
-     * Return the js file of the given blade file
-     *
-     * @param  string  $name
-     */
     public function js($name): Response
     {
         $name = str_replace('_x_', '.', str_replace('__x__', '::', $name));
@@ -31,11 +22,6 @@ class PwaxController extends Controller
         return response($script)->header('Content-Type', 'application/javascript');
     }
 
-    /**
-     * Return the css file of the given blade file
-     *
-     * @param  string  $name
-     */
     public function css($name): Response
     {
         $name = str_replace('_x_', '.', str_replace('__x__', '::', $name));
@@ -48,11 +34,6 @@ class PwaxController extends Controller
         return response($style)->header('Content-Type', 'text/css');
     }
 
-    /**
-     * Return the vue file of the given blade file
-     *
-     * @param  string  $name
-     */
     public function module($name): JsonResponse|Response
     {
         $name = str_replace('_x_', '.', str_replace('__x__', '::', $name));

@@ -8,9 +8,6 @@ use Illuminate\Support\Str;
 
 class PwaxServiceProvider extends ServiceProvider
 {
-    /**
-     * Bootstrap any package services.
-     */
     public function boot()
     {
         $this->bootHelpers();
@@ -20,9 +17,6 @@ class PwaxServiceProvider extends ServiceProvider
         $this->bootViews();
     }
 
-    /**
-     * Register any application services.
-     */
     public function register()
     {
         //

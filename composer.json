@@ -1,6 +1,5 @@
 {
     "name": "mxent/pwax",
-    "version": "1.0.0",
     "description": "Progressive Web App built with Laravel & Vue",
     "type": "library",
     "license": "MIT",
@@ -27,6 +26,6 @@
             ]
         }
     },
-    "minimum-stability": "stable",
+    "minimum-stability": "dev",
     "prefer-stable": true
 }

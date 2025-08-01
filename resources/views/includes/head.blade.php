@@ -9,7 +9,7 @@
 
 <title>@yield('title', config('app.name'))</title>
 
-@foreach(config('base.styles', []) as $style)
+@foreach(config('pwax.styles', []) as $style)
     <link rel="stylesheet" href="{{ $style }}">
 @endforeach
 

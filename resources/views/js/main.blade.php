@@ -12,7 +12,7 @@
 
         app.mount('#app');
 
-        $('#app').removeClass('preloader');
+        document.getElementById('app').classList.remove('preloader');
 
     });
 </script>

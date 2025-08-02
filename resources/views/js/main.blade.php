@@ -10,8 +10,6 @@
         window.pinia = Pinia.createPinia();
         app.use(pinia);
 
-        window.emitter = mitt();
-
         app.mount('#app');
 
         $('#app').removeClass('preloader');

@@ -32,10 +32,13 @@
             } else {
                 $vue.currentPage = to.params.page;
             }
-            window.emitter.emit('routing', {
-                from: from,
-                to: to,
+            const routingEvent = new CustomEvent('routing', {
+                detail: {
+                    from: from,
+                    to: to,
+                }
             });
+            document.dispatchEvent(routingEvent);
             await $vue.fetchComponent(to.params.page);
         },
         methods: {
@@ -100,10 +103,13 @@
                     $vue.loading = false;
                     $vue.$nextTick(function() {
                         setTimeout(function() {
-                            window.emitter.emit('routed', {
-                                component: componentOptions,
-                                page: $vue.currentPage,
+                            const routedEvent = new CustomEvent('routed', {
+                                detail: {
+                                    component: componentOptions,
+                                    page: $vue.currentPage,
+                                }
                             });
+                            document.dispatchEvent(routedEvent);
                         }, 0);
                     });
                 });

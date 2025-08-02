@@ -4,17 +4,26 @@
     }
 
     .preloader {
-        position: fixed;
+        position: relative;
+        height: 100vh;
+        width: 100vw;
+    }
+
+    .preloader:before {
+        content: '';
+        position: absolute;
         top: 0;
         left: 0;
         width: 100%;
         height: 100%;
         background: #fff;
+        z-index: 9999;
     }
 
     .preloader:after {
         content: '';
         position: absolute;
+        transform: translate(-50%, -50%);
         top: 50%;
         left: 50%;
         width: 60px;
@@ -24,6 +33,7 @@
         border-top-color: {{ config('pwax.customization.init_spinner_color', '#0c83ff') }};
         border-radius: 50%;
         animation: spin 1s linear infinite;
+        z-index: 9999;
     }
 
     @keyframes spin {

@@ -38,12 +38,9 @@ return [
      * Scripts
      */
     'scripts' => [
-        'https://unpkg.com/vue@3.4.29/dist/vue.global.prod.js',
-        'https://unpkg.com/vue-router@4.3.3/dist/vue-router.global.prod.js',
-        'https://unpkg.com/@vueuse/shared@10.11.0/index.iife.min.js',
-        'https://unpkg.com/@vueuse/core@10.11.0/index.iife.min.js',
-        'https://unpkg.com/pinia@2.1.7/dist/pinia.iife.js',
-        'https://unpkg.com/jquery@3.7.1/dist/jquery.min.js',
-        'https://unpkg.com/mitt@3.0.1/dist/mitt.umd.js',
+        'https://unpkg.com/vue@3.5.18/dist/vue.global.prod.js',
+        'https://unpkg.com/vue-router@4.5.1/dist/vue-router.global.prod.js',
+        'https://unpkg.com/pinia@3.0.3/dist/pinia.iife.prod.js',
+        'https://unpkg.com/jquery@3.7.1/dist/jquery.js',
     ],
 ];

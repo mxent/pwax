@@ -4,4 +4,6 @@
 
 <script src="{{ url(config('pwax.route_prefix') . '/pwax__x__js_x_main.js') }}"></script>
 
-@yield('scripts')
+@if(config('pwax.blade.foot'))
+    @include(config('pwax.blade.foot'))
+@endif

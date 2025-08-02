@@ -1,7 +1,11 @@
-<h1>@{{ errResponse.statusText }}</h1>
-<p
-    v-html="errResponse.message || 'Please try to refresh the page.<br/>If the problem persists, please contact the administrator.'">
-</p>
-<a href="{{ router(config('pwax.home', '/')) }}">
-    Return to home
-</a>
+@if(config('pwax.blade.error'))
+    @include(config('pwax.blade.error'))
+@else
+    <h1>@{{ errResponse.statusText }}</h1>
+    <p
+        v-html="errResponse.message || 'Please try to refresh the page.<br/>If the problem persists, please contact the administrator.'">
+    </p>
+    <a href="{{ router(config('pwax.home', '/')) }}">
+        Return to home
+    </a>
+@endif

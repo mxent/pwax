@@ -8,11 +8,24 @@ return [
     'hash_route' => false,
     'base' => '/',
     'home' => 'index',
+    'route_prefix' => '__pwax__',
 
     /**
-     * Route Config
+     * Customization
      */
-    'route_prefix' => '__pwax__',
+    'init_spinner_color' => null,
+    'init_spinner_bg' => null,
+
+    /**
+     * Blade files
+     */
+    'blade' => [
+        'content' => null,
+        'head' => null,
+        'foot' => null,
+        'error' => null,
+        'loader' => null,
+    ],
 
     /**
      * Styles

@@ -1,12 +1,9 @@
 <style>
-    .app-not-loaded {
-        display: none !important;
-    }
-
     .preloader {
         position: relative;
         height: 100vh;
         width: 100vw;
+        overflow: hidden;
     }
 
     .preloader:before {

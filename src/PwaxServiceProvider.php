@@ -53,7 +53,7 @@ class PwaxServiceProvider extends ServiceProvider
 
     public function bootDirectives()
     {
-        Blade::if('import', function ($ins) {
+        Blade::directive('import', function ($ins) {
             $ins = trim($ins);
             $ins = substr($ins, 1, -1);
             $insBits = explode(' from ', $ins);

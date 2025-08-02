@@ -45,7 +45,7 @@ function vue($blade, $compact = null, $config = []): JsonResponse|RedirectRespon
 
     $bypass = isset($config['bypass']) ? $config['bypass'] : false;
     if (! request()->ajax() && ! $bypass && ! request()->header('X-Vue-Component')) {
-        return view('pwax::vue.page');
+        return view('pwax::components.vue.page');
     }
 
     if ($compact) {

@@ -4,7 +4,6 @@ return [
     /**
      * Main Config
      */
-    'enabled' => true,
     'hash_route' => false,
     'base' => '/',
     'home' => 'index',

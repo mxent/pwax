@@ -1,20 +1,18 @@
 <script>
-
     document.addEventListener('DOMContentLoaded', async function() {
 
-        const baseComp = @import('~pwax/vue/app');
+        const baseComp = @import('~pwax/components/vue/app');
         window.app = Vue.createApp(baseComp);
 
-        window.router = @import('~pwax/vue/router');
+        window.router = @import('~pwax/components/vue/router');
         app.use(router);
 
         window.pinia = Pinia.createPinia();
-        app.use(pinia);
+        app.use(pinia); 
 
         $('#app').removeClass('preloader');
 
         app.mount('#app');
 
     });
-
 </script>

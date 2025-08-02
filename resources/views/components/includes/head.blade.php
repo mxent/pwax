@@ -1,15 +1,15 @@
 <meta charset="utf-8" />
 <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"/>
-<meta name="csrf-token" content="{{ csrf_token() }}"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+<meta name="csrf-token" content="{{ csrf_token() }}" />
 
-@if (! app()->environment('production'))
+@if (!app()->environment('production'))
     <meta name="robots" content="noindex, nofollow" />
 @endif
 
 <title>@yield('title', config('app.name'))</title>
 
-@foreach(config('pwax.styles', []) as $style)
+@foreach (config('pwax.styles', []) as $style)
     <link rel="stylesheet" href="{{ $style }}">
 @endforeach
 

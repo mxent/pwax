@@ -27,7 +27,7 @@
         },
         async beforeRouteUpdate(to, from) {
             let $vue = this;
-            if($vue.currentPage == to.params.page){
+            if ($vue.currentPage == to.params.page) {
                 return;
             } else {
                 $vue.currentPage = to.params.page;
@@ -58,7 +58,8 @@
                         headTag.appendChild(lazyScript);
                     });
                 });
-                const loadedStylesHrefs = Array.from(document.querySelectorAll('link[rel="stylesheet"]')).map(link => link.href);
+                const loadedStylesHrefs = Array.from(document.querySelectorAll('link[rel="stylesheet"]')).map(
+                    link => link.href);
                 data.styles = data.styles.filter(style => !loadedStylesHrefs.includes(style));
                 const stylePromises = data.styles.map(function(cssPath) {
                     return new Promise(function(resolve, reject) {
@@ -96,9 +97,9 @@
                 });
 
             },
-            async fetchComponent(p="{{ config('pwax.home', '/') }}") {
+            async fetchComponent(p = "{{ config('pwax.home', '/') }}") {
                 const $vue = this;
-                if($vue.currentFetchComponent) {
+                if ($vue.currentFetchComponent) {
                     $vue.currentFetchComponent.abortController.abort();
                 }
 
@@ -106,7 +107,9 @@
                 $vue.loading = true;
 
                 const abortController = new AbortController();
-                $vue.currentFetchComponent = { abortController };
+                $vue.currentFetchComponent = {
+                    abortController
+                };
                 let response;
                 try {
                     let headers = new Headers();
@@ -118,11 +121,11 @@
                         signal: abortController.signal,
                     });
 
-                    if(abortController.signal.aborted){
+                    if (abortController.signal.aborted) {
                         return;
                     }
 
-                    if(response.status !== 200){
+                    if (response.status !== 200) {
                         throw new Error(response.status);
                         return;
                     }
@@ -134,7 +137,7 @@
 
                     const data = await response.json();
 
-                    if(data.redirect){
+                    if (data.redirect) {
                         $vue.$root.$router.push(data.redirect);
                         return;
                     }
@@ -158,8 +161,7 @@
                                 status: error.message,
                                 statusText: response.statusText,
                             };
-                        }
-                        else {
+                        } else {
                             $vue.errResponse = {
                                 status: 'Network Error',
                                 statusText: 'This page needs internet connection to load.',
@@ -172,7 +174,8 @@
                         };
                     }
                 } finally {
-                    if ($vue.currentFetchComponent && $vue.currentFetchComponent.abortController === abortController) {
+                    if ($vue.currentFetchComponent && $vue.currentFetchComponent.abortController ===
+                        abortController) {
                         $vue.currentFetchComponent = null;
                     }
                     $vue.loading = false;

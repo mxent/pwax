@@ -20,8 +20,8 @@
         width: 60px;
         height: 60px;
         margin: -30px 0 0 -30px;
-        border: 6px solid {{ config('pwax.init_spinner_bg', '#f3f3f3') }};
-        border-top-color: {{ config('pwax.init_spinner_color', '#0c83ff') }};
+        border: 6px solid {{ config('pwax.customization.init_spinner_bg', '#f3f3f3') }};
+        border-top-color: {{ config('pwax.customization.init_spinner_color', '#0c83ff') }};
         border-radius: 50%;
         animation: spin 1s linear infinite;
     }

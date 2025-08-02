@@ -13,8 +13,10 @@ return [
     /**
      * Customization
      */
-    'init_spinner_color' => null,
-    'init_spinner_bg' => null,
+    'customization' => [
+        'init_spinner_color' => '#0c83ff',
+        'init_spinner_bg' => '#f3f3f3',
+    ],
 
     /**
      * Blade files

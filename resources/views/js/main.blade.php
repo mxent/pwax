@@ -8,11 +8,13 @@
         app.use(router);
 
         window.pinia = Pinia.createPinia();
-        app.use(pinia); 
+        app.use(pinia);
 
-        $('#app').removeClass('preloader');
+        window.emitter = mitt();
 
         app.mount('#app');
+
+        $('#app').removeClass('preloader');
 
     });
 </script>

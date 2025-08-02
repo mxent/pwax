@@ -32,6 +32,10 @@
             } else {
                 $vue.currentPage = to.params.page;
             }
+            window.emitter.emit('routing', {
+                from: from,
+                to: to,
+            });
             await $vue.fetchComponent(to.params.page);
         },
         methods: {
@@ -94,6 +98,14 @@
                     });
                     $vue.component = Vue.shallowRef(component);
                     $vue.loading = false;
+                    $vue.$nextTick(function() {
+                        setTimeout(function() {
+                            window.emitter.emit('routed', {
+                                component: componentOptions,
+                                page: $vue.currentPage,
+                            });
+                        }, 0);
+                    });
                 });
 
             },

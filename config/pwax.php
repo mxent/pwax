@@ -5,17 +5,8 @@ return [
      * Main Config
      */
     'hash_route' => false,
-    'base' => '/',
-    'home' => 'index',
+    'home' => 'index', // route name for the home page
     'route_prefix' => '__pwax__',
-
-    /**
-     * Customization
-     */
-    'customization' => [
-        'init_spinner_color' => '#0c83ff',
-        'init_spinner_bg' => '#f3f3f3',
-    ],
 
     /**
      * Blade files
@@ -26,6 +17,14 @@ return [
         'foot' => null,
         'error' => null,
         'loader' => null,
+    ],
+
+    /**
+     * Customization
+     */
+    'customization' => [
+        'init_spinner_color' => '#0c83ff',
+        'init_spinner_bg' => '#f3f3f3',
     ],
 
     /**

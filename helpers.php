@@ -4,6 +4,7 @@ use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use MatthiasMullie\Minify;
+use Illuminate\Support\Str;
 
 /**
  * Parse the Vue template from the view contents
@@ -104,4 +105,46 @@ function router($name): string
     }
 
     return $pathWithoutDomain ?? '/';
+}
+
+function import($ins)
+{
+    $ins = trim($ins);
+    $ins = substr($ins, 1, -1);
+    $insBits = explode(' from ', $ins);
+    $var = count($insBits) == 2 ? $insBits[0] : null;
+    if ($var) {
+        $ins = $insBits[1];
+    }
+    $ins = explode('/', $ins);
+    $module = null;
+    if (Str::startsWith($ins[0], '~')) {
+        $ins[0] = Str::replaceFirst('~', '', $ins[0]);
+        if (Str::startsWith($ins[0], '/')) {
+            $ins[0] = Str::replaceFirst('/', '', $ins[0]);
+        }
+        $module = array_shift($ins);
+    }
+    $bladeBits = [];
+    if ($module) {
+        $bladeBits[] = $module;
+    }
+    $bladeBits[] = implode('.', $ins);
+    $blade = implode('::', $bladeBits);
+    $pascal = preg_replace('/[^a-zA-Z0-9]/', ' ', $blade);
+    $pascal = Str::studly($pascal);
+
+    $script = '';
+    $script .= 'window.PwaxImport'.($var ?? '').$pascal.' = window.PwaxImport'.($var ?? '').$pascal.' || await (async function(){';
+    $script .= 'var hd = new Headers();';
+    $script .= 'hd.append("Accept", "application/json");';
+    $script .= 'hd.append("X-Requested-With", "XMLHttpRequest");';
+    $script .= 'hd.append("X-Vue-Component", "true");';
+    $script .= 'var fv = await fetch("'.route('pwax.module', str_replace('.', '_x_', str_replace('::', '__x__', $blade))).'", {headers: hd});';
+    $script .= 'var d = await fv.json();';
+    $script .= 'var s = d.script ? await import(`data:text/javascript;base64,${btoa(d.script)}`) : {};';
+    $script .= 'var v = d.template ? {template:d.template,...s.default} : s.default;';
+    $script .= 'return '.($var ? 's.'.$var : 'v').';})()';
+
+    return $script;
 }

@@ -150,7 +150,7 @@
                 });
 
             },
-            async fetchComponent(p = "{{ config('pwax.home', '/') }}") {
+            async fetchComponent(p = '') {
                 const $vue = this;
                 if ($vue.currentFetchComponent) {
                     $vue.currentFetchComponent.abortController.abort();

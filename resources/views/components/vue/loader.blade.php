@@ -42,9 +42,8 @@
         async beforeRouteUpdate(to, from) {
             let $vue = this;
             if ($vue.currentPage == to.params.page) {
+                console.log('here');
                 return;
-            } else {
-                $vue.currentPage = to.params.page;
             }
             const routingEvent = new CustomEvent('routing', {
                 detail: {
@@ -191,6 +190,7 @@
                         return;
                     }
 
+                    $vue.currentPage = p;
                     await $vue.processComponent(data);
 
                 } catch (error) {

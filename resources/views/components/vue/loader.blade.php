@@ -165,12 +165,8 @@
                 };
                 let response;
                 try {
-                    let headers = new Headers();
-                    headers.append('Accept', 'application/json');
-                    headers.append('X-Requested-With', 'XMLHttpRequest');
-                    headers.append('X-Vue-Component', 'true');
                     response = await fetch('/' + p, {
-                        headers: headers,
+                        headers: window.pwaxHeaders,
                         signal: abortController.signal,
                     });
 

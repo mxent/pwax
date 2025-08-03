@@ -1,4 +1,11 @@
 <script>
+
+    const pwaxHeaders = new Headers();
+    pwaxHeaders.append("Accept", "application/json");
+    pwaxHeaders.append("X-Requested-With", "XMLHttpRequest");
+    pwaxHeaders.append("X-PWA-Component", "true");
+    window.pwaxHeaders = pwaxHeaders;
+
     document.addEventListener('DOMContentLoaded', async function() {
 
         const baseComp = @import('~pwax/components/vue/app');

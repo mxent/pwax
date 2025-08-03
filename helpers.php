@@ -45,7 +45,7 @@ function vue($blade, $compact = null, $config = []): JsonResponse|RedirectRespon
 {
 
     $bypass = isset($config['bypass']) ? $config['bypass'] : false;
-    if (! request()->ajax() && ! $bypass && ! request()->header('X-Vue-Component')) {
+    if (! request()->ajax() && ! $bypass && ! request()->header('X-PWA-Component')) {
         return view('pwax::components.vue.page');
     }
 
@@ -146,11 +146,7 @@ function import($ins)
 
     $script = '';
     $script .= 'window.PwaxImport'.($var ?? '').$pascal.' = window.PwaxImport'.($var ?? '').$pascal.' || await (async function(){';
-    $script .= 'var hd = new Headers();';
-    $script .= 'hd.append("Accept", "application/json");';
-    $script .= 'hd.append("X-Requested-With", "XMLHttpRequest");';
-    $script .= 'hd.append("X-Vue-Component", "true");';
-    $script .= 'var fv = await fetch("'.route('pwax.module', str_replace('.', '_x_', str_replace('::', '__x__', $blade))).'", {headers: hd});';
+    $script .= 'var fv = await fetch("'.route('pwax.module', str_replace('.', '_x_', str_replace('::', '__x__', $blade))).'", {headers: window.pwaxHeaders});';
     $script .= 'var d = await fv.json();';
     $script .= 'var s = d.script ? await import(`data:text/javascript;base64,${btoa(d.script)}`) : {};';
     $script .= 'var v = d.template ? {template:d.template,...s.default} : s.default;';

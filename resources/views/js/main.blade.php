@@ -3,7 +3,7 @@
     const pwaxHeaders = new Headers();
     pwaxHeaders.append("Accept", "application/json");
     pwaxHeaders.append("X-Requested-With", "XMLHttpRequest");
-    pwaxHeaders.append("X-PWA-Component", "true");
+    pwaxHeaders.append("X-Pwa-Component", "true");
     window.pwaxHeaders = pwaxHeaders;
 
     document.addEventListener('DOMContentLoaded', async function() {

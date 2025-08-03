@@ -4,11 +4,34 @@
         const baseComp = @import('~pwax/components/vue/app');
         window.app = Vue.createApp(baseComp);
 
-        window.router = @import('~pwax/components/vue/router');
+        const router = @import('~pwax/components/vue/router');
         app.use(router);
 
-        window.pinia = Pinia.createPinia();
-        app.use(pinia);
+        @foreach (config('pwax.plugins', []) as $pluginKey => $pluginInit)
+            @if (Illuminate\Support\Str::startsWith($pluginInit, '@import'))
+                @php
+                    preg_match('/@import\((.*)\)/', $pluginInit, $matches);
+                    $importPath = str_replace(['"', "'"], '', $matches[1] ?? '');
+                @endphp
+                const {{ $pluginKey }}Plugin = import($importPath);
+            @else
+                const {{ $pluginKey }}Plugin = {!! $pluginInit !!};
+            @endif
+            app.use({{ $pluginKey }}Plugin);
+        @endforeach
+
+        @foreach (config('pwax.directives', []) as $directiveKey => $directiveInit)
+            @if (Illuminate\Support\Str::startsWith($directiveInit, '@import'))
+                @php
+                    preg_match('/@import\((.*)\)/', $directiveInit, $matches);
+                    $importPath = str_replace(['"', "'"], '', $matches[1] ?? '');
+                @endphp
+                const {{ $directiveKey }}Directive = import($importPath);
+            @else
+                const {{ $directiveKey }}Directive = {!! $directiveInit !!};
+            @endif
+            app.directive('{{ $directiveKey }}', {{ $directiveKey }}Directive);
+        @endforeach
 
         app.mount('#app');
 

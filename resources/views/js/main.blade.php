@@ -13,7 +13,7 @@
                     preg_match('/@import\((.*)\)/', $pluginInit, $matches);
                     $importPath = str_replace(['"', "'"], '', $matches[1] ?? '');
                 @endphp
-                const {{ $pluginKey }}Plugin = import($importPath);
+                const {{ $pluginKey }}Plugin = {!! import($importPath) !!};
             @else
                 const {{ $pluginKey }}Plugin = {!! $pluginInit !!};
             @endif
@@ -26,7 +26,7 @@
                     preg_match('/@import\((.*)\)/', $directiveInit, $matches);
                     $importPath = str_replace(['"', "'"], '', $matches[1] ?? '');
                 @endphp
-                const {{ $directiveKey }}Directive = import($importPath);
+                const {{ $directiveKey }}Directive = {!! import($importPath) !!};
             @else
                 const {{ $directiveKey }}Directive = {!! $directiveInit !!};
             @endif

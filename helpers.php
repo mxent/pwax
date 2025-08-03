@@ -107,10 +107,20 @@ function router($name): string
     return $pathWithoutDomain ?? '/';
 }
 
+/**
+ * Render a dynamic import for Vue components
+ *
+ * @param  string  $ins
+ */
 function import($ins)
 {
     $ins = trim($ins);
-    $ins = substr($ins, 1, -1);
+    if (Str::startsWith($ins, '"') || Str::startsWith($ins, "'")) {
+        $ins = substr($ins, 1);
+    }
+    if (Str::endsWith($ins, '"') || Str::endsWith($ins, "'")) {
+        $ins = substr($ins, 0, -1);
+    }
     $insBits = explode(' from ', $ins);
     $var = count($insBits) == 2 ? $insBits[0] : null;
     if ($var) {

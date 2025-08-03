@@ -56,4 +56,11 @@ return [
     'directives' => [
         
     ],
+
+    /**
+     * Middleware
+     */
+    'middleware' => [
+        
+    ],
 ];

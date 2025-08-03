@@ -11,6 +11,20 @@
 </template>
 
 <script>
+    const middlewareRegistry = {};
+    @foreach (config('pwax.middleware', []) as $middlewareKey => $middlewareInit)
+        @if (Illuminate\Support\Str::startsWith($middlewareInit, '@import'))
+            @php
+                preg_match('/@import\((.*)\)/', $middlewareInit, $matches);
+                $importPath = str_replace(['"', "'"], '', $matches[1] ?? '');
+            @endphp
+            const {{ $middlewareKey }}Middleware = {!! import($importPath) !!};
+        @else
+            const {{ $middlewareKey }}Middleware = {!! $middlewareInit !!};
+        @endif
+        middlewareRegistry['{{ $middlewareKey }}'] = {{ $middlewareKey }}Middleware;
+    @endforeach
+
     export default {
         data() {
             return {
@@ -44,6 +58,7 @@
         methods: {
             async processComponent(data) {
                 const $vue = this;
+                const store = $vue.$store;
                 const lazyElements = document.querySelectorAll('[pwax-attached]');
                 lazyElements.forEach(function(element) {
                     element.remove();
@@ -96,6 +111,26 @@
                         template: data.template,
                         ...module.default,
                     };
+
+                    const middlewareList = componentOptions.middleware || [];
+                    const meta = componentOptions.meta || {};
+
+                    for (const name of middlewareList) {
+                        const fn = middlewareRegistry[name];
+                        if (typeof fn === 'function') {
+                            let redirected = false;
+                            await fn({
+                                component: componentOptions,
+                                meta: meta,
+                                redirect: (path) => {
+                                    redirected = true;
+                                    $vue.$router.push(path);
+                                }
+                            });
+                            if (redirected) return;
+                        }
+                    }
+
                     var component = await Vue.defineAsyncComponent(function() {
                         return Promise.resolve(componentOptions);
                     });

@@ -146,11 +146,8 @@ function import($ins)
 
     $script = '';
     $script .= 'window.PwaxImport'.($var ?? '').$pascal.' = window.PwaxImport'.($var ?? '').$pascal.' || await (async function(){';
-    $script .= 'var fv = await fetch("'.route('pwax.module', str_replace('.', '_x_', str_replace('::', '__x__', $blade))).'", {headers: window.pwaxHeaders});';
-    $script .= 'var d = await fv.json();';
-    $script .= 'var s = d.script ? await import(`data:text/javascript;base64,${btoa(d.script)}`) : {};';
-    $script .= 'var v = d.template ? {template:d.template,...s.default} : s.default;';
-    $script .= 'return '.($var ? 's.'.$var : 'v').';})()';
+    $script .= 'var r = await pwaxFetch("'.route('pwax.module', str_replace('.', '_x_', str_replace('::', '__x__', $blade))).'", {headers: window.pwaxHeaders});';
+    $script .= 'return '.($var ? 'r.s.'.$var : 'r.v').';})()';
     $script = new Minify\JS($script);
     $script = $script->minify();
 

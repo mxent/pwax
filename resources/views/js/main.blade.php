@@ -17,7 +17,7 @@
         };
     };
     window.pwaxImports = {};
-    window.pwaxImport = async function (url, name, key = 'v') {
+    window.pwaxImport = async function (url, name, key = '') {
         return window.pwaxImports[name] = window.pwaxImports[name] || await (async function() {
             var r = await window.pwaxFetch(url, {
                 headers: window.pwaxHeaders

@@ -151,6 +151,8 @@ function import($ins)
     $script .= 'var s = d.script ? await import(`data:text/javascript;base64,${btoa(d.script)}`) : {};';
     $script .= 'var v = d.template ? {template:d.template,...s.default} : s.default;';
     $script .= 'return '.($var ? 's.'.$var : 'v').';})()';
+    $script = new Minify\JS($script);
+    $script = $script->minify();
 
     return $script;
 }

@@ -114,37 +114,19 @@ function router($name): string
  */
 function import($ins)
 {
-    $ins = trim($ins);
-    if (Str::startsWith($ins, '"') || Str::startsWith($ins, "'")) {
-        $ins = substr($ins, 1);
+    $ins = trim($ins, " \"'");
+    $var = null;
+    if (str_contains($ins, ' from ')) {
+        [$var, $ins] = explode(' from ', $ins, 2);
     }
-    if (Str::endsWith($ins, '"') || Str::endsWith($ins, "'")) {
-        $ins = substr($ins, 0, -1);
-    }
-    $insBits = explode(' from ', $ins);
-    $var = count($insBits) == 2 ? $insBits[0] : null;
-    if ($var) {
-        $ins = $insBits[1];
-    }
-    $ins = explode('/', $ins);
+    $parts = explode('/', $ins);
     $module = null;
-    if (Str::startsWith($ins[0], '~')) {
-        $ins[0] = Str::replaceFirst('~', '', $ins[0]);
-        if (Str::startsWith($ins[0], '/')) {
-            $ins[0] = Str::replaceFirst('/', '', $ins[0]);
-        }
-        $module = array_shift($ins);
+    if (Str::startsWith($parts[0], '~')) {
+        $parts[0] = ltrim(Str::replaceFirst('~', '', $parts[0]), '/');
+        $module = array_shift($parts);
     }
-    $bladeBits = [];
-    if ($module) {
-        $bladeBits[] = $module;
-    }
-    $bladeBits[] = implode('.', $ins);
-    $blade = implode('::', $bladeBits);
-    $pascal = preg_replace('/[^a-zA-Z0-9]/', ' ', $blade);
-    $pascal = Str::studly($pascal);
-
-    $script = 'await window.pwaxImport("'.route('pwax.module', str_replace('.', '_x_', str_replace('::', '__x__', $blade))).'", "'.$pascal.'", "'.($var ? $var : '').'")';
-
-    return $script;
+    $blade = $module ? ($module . '::' . implode('.', $parts)) : implode('.', $parts);
+    $pascal = Str::studly(preg_replace('/[^a-zA-Z0-9]/', ' ', $blade));
+    $route = route('pwax.module', str_replace('.', '_x_', str_replace('::', '__x__', $blade)));
+    return 'await window.pwaxImport("' . $route . '", "' . $pascal . '", "' . ($var ?: '') . '")';
 }

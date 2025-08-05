@@ -5,7 +5,6 @@
     pwaxHeaders.append("X-Requested-With", "XMLHttpRequest");
     pwaxHeaders.append("X-Pwa-Component", "true");
     window.pwaxHeaders = pwaxHeaders;
-        
     window.pwaxFetch = async function (url, options = {}) {
         const f = await fetch(url, options);
         const j = await f.json();
@@ -16,6 +15,15 @@
             s: s,
             v: v
         };
+    };
+    window.pwaxImports = {};
+    window.pwaxImport = async function (url, name, var = 'v') {
+        return window.pwaxImports[name] = window.pwaxImports[name] || await (async function() {
+            var r = await window.pwaxFetch(url, {
+                headers: window.pwaxHeaders
+            });
+            return var.length ? r.s[var] : r.v;
+        })();
     };
 
     document.addEventListener('DOMContentLoaded', async function() {

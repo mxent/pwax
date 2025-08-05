@@ -144,12 +144,7 @@ function import($ins)
     $pascal = preg_replace('/[^a-zA-Z0-9]/', ' ', $blade);
     $pascal = Str::studly($pascal);
 
-    $script = '';
-    $script .= 'window.PwaxImport'.($var ?? '').$pascal.' = window.PwaxImport'.($var ?? '').$pascal.' || await (async function(){';
-    $script .= 'var r = await pwaxFetch("'.route('pwax.module', str_replace('.', '_x_', str_replace('::', '__x__', $blade))).'", {headers: window.pwaxHeaders});';
-    $script .= 'return '.($var ? 'r.s.'.$var : 'r.v').';})()';
-    $script = new Minify\JS($script);
-    $script = $script->minify();
+    $script = 'window.pwaxImport("'.route('pwax.module', str_replace('.', '_x_', str_replace('::', '__x__', $blade))).'", "'.$pascal.'", "'.($var ? $var : '').'")';
 
     return $script;
 }

@@ -17,12 +17,12 @@
         };
     };
     window.pwaxImports = {};
-    window.pwaxImport = async function (url, name, var = 'v') {
+    window.pwaxImport = async function (url, name, key = 'v') {
         return window.pwaxImports[name] = window.pwaxImports[name] || await (async function() {
             var r = await window.pwaxFetch(url, {
                 headers: window.pwaxHeaders
             });
-            return var.length ? r.s[var] : r.v;
+            return key.length ? r.s[key] : r.v;
         })();
     };
 

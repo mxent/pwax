@@ -5,25 +5,19 @@ export default {
     lib: {
       entry: resolve(__dirname, 'resources/js/pwax.js'),
       name: 'Pwax',
-      fileName: () => 'pwax.js',
       formats: ['iife'],
+      fileName: () => 'pwax.js',
     },
     outDir: 'dist',
     minify: true,
     rollupOptions: {
-      output: {
-        globals: {
-          vue: 'Vue',
-          pinia: 'Pinia',
-          'vue-router': 'VueRouter',
-          dexie: 'Dexie',
-        }
-      }
+      treeshake: false,
+      external: [],
     }
   },
   define: {
     'process.env.NODE_ENV': '"production"',
-    'process.env': '{}', // fallback
-    'process': '{}',     // fallback
+    'process.env': '{}',
+    'process': '{}',
   }
 };

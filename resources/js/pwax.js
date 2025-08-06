@@ -1,12 +1,7 @@
-import * as Vue from 'vue';
-import * as Pinia from 'pinia';
-import * as VueRouter from 'vue-router';
-import Dexie from 'dexie';
-
-window.Vue = Vue;
-window.Pinia = Pinia;
-window.VueRouter = VueRouter;
-window.Dexie = Dexie;
+import '/node_modules/vue/dist/vue.global.prod.js';
+import '/node_modules/vue-router/dist/vue-router.global.prod.js';
+import '/node_modules/pinia/dist/pinia.iife.prod.js';
+import '/node_modules/dexie/dist/dexie.min.js';
 
 const pwaxHeaders = new Headers();
 pwaxHeaders.append("Accept", "application/json");

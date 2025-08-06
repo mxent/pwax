@@ -8,7 +8,7 @@
     window.pwaxFetch = async function (url, options = {}) {
         const f = await fetch(url, options);
         const j = await f.json();
-        const s = j.script ? await import(data:text/javascript;base64,${btoa(j.script)}) : {};
+        const s = j.script ? await import(`data:text/javascript;base64,${btoa(j.script)}`) : {};
         const e = s?.default || {};
         const v = j.template ? { template: j.template, ...e } : e;
         return {

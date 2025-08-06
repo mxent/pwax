@@ -1,0 +1,23 @@
+{
+  "name": "pwax",
+  "dependencies": {
+    "dexie": "^4.0.11",
+    "pinia": "^3.0.3",
+    "vue": "^3.5.18",
+    "vue-router": "^4.5.1"
+  },
+  "scripts": {
+    "build:js": "vite build",
+    "build:css": "postcss resources/css/pwax.css -o dist/pwax.css",
+    "build": "npm run build:js && npm run build:css"
+  },
+  "author": "Mxent",
+  "license": "ISC",
+  "devDependencies": {
+    "cssnano": "^7.1.0",
+    "postcss": "^8.5.6",
+    "postcss-cli": "^11.0.1",
+    "postcss-import": "^16.1.1",
+    "vite": "^7.0.6"
+  }
+}

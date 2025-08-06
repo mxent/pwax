@@ -44,6 +44,8 @@
     }
 </style>
 
+<link rel="stylesheet" href="{{ route('pwax.dist.css', 'pwax') }}">
+
 @foreach (config('pwax.styles', []) as $style)
     <link rel="stylesheet" href="{{ $style }}">
 @endforeach

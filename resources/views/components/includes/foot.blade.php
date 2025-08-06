@@ -1,3 +1,5 @@
+<script src="{{ route('pwax.dist.js', 'pwax') }}"></script>
+
 @foreach (config('pwax.scripts', []) as $script)
     <script src="{{ $script }}"></script>
 @endforeach

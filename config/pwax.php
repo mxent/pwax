@@ -38,16 +38,14 @@ return [
      * Scripts
      */
     'scripts' => [
-        'https://unpkg.com/vue@3.5.18/dist/vue.global.prod.js',
-        'https://unpkg.com/vue-router@4.5.1/dist/vue-router.global.prod.js',
-        'https://unpkg.com/pinia@3.0.3/dist/pinia.iife.prod.js',
+        
     ],
 
     /**
      * Plugins
      */
     'plugins' => [
-        'pinia' => 'Pinia.createPinia()',
+        
     ],
 
     /**

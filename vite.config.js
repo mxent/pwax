@@ -1,19 +1,21 @@
-import { resolve } from 'path';
-
 export default {
   build: {
     lib: {
-      entry: resolve(__dirname, 'resources/js/pwax.js'),
+      entry: 'resources/js/pwax.js',
       name: 'Pwax',
-      formats: ['iife'],
       fileName: () => 'pwax.js',
+      formats: ['iife'],
     },
-    outDir: 'dist',
-    minify: true,
     rollupOptions: {
-      treeshake: false,
-      external: [],
-    }
+      output: {
+        globals: {
+          vue: 'Vue',
+          'vue-router': 'VueRouter',
+          pinia: 'Pinia',
+          dexie: 'Dexie',
+        },
+      },
+    },
   },
   define: {
     'process.env.NODE_ENV': '"production"',

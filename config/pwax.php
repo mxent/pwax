@@ -23,14 +23,13 @@ return [
      * IndexedDB
      */
     'db' => [
-        'enable' => true,
-        'name' => 'pwax_db',
-        'version' => 1, // Increment this version when you change the database schema
-        'tables' => [
-            // 'table_name' => ['column1', 'column2', ...],
-            // Example:
-            // 'users' => ['id++', 'name', 'email'],
-        ],
+        // example configuration
+        // 'my_db' => [
+        //     'version' => 1,
+        //     'tables' => [
+        //         'users' => ['id++', 'name', 'email'],
+        //     ],
+        // ],
     ],
 
     /**

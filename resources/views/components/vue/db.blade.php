@@ -1,12 +1,16 @@
 <script>
     export default {
         install(app, options) {
-            const db = new Dexie("{{ config('pwax.db.name', 'pwax_db') }}");
-            db.version({{ config('pwax.db.version', 1) }}).stores({
-                @foreach( config('pwax.db.tables', []) as $tableName => $tableSchema)
-                    {{ $tableName }}: `{{ implode(',', $tableSchema) }}`,
-                @endforeach
-            });
+            let db = {};
+            @foreach (config('pwax.db', []) as $dbKey => $dbConfig)
+                const d = new Dexie("{{ $dbKey }}");
+                d.version({{ $dbConfig['version'] }}).stores({
+                    @foreach( $dbConfig['tables'] as $tableName => $tableSchema)
+                        {{ $tableName }}: `{{ implode(',', $tableSchema) }}`,
+                    @endforeach
+                });
+                db['{{ $dbKey }}'] = d;
+            @endforeach
 
             app.config.globalProperties.$db = db;
             app.db = db;

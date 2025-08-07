@@ -37,10 +37,8 @@
         const pinia = Pinia.createPinia();
         app.use(pinia);
 
-        @if (config('pwax.db.enable'))
-            const db = @import('~pwax/components/vue/db');
-            app.use(db);
-        @endif
+        const db = @import('~pwax/components/vue/db');
+        app.use(db);
 
         @foreach (config('pwax.plugins', []) as $pluginKey => $pluginInit)
             @if (Illuminate\Support\Str::startsWith($pluginInit, '@import'))

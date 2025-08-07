@@ -7,7 +7,7 @@
     <script src="{{ $script }}"></script>
 @endforeach
 
-<script src="{{ url(config('pwax.route_prefix') . '/pwax__x__js_x_main.js') }}"></script>
+<script src="{{ route('pwax.js', 'pwax__x__js_x_main') }}"></script>
 
 @if(config('pwax.blade.foot'))
     @include(config('pwax.blade.foot'))

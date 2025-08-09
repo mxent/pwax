@@ -94,9 +94,9 @@ function vue($blade, $compact = null, $config = []): JsonResponse|RedirectRespon
  *
  * @param  string  $name
  */
-function router($name): string
+function router($name, $parameters = [], $absolute = true): string
 {
-    $route = route($name);
+    $route = route($name, $parameters, $absolute);
     $pathWithoutDomain = parse_url($route, PHP_URL_PATH);
 
     if (! $pathWithoutDomain) {

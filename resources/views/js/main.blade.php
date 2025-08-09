@@ -38,6 +38,9 @@
         app.use(pinia);
 
         @foreach (config('pwax.plugins', []) as $pluginKey => $pluginInit)
+            @php
+                $pluginKey = Illuminate\Support\Str::studly($pluginKey);
+            @endphp
             @if (Illuminate\Support\Str::startsWith($pluginInit, '@import'))
                 @php
                     preg_match('/@import\((.*)\)/', $pluginInit, $matches);
@@ -51,6 +54,9 @@
         @endforeach
 
         @foreach (config('pwax.directives', []) as $directiveKey => $directiveInit)
+            @php
+                $directiveKey = Illuminate\Support\Str::studly($directiveKey);
+            @endphp
             @if (Illuminate\Support\Str::startsWith($directiveInit, '@import'))
                 @php
                     preg_match('/@import\((.*)\)/', $directiveInit, $matches);

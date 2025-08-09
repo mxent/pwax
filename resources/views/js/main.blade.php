@@ -66,9 +66,9 @@
             app.directive('{{ $directiveKey }}', {{ $directiveKey }}Directive);
         @endforeach
 
-        app.mount('#app');
+        app.mount('#pwax');
 
-        document.getElementById('app').classList.remove('preloader');
+        document.getElementById('pwax').classList.remove('preloader');
 
     });
 </script>

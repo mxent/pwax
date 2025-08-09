@@ -11,28 +11,6 @@ use Mxent\Pwax\PwaxServiceProvider;
 class PwaxController extends Controller
 {
 
-    public function distJs($name): Response
-    {
-        $packageRoot = dirname((new \ReflectionClass(PwaxServiceProvider::class))->getFileName(), 2);
-        $distPath = $packageRoot . '/dist/' . $name . '.js';
-        if (!file_exists($distPath)) {
-            abort(404, "File not found: {$distPath}");
-        }
-        $fileContents = file_get_contents($distPath);
-        return response($fileContents)->header('Content-Type', 'application/javascript');
-    }
-
-    public function distCss($name): Response
-    {
-        $packageRoot = dirname((new \ReflectionClass(PwaxServiceProvider::class))->getFileName(), 2);
-        $distPath = $packageRoot . '/dist/' . $name . '.css';
-        if (!file_exists($distPath)) {
-            abort(404, "File not found: {$distPath}");
-        }
-        $fileContents = file_get_contents($distPath);
-        return response($fileContents)->header('Content-Type', 'text/css');
-    }
-
     public function js($name): Response
     {
         $name = str_replace('_x_', '.', str_replace('__x__', '::', $name));

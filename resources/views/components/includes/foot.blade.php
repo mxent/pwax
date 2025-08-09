@@ -1,8 +1,3 @@
-<script src="{{ route('pwax.dist.js', 'vue') }}"></script>
-<script src="{{ route('pwax.dist.js', 'vue-router') }}"></script>
-<script src="{{ route('pwax.dist.js', 'pinia') }}"></script>
-<script src="{{ route('pwax.dist.js', 'dexie') }}"></script>
-
 @foreach (config('pwax.scripts', []) as $script)
     <script src="{{ $script }}"></script>
 @endforeach

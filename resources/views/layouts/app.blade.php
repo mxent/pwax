@@ -6,7 +6,7 @@
 </head>
 
 <body>
-    <div id="app" class="preloader">
+    <div id="pwax" class="preloader">
         @yield('content')
     </div>
 

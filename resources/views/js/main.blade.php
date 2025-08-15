@@ -6,15 +6,28 @@
     pwaxHeaders.append("X-Pwa-Component", "true");
     window.pwaxHeaders = pwaxHeaders;
     window.pwaxFetch = async function (url, options = {}) {
-        const f = await fetch(url, options);
+        const {
+            withCredentials = false,
+            ...fetchOptions
+        } = options;
+
+        const f = await fetch(url, {
+            ...fetchOptions,
+            credentials: withCredentials ? 'include' : 'omit',
+            headers: {
+                ...(fetchOptions.headers || {}),
+                ...window.pwaxHeaders
+            }
+        });
+
         const j = await f.json();
-        const s = j.script ? await import(`data:text/javascript;base64,${btoa(j.script)}`) : {};
+        const s = j.script
+            ? await import(`data:text/javascript;base64,${btoa(j.script)}`)
+            : {};
         const e = s?.default || {};
         const v = j.template ? { template: j.template, ...e } : e;
-        return {
-            s: s,
-            v: v
-        };
+
+        return { s, v };
     };
     window.pwaxImports = {};
     window.pwaxImport = async function (url, name, key = '') {

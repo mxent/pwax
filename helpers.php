@@ -119,18 +119,15 @@ function router($name, $parameters = [], $absolute = true): string
 function import($ins)
 {
     $ins = trim($ins, " \"'");
-    $var = null;
-    if (str_contains($ins, ' from ')) {
-        [$var, $ins] = explode(' from ', $ins, 2);
-    }
-    $parts = explode('/', $ins);
-    $module = null;
-    if (Str::startsWith($parts[0], '~')) {
-        $parts[0] = ltrim(Str::replaceFirst('~', '', $parts[0]), '/');
-        $module = array_shift($parts);
-    }
-    $blade = $module ? ($module . '::' . implode('.', $parts)) : implode('.', $parts);
+    [$var, $blade] = str_contains($ins, ' from ')
+        ? explode(' from ', $ins, 2)
+        : [null, $ins];
     $pascal = Str::studly(preg_replace('/[^a-zA-Z0-9]/', ' ', $blade));
-    $route = router('pwax.module', str_replace('.', '_x_', str_replace('::', '__x__', $blade)));
-    return 'await window.pwaxImport("' . $route . '", "' . $pascal . '", "' . ($var ?: '') . '")';
+    $route = router('pwax.module', str_replace(['.', '::'], ['_x_', '__x__'], $blade));
+    return sprintf(
+        'await window.pwaxImport("%s", "%s", "%s")',
+        $route,
+        $pascal,
+        $var ?: ''
+    );
 }

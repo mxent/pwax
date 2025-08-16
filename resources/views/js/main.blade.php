@@ -41,10 +41,10 @@
 
     document.addEventListener('DOMContentLoaded', async function() {
 
-        const baseComp = @import('~pwax/components/vue/app');
+        const baseComp = @import('pwax::components.vue.app');
         window.app = Vue.createApp(baseComp);
 
-        const router = @import('~pwax/components/vue/router');
+        const router = @import('pwax::components.vue.router');
         app.use(router);
 
         const pinia = Pinia.createPinia();

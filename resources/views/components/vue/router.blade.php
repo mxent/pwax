@@ -1,7 +1,7 @@
 <script>
     const routes = [{
         path: '/:page(.*)',
-        component: @import('~pwax/components/vue/loader'),
+        component: @import('pwax::components.vue.loader'),
         beforeEnter: function(to, from, next) {
             next();
         }

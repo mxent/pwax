@@ -44,6 +44,16 @@ return [
     ],
 
     /**
+     * Alternative: Use local or self-hosted versions
+     * Uncomment and modify to use local files or different CDN
+     */
+    // 'scripts' => [
+    //     asset('js/vendor/vue.global.prod.js'),
+    //     asset('js/vendor/vue-router.global.prod.js'),
+    //     asset('js/vendor/pinia.iife.prod.js'),
+    // ],
+
+    /**
      * Plugins
      */
     'plugins' => [

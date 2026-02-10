@@ -49,48 +49,69 @@ function vue($blade, $compact = null, $config = []): JsonResponse|RedirectRespon
         return view('pwax::components.vue.page');
     }
 
-    if ($compact) {
-        $viewContents = view($blade, $compact)->render();
-    } else {
-        $viewContents = view($blade)->render();
+    try {
+        // Validate view name to prevent arbitrary file access
+        if (!preg_match('/^[a-zA-Z0-9\._:\-]+$/', $blade)) {
+            throw new \InvalidArgumentException('Invalid view name format');
+        }
+
+        if ($compact) {
+            $viewContents = view($blade, $compact)->render();
+        } else {
+            $viewContents = view($blade)->render();
+        }
+
+        $template = vueParseTemplate($viewContents);
+
+        preg_match('/<script>(.*?)<\/script>/s', $viewContents, $matches);
+        $script = isset($matches[1]) ? $matches[1] : '';
+        $script = new Minify\JS($script);
+        $script = $script->minify();
+
+        preg_match('/<style>(.*?)<\/style>/s', $viewContents, $matches);
+        $style = isset($matches[1]) ? $matches[1] : '';
+        $style = new Minify\CSS($style);
+        $style = $style->minify();
+
+        preg_match_all('/<script[^>]*?src="(.*?)"[^>]*?(?:(?<!\/)>|\/>)/s', $viewContents, $matches);
+        $scripts = $matches[1] ?? [];
+
+        preg_match_all('/<link[^>]+href=["\']([^"\']+)["\'][^>]*>/i', $viewContents, $matches);
+        $styles = $matches[1] ?? [];
+
+        $arr = [
+            'style' => $style,
+            'styles' => $styles,
+            'template' => $template,
+            'script' => $script,
+            'scripts' => $scripts,
+        ];
+
+        $returnArr = isset($config['arr']) ? $config['arr'] : false;
+        if ($returnArr) {
+            return $arr;
+        }
+
+        $response = response()->json($arr);
+        $response->headers->set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+        $response->headers->set('Pragma', 'no-cache');
+        $response->headers->set('Expires', 'Thu, 01 Jan 1970 00:00:00 GMT');
+        return $response;
+    } catch (\Exception $e) {
+        \Log::error('Error loading Vue component', [
+            'blade' => $blade,
+            'error' => $e->getMessage(),
+        ]);
+        
+        return response()->json([
+            'error' => 'Failed to load component',
+            'style' => '',
+            'styles' => [],
+            'template' => '<div>Error loading component</div>',
+            'script' => '',
+            'scripts' => [],
+        ], 500);
     }
-
-    $template = vueParseTemplate($viewContents);
-
-    preg_match('/<script>(.*?)<\/script>/s', $viewContents, $matches);
-    $script = isset($matches[1]) ? $matches[1] : '';
-    $script = new Minify\JS($script);
-    $script = $script->minify();
-
-    preg_match('/<style>(.*?)<\/style>/s', $viewContents, $matches);
-    $style = isset($matches[1]) ? $matches[1] : '';
-    $style = new Minify\CSS($style);
-    $style = $style->minify();
-
-    preg_match_all('/<script[^>]*?src="(.*?)"[^>]*?(?:(?<!\/)>|\/>)/s', $viewContents, $matches);
-    $scripts = $matches[1];
-
-    preg_match_all('/<link[^>]+href=["\']([^"\']+)["\'][^>]*>/i', $viewContents, $matches);
-    $styles = $matches[1];
-
-    $arr = [
-        'style' => $style,
-        'styles' => $styles,
-        'template' => $template,
-        'script' => $script,
-        'scripts' => $scripts,
-    ];
-
-    $returnArr = isset($config['arr']) ? $config['arr'] : false;
-    if ($returnArr) {
-        return $arr;
-    }
-
-    $response = response()->json($arr);
-    $response->headers->set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
-    $response->headers->set('Pragma', 'no-cache');
-    $response->headers->set('Expires', 'Thu, 01 Jan 1970 00:00:00 GMT');
-    return $response;
 }
 
 /**

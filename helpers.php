@@ -51,7 +51,7 @@ function vue($blade, $compact = null, $config = []): JsonResponse|RedirectRespon
 
     try {
         // Validate view name to prevent arbitrary file access
-        if (!preg_match('/^[a-zA-Z0-9\._:\-]+$/', $blade)) {
+        if (!preg_match('/^[a-zA-Z0-9._:-]+$/', $blade)) {
             throw new \InvalidArgumentException('Invalid view name format');
         }
 

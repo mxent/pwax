@@ -83,7 +83,7 @@ class PwaxController extends Controller
         $name = str_replace('_x_', '.', str_replace('__x__', '::', $name));
         
         // Validate that the name matches expected format (alphanumeric, dots, colons, hyphens, underscores)
-        if (!preg_match('/^[a-zA-Z0-9\._:\-]+$/', $name)) {
+        if (!preg_match('/^[a-zA-Z0-9._:-]+$/', $name)) {
             throw new \InvalidArgumentException('Invalid view name format');
         }
 

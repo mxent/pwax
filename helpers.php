@@ -98,8 +98,13 @@ function vue($blade, $compact = null, $config = []): JsonResponse|RedirectRespon
         $response->headers->set('Expires', 'Thu, 01 Jan 1970 00:00:00 GMT');
         return $response;
     } catch (\Exception $e) {
+        \Log::error('Error loading Vue component', [
+            'blade' => $blade,
+            'error' => $e->getMessage(),
+        ]);
+        
         return response()->json([
-            'error' => 'Failed to load component: ' . $e->getMessage(),
+            'error' => 'Failed to load component',
             'style' => '',
             'styles' => [],
             'template' => '<div>Error loading component</div>',

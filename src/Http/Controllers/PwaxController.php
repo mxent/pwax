@@ -26,7 +26,12 @@ class PwaxController extends Controller
                 ->header('Content-Type', 'application/javascript')
                 ->header('Cache-Control', 'public, max-age=3600');
         } catch (\Exception $e) {
-            return response('// Error loading script: ' . $e->getMessage())
+            \Log::error('Error loading script component', [
+                'name' => $name,
+                'error' => $e->getMessage(),
+            ]);
+            
+            return response('// Error loading script')
                 ->header('Content-Type', 'application/javascript')
                 ->setStatusCode(500);
         }
@@ -47,7 +52,12 @@ class PwaxController extends Controller
                 ->header('Content-Type', 'text/css')
                 ->header('Cache-Control', 'public, max-age=3600');
         } catch (\Exception $e) {
-            return response('/* Error loading stylesheet: ' . $e->getMessage() . ' */')
+            \Log::error('Error loading stylesheet component', [
+                'name' => $name,
+                'error' => $e->getMessage(),
+            ]);
+            
+            return response('/* Error loading stylesheet */')
                 ->header('Content-Type', 'text/css')
                 ->setStatusCode(500);
         }

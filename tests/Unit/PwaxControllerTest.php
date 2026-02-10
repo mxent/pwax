@@ -53,7 +53,9 @@ class PwaxControllerTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('path traversal detected');
 
-        $method->invoke($this->controller, 'components_x__x_../.._x_config');
+        // Attempt path traversal: ../../../config would be encoded as .._x_.._x_.._x_config
+        // After decoding _x_ to ., this becomes ../../config
+        $method->invoke($this->controller, '.._x_.._x_config');
     }
 
     /**

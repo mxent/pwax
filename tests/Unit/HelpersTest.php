@@ -20,15 +20,17 @@ class HelpersTest extends TestCase
     }
 
     /**
-     * Test that vueParseTemplate handles nested templates
+     * Test that vueParseTemplate handles nested templates correctly
      */
     public function test_vue_parse_template_handles_nested_templates()
     {
         $input = '<template><div><template>Nested</template></div></template>';
+        // The inner template tags are part of the content and should be extracted as well
         $expected = '<div>Nested</div>';
         
         $result = vueParseTemplate($input);
         
+        // Note: The actual implementation recursively removes nested <template> tags
         $this->assertEquals($expected, $result);
     }
 

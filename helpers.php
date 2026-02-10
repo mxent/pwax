@@ -121,12 +121,30 @@ function vue($blade, $compact = null, $config = []): JsonResponse|RedirectRespon
  */
 function router($name, $parameters = [], $absolute = true): string
 {
-    $route = route($name, $parameters, $absolute);
+    if (!function_exists('app')) {
+        return '/';
+    }
+
+    $app = app();
+    if (!method_exists($app, 'bound') || ! $app->bound('url') || ! $app->bound('router')) {
+        return '/';
+    }
+
+    try {
+        $route = route($name, $parameters, $absolute);
+    } catch (\Throwable $e) {
+        return '/';
+    }
+
     $pathWithoutDomain = parse_url($route, PHP_URL_PATH);
 
     if (! $pathWithoutDomain) {
-        $route = route(config('pwax.home', 'index'));
-        $pathWithoutDomain = parse_url($route, PHP_URL_PATH);
+        try {
+            $route = route(config('pwax.home', 'index'));
+            $pathWithoutDomain = parse_url($route, PHP_URL_PATH);
+        } catch (\Throwable $e) {
+            return '/';
+        }
     }
 
     return $pathWithoutDomain ?? '/';

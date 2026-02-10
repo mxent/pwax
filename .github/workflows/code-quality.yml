@@ -6,10 +6,16 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+permissions:
+  contents: read
+
 jobs:
   code-style:
     runs-on: ubuntu-latest
     name: Code Style Check
+
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -37,6 +43,9 @@ jobs:
     runs-on: ubuntu-latest
     name: Static Analysis
 
+    permissions:
+      contents: read
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -62,6 +71,9 @@ jobs:
   security:
     runs-on: ubuntu-latest
     name: Security Check
+
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code

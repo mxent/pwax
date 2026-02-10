@@ -51,9 +51,9 @@ class HelpersTest extends TestCase
      */
     public function test_router_helper_returns_path()
     {
-        // This test would need Laravel's routing system to be available
-        // Marking as incomplete for now
-        $this->markTestIncomplete('Requires Laravel routing context');
+        // Default behavior: when route() fails, should return '/'
+        $result = router('nonexistent.route');
+        $this->assertEquals('/', $result);
     }
 
     /**

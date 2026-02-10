@@ -88,7 +88,7 @@ class PwaxController extends Controller
         }
 
         // Validate that the name doesn't contain path traversal attempts
-        if (preg_match('/\.\./', $name) || preg_match('/[\/\\]/', $name)) {
+        if (preg_match('/\.\./', $name) || preg_match('@[\\\\\\/]@', $name)) {
             throw new \InvalidArgumentException('Invalid view name: path traversal detected');
         }
         

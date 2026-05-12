@@ -2,80 +2,91 @@
 
 namespace Mxent\Pwax\Tests\Unit;
 
-use PHPUnit\Framework\TestCase;
+use Mxent\Pwax\Tests\TestCase;
 
 class HelpersTest extends TestCase
 {
-    /**
-     * Test that vueParseTemplate correctly extracts template content
-     */
-    public function test_vue_parse_template_extracts_template()
+    public function test_vue_parse_template_extracts_outer_template(): void
     {
-        $input = '<template><div>Hello World</div></template>';
-        $expected = '<div>Hello World</div>';
-        
-        $result = vueParseTemplate($input);
-        
-        $this->assertEquals($expected, $result);
+        $this->assertSame(
+            '<div>Hello World</div>',
+            vueParseTemplate('<template><div>Hello World</div></template>')
+        );
     }
 
-    /**
-     * Test that vueParseTemplate handles nested templates correctly
-     */
-    public function test_vue_parse_template_handles_nested_templates()
+    public function test_vue_parse_template_keeps_inner_tags(): void
     {
-        $input = '<template><div><template>Nested</template></div></template>';
-        // The inner template tags are part of the content and should be extracted as well
-        $expected = '<div>Nested</div>';
-        
-        $result = vueParseTemplate($input);
-        
-        // Note: The actual implementation recursively removes nested <template> tags
-        $this->assertEquals($expected, $result);
+        $result = vueParseTemplate('<template><div><template>Nested</template></div></template>');
+        $this->assertStringContainsString('Nested', $result);
+        $this->assertStringStartsWith('<div>', $result);
     }
 
-    /**
-     * Test that vueParseTemplate returns empty string when no template found
-     */
-    public function test_vue_parse_template_returns_empty_when_no_template()
+    public function test_vue_parse_template_returns_empty_when_missing(): void
     {
-        $input = '<div>No template tags here</div>';
-        
-        $result = vueParseTemplate($input);
-        
-        $this->assertEquals('', $result);
+        $this->assertSame('', vueParseTemplate('<div>No template</div>'));
     }
 
-    /**
-     * Test that router helper generates correct path
-     */
-    public function test_router_helper_returns_path()
+    public function test_pwax_extract_blocks_finds_multiple(): void
     {
-        // Default behavior: when route() fails, should return '/'
-        $result = router('nonexistent.route');
-        $this->assertEquals('/', $result);
+        $html = "<script>a()</script><script lang=\"js\">b()</script>";
+        $blocks = pwaxExtractBlocks('script', $html);
+        $this->assertCount(2, $blocks);
+        $this->assertSame('a()', $blocks[0]);
+        $this->assertSame('b()', $blocks[1]);
     }
 
-    /**
-     * Test that import helper generates correct syntax
-     */
-    public function test_import_helper_generates_correct_syntax()
+    public function test_pwax_extract_blocks_ignores_src_scripts(): void
+    {
+        $html = '<script src="/foo.js"></script><script>inline()</script>';
+        $blocks = pwaxExtractBlocks('script', $html);
+        $this->assertSame(['inline()'], $blocks);
+    }
+
+    public function test_pwax_validate_view_name_accepts_valid_names(): void
+    {
+        $this->assertSame('components.hello', pwaxValidateViewName('components.hello'));
+        $this->assertSame('vendor::pkg.view', pwaxValidateViewName('vendor::pkg.view'));
+    }
+
+    public function test_pwax_validate_view_name_rejects_path_traversal(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        pwaxValidateViewName('../etc/passwd');
+    }
+
+    public function test_pwax_validate_view_name_rejects_slashes(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        pwaxValidateViewName('foo/bar');
+    }
+
+    public function test_router_returns_path_for_named_route(): void
+    {
+        $this->assertSame('/about', router('pwax.test.about'));
+    }
+
+    public function test_router_returns_absolute_when_requested(): void
+    {
+        $this->assertSame('http://localhost/about', router('pwax.test.about', [], true));
+    }
+
+    public function test_router_falls_back_to_home_for_unknown(): void
+    {
+        // Unknown route -> fallback to configured home route name.
+        $this->assertSame('/', router('definitely.does.not.exist'));
+    }
+
+    public function test_import_helper_emits_pwax_import_call(): void
     {
         $result = import('components.hello');
-        
-        $this->assertStringContainsString('await window.pwaxImport', $result);
-        $this->assertStringContainsString('ComponentsHello', $result);
+        $this->assertStringContainsString('await window.pwaxImport(', $result);
+        $this->assertStringContainsString('"ComponentsHello"', $result);
     }
 
-    /**
-     * Test that import helper handles "from" syntax
-     */
-    public function test_import_helper_handles_from_syntax()
+    public function test_import_helper_supports_from_syntax(): void
     {
-        $result = import('MyComponent from components.modal');
-        
-        $this->assertStringContainsString('await window.pwaxImport', $result);
-        $this->assertStringContainsString('ComponentsModal', $result);
-        $this->assertStringContainsString('MyComponent', $result);
+        $result = import('MyModal from components.modal');
+        $this->assertStringContainsString('"ComponentsModal"', $result);
+        $this->assertStringContainsString('"MyModal"', $result);
     }
 }

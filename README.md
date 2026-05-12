@@ -28,63 +28,87 @@ Install the package via Composer:
 composer require mxent/pwax
 ```
 
-The service provider is auto-discovered by Laravel, so no additional setup is required.
+The service provider is auto-discovered by Laravel. After installation, run:
+
+```bash
+php artisan pwax:install
+```
+
+This publishes `config/pwax.php`. Pass `--views` to also publish the bundled
+Blade views, and `--force` to overwrite existing files.
 
 ## Configuration
 
-Publish the configuration file:
+Publish the configuration file manually if you prefer:
 
 ```bash
 php artisan vendor:publish --tag=pwax-config
 ```
 
-This creates `config/pwax.php` with the following options:
+Key options in `config/pwax.php`:
 
 ```php
 return [
-    // Use hash-based routing (#/) or history mode
-    'hash_route' => false,
-    
-    // Route name for the home page
-    'home' => 'index',
-    
-    // Prefix for internal pwax routes
-    'route_prefix' => '__pwax__',
-    
-    // Override default Blade templates
+    'hash_route'   => false,            // hash (#/) vs history routing
+    'home'         => 'index',          // fallback named route
+    'route_prefix' => '__pwax__',       // internal asset prefix
+
     'blade' => [
-        'content' => null,
-        'head' => null,
-        'foot' => null,
-        'error' => null,
-        'loader' => null,
+        'content' => null, 'head' => null, 'foot' => null,
+        'error' => null, 'loader' => null,
     ],
-    
-    // Customize loading spinner appearance
+
     'customization' => [
         'init_spinner_color' => '#0c83ff',
-        'init_spinner_bg' => '#f3f3f3',
+        'init_spinner_bg'    => '#f3f3f3',
     ],
-    
-    // Additional stylesheets to include
-    'styles' => [],
-    
-    // CDN URLs for Vue, Vue Router, and Pinia
+
+    'styles'  => [],
     'scripts' => [
         'https://unpkg.com/vue@3.5.18/dist/vue.global.prod.js',
         'https://unpkg.com/vue-router@4.5.1/dist/vue-router.global.prod.js',
         'https://unpkg.com/pinia@3.0.3/dist/pinia.iife.prod.js',
     ],
-    
-    // Custom Vue plugins
-    'plugins' => [],
-    
-    // Custom Vue directives
+
+    'plugins'    => [],
     'directives' => [],
-    
-    // Route middleware to execute before component load
     'middleware' => [],
+
+    'cache' => [
+        'asset_ttl' => 3600,            // .js/.css cache lifetime
+    ],
+
+    'manifest_path' => '/manifest.webmanifest',
+    'manifest' => [                     // Web App Manifest fields
+        'name'        => env('APP_NAME', 'Pwax App'),
+        'short_name'  => env('APP_NAME', 'Pwax'),
+        'start_url'   => '/',
+        'display'     => 'standalone',
+        'theme_color' => '#0c83ff',
+        'icons'       => [/* { src, sizes, type } */],
+    ],
+
+    'service_worker' => [
+        'enabled'       => false,       // turn on to register /service-worker.js
+        'path'          => '/service-worker.js',
+        'cache_name'    => 'pwax-cache-v1',
+        'precache'      => ['/'],
+        'network_first' => true,
+    ],
 ];
+```
+
+## Progressive Web App
+
+Pwax serves a Web App Manifest at `/manifest.webmanifest` and a service
+worker at `/service-worker.js`. The bundled `<head>` partial already
+emits the `<link rel="manifest">` and `theme-color` meta tags.
+
+To enable the service worker, set `service_worker.enabled = true` in
+`config/pwax.php`. The worker template can be customised by publishing it:
+
+```bash
+php artisan vendor:publish --tag=pwax-service-worker
 ```
 
 ## Publishing Views
@@ -259,10 +283,16 @@ Execute JavaScript before component loads:
 
 ## Testing
 
-Run tests (if implemented):
+The test suite uses Orchestra Testbench:
 
 ```bash
 composer test
+```
+
+Coverage report:
+
+```bash
+composer test-coverage
 ```
 
 ## Changelog

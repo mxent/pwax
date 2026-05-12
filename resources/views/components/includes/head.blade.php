@@ -1,3 +1,17 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+
+@php
+    $themeColor = config('pwax.manifest.theme_color');
+    $manifestPath = config('pwax.manifest_path', '/manifest.webmanifest');
+@endphp
+
+@if ($themeColor)
+    <meta name="theme-color" content="{{ $themeColor }}">
+@endif
+
+<link rel="manifest" href="{{ $manifestPath }}">
+
 <style>
     .preloader {
         position: relative;
@@ -29,18 +43,19 @@
         border: 6px solid {{ config('pwax.customization.init_spinner_bg', '#f3f3f3') }};
         border-top-color: {{ config('pwax.customization.init_spinner_color', '#0c83ff') }};
         border-radius: 50%;
-        animation: spin 1s linear infinite;
+        animation: pwax-spin 1s linear infinite;
         z-index: 9999;
     }
 
-    @keyframes spin {
-        0% {
-            transform: rotate(0deg);
-        }
+    @keyframes pwax-spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
 
-        100% {
-            transform: rotate(360deg);
-        }
+    .pwax-error {
+        padding: 1rem;
+        color: #b91c1c;
+        font-family: sans-serif;
     }
 </style>
 

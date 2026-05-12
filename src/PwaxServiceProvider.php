@@ -4,58 +4,78 @@ namespace Mxent\Pwax;
 
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\ServiceProvider;
-use Illuminate\Support\Str;
+use Mxent\Pwax\Console\Commands\InstallCommand;
 
 class PwaxServiceProvider extends ServiceProvider
 {
-    public function boot()
+    /**
+     * Register services. Bindings, config merging, and command registration
+     * happen here so they are available during the boot phase.
+     */
+    public function register(): void
+    {
+        $this->mergeConfigFrom(__DIR__ . '/../config/pwax.php', 'pwax');
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                InstallCommand::class,
+            ]);
+        }
+    }
+
+    /**
+     * Bootstrap services.
+     */
+    public function boot(): void
     {
         $this->bootHelpers();
         $this->bootDirectives();
-        $this->bootConfig();
         $this->bootRoutes();
         $this->bootViews();
+        $this->bootPublishing();
     }
 
-    public function register()
+    protected function bootHelpers(): void
     {
-        //
+        // helpers.php is autoloaded via composer "files"; require_once here only
+        // as a safety net for environments where autoload hasn't kicked in.
+        require_once __DIR__ . '/../helpers.php';
     }
 
-    public function bootHelpers()
+    protected function bootRoutes(): void
     {
-        require_once __DIR__.'/../helpers.php';
+        $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');
     }
 
-    public function bootConfig()
+    protected function bootViews(): void
     {
-        $this->publishes([
-            __DIR__.'/../config/pwax.php' => config_path('pwax.php'),
-        ], 'pwax-config');
-        $this->mergeConfigFrom(
-            __DIR__.'/../config/pwax.php',
-            'pwax'
-        );
+        $this->loadViewsFrom(__DIR__ . '/../resources/views', 'pwax');
     }
 
-    public function bootRoutes()
+    protected function bootDirectives(): void
     {
-        $this->loadRoutesFrom(__DIR__.'/../routes/web.php');
-    }
-
-    public function bootViews()
-    {
-        $this->loadViewsFrom(__DIR__.'/../resources/views', 'pwax');
-        $this->publishes([
-            __DIR__.'/../resources/views' => resource_path('views/vendor/pwax'),
-        ], 'pwax-views');
-    }
-
-    public function bootDirectives()
-    {
-        Blade::directive('import', function ($ins) {
-            return import($ins);
+        Blade::directive('import', function ($expression) {
+            return import($expression);
         });
     }
 
+    protected function bootPublishing(): void
+    {
+        if (! $this->app->runningInConsole()) {
+            return;
+        }
+
+        $this->publishes([
+            __DIR__ . '/../config/pwax.php' => config_path('pwax.php'),
+        ], 'pwax-config');
+
+        $this->publishes([
+            __DIR__ . '/../resources/views' => resource_path('views/vendor/pwax'),
+        ], 'pwax-views');
+
+        $this->publishes([
+            __DIR__ . '/../resources/views/js/service-worker.blade.php'
+                => resource_path('views/vendor/pwax/js/service-worker.blade.php'),
+        ], 'pwax-service-worker');
+    }
 }

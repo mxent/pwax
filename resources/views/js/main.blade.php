@@ -16,6 +16,35 @@
 
         window.pwaxHeaders = pwaxHeaders;
 
+        window.pwaxInjectStyles = function (name, json) {
+            // Inject inline style into document head
+            if (json.style) {
+                const styleId = 'pwax-style-' + name;
+                if (!document.getElementById(styleId)) {
+                    const inlineStyle = document.createElement('style');
+                    inlineStyle.id = styleId;
+                    inlineStyle.innerHTML = json.style;
+                    inlineStyle.setAttribute('pwax-attached', '');
+                    document.getElementsByTagName('head')[0].appendChild(inlineStyle);
+                }
+            }
+
+            // Load external stylesheets
+            if (json.styles && json.styles.length) {
+                const headTag = document.getElementsByTagName('head')[0];
+                const loadedHrefs = Array.from(document.querySelectorAll('link[rel="stylesheet"]')).map((l) => l.href);
+                json.styles.forEach((href) => {
+                    if (!loadedHrefs.includes(href)) {
+                        const link = document.createElement('link');
+                        link.rel = 'stylesheet';
+                        link.href = href;
+                        link.setAttribute('pwax-attached', '');
+                        headTag.appendChild(link);
+                    }
+                });
+            }
+        };
+
         window.pwaxFetch = async function (url, options = {}) {
             const { withCredentials = true, ...fetchOptions } = options;
 
@@ -32,24 +61,43 @@
                 throw new Error('pwaxFetch: HTTP ' + response.status);
             }
 
-            const json = await response.json();
-            const module = json.script
-                ? await import(`data:text/javascript;base64,${btoa(unescape(encodeURIComponent(json.script)))}`)
-                : {};
-            const exported = (module && module.default) || {};
-            const view = json.template ? { template: json.template, ...exported } : exported;
-
-            return { s: module, v: view };
+            return await response.json();
         };
 
-        window.pwaxImports = {};
+        window.pwaxImportCache = {};
+
         window.pwaxImport = async function (url, name, key = '') {
-            if (window.pwaxImports[name]) {
-                return window.pwaxImports[name];
+            if (window.pwaxImportCache[name]) {
+                Object.keys(window.pwaxImportCache).forEach((n) => {
+                    window.pwaxInjectStyles(n, window.pwaxImportCache[n].json);
+                });
+                return window.pwaxImportCache[name].component;
             }
-            const result = await window.pwaxFetch(url, { headers: window.pwaxHeaders });
-            window.pwaxImports[name] = key && key.length ? result.s[key] : result.v;
-            return window.pwaxImports[name];
+
+            const json = await window.pwaxFetch(url, { headers: window.pwaxHeaders });
+            window.pwaxInjectStyles(name, json);
+
+            // Pre-cache a placeholder BEFORE compiling so circular imports
+            // (Element ↔ Card) find a cache entry immediately. After compilation
+            // the placeholder is mutated in-place to add methods/computed, so
+            // all existing references (from sub-imports) automatically pick them up.
+            const placeholder = { template: json.template };
+            window.pwaxImportCache[name] = { component: placeholder, json };
+
+            const scriptSource = json.script || '';
+            let module = {};
+            if (scriptSource) {
+                const dataUrl = `data:text/javascript;base64,${btoa(unescape(encodeURIComponent(scriptSource)))}`;
+                module = await import(dataUrl);
+            }
+            const realComponent = key && key.length
+                ? module[key]
+                : { template: json.template, ...(module.default || {}) };
+
+            // Mutate the placeholder in-place — all references from circular
+            // sub-imports now see the full component with methods/computed.
+            Object.assign(placeholder, realComponent);
+            return placeholder;
         };
     })();
 

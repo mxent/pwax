@@ -128,11 +128,11 @@ This publishes views to `resources/views/vendor/pwax/`.
 Create a Blade view that contains `<template>`, `<script>`, and `<style>` sections:
 
 ```blade
-{{-- resources/views/components/hello.blade.php --}}
+{{-- resources/views/hello.blade.php --}}
 <template>
     <div class="hello">
-        <h1>{{ message }}</h1>
-        <button @click="increment">Count: {{ count }}</button>
+        <h1>@{{ message }}</h1>
+        <button @click="increment">Count: @{{ count }}</button>
     </div>
 </template>
 
@@ -171,12 +171,12 @@ class HomeController extends Controller
 {
     public function index()
     {
-        return vue('components.hello');
+        return vue('hello');
     }
     
     public function profile()
     {
-        return vue('components.profile', [
+        return vue('profile', [
             'user' => auth()->user()
         ]);
     }
@@ -198,19 +198,15 @@ Use the `router()` helper to generate Vue Router compatible paths:
 ```blade
 <template>
     <nav>
-        <a :href="router('index')">Home</a>
-        <a :href="router('profile')">Profile</a>
-        <a :href="router('about')">About</a>
+        <RouterLink to="{{ router('index') }}">Home</RouterLink>
+        <RouterLink to="{{ router('profile') }}">Profile</RouterLink>
+        <RouterLink to="{{ router('about') }}">About</RouterLink>
     </nav>
 </template>
 
 <script>
 export default {
-    methods: {
-        router(name, params = {}) {
-            return window.router(name, params)
-        }
-    }
+    //
 }
 </script>
 ```
@@ -224,10 +220,10 @@ Use the `import()` helper to dynamically import components:
 export default {
     async mounted() {
         // Import a component
-        const { default: MyComponent } = await @import('components.my-component')
+        const { default: MyComponent } = @import('components.my-component')
         
         // Import with variable assignment
-        const MyModal = await @import('MyModal from components.modal')
+        const MyModal = @import('MyModal from components.modal')
     }
 }
 </script>

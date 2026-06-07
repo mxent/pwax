@@ -87,7 +87,10 @@
                 }
 
                 const scriptSource = data.script || 'export default {}';
-                const module = await import(`data:text/javascript;base64,${btoa(unescape(encodeURIComponent(scriptSource)))}`);
+                const scriptBlob = new Blob([scriptSource], { type: 'text/javascript' });
+                const scriptUrl = URL.createObjectURL(scriptBlob);
+                const module = await import(scriptUrl);
+                URL.revokeObjectURL(scriptUrl);
                 const componentOptions = {
                     template: data.template,
                     ...(module.default || {}),

@@ -1,0 +1,81 @@
+/**
+ * Resolution of configured plugins, directives and client middleware.
+ *
+ * The server describes each entry as data — either a component module to import or a
+ * dotted path to look up on `window` — and this resolves it. Nothing is evaluated.
+ *
+ * That is a deliberate change from 1.x, where these config values were interpolated
+ * straight into the page with `{!! !!}` and executed. Any path by which a config value
+ * could be influenced was, in effect, remote code execution; and even without that, a
+ * typo in `config/pwax.php` produced a syntax error in a `<script>` block that took the
+ * whole application down with no useful message.
+ */
+
+/**
+ * Look up a dotted path on a root object without evaluating anything.
+ *
+ * @param {string} path e.g. "MyLibrary.plugin"
+ * @param {object} root
+ */
+export function resolveGlobal(path, root = window) {
+    return String(path)
+        .split('.')
+        .reduce((carry, segment) => (carry == null ? undefined : carry[segment]), root);
+}
+
+/**
+ * Resolve one configured extension entry to its value.
+ *
+ * @param {{type: string, url?: string, export?: string, path?: string}} entry
+ * @param {{load: (url: string, exportName?: string) => Promise<any>}} loader
+ */
+export async function resolveExtension(entry, loader) {
+    if (!entry || typeof entry !== 'object') {
+        return undefined;
+    }
+
+    if (entry.type === 'module' && entry.url) {
+        return loader.load(entry.url, entry.export || '');
+    }
+
+    if (entry.type === 'global' && entry.path) {
+        const value = resolveGlobal(entry.path);
+
+        if (value === undefined) {
+            console.warn(`pwax: global "${entry.path}" is not defined. Is its script tag present?`);
+        }
+
+        return value;
+    }
+
+    return undefined;
+}
+
+/**
+ * Resolve a map of extension entries, keeping the keys.
+ *
+ * @param {Record<string, any>} entries
+ * @param {{load: (url: string, exportName?: string) => Promise<any>}} loader
+ */
+export async function resolveExtensions(entries, loader) {
+    const names = Object.keys(entries || {});
+
+    const values = await Promise.all(
+        names.map(async (name) => {
+            try {
+                return await resolveExtension(entries[name], loader);
+            } catch (error) {
+                console.error(`pwax: failed to resolve "${name}"`, error);
+                return undefined;
+            }
+        })
+    );
+
+    return names.reduce((carry, name, index) => {
+        if (values[index] !== undefined) {
+            carry[name] = values[index];
+        }
+
+        return carry;
+    }, {});
+}

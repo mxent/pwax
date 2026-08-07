@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/mxent/pwax/security/policy
+    about: Report privately by email — never in a public issue.
+  - name: Question or usage help
+    url: https://github.com/mxent/pwax/discussions
+    about: Ask in Discussions rather than opening an issue.

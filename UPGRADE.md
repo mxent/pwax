@@ -57,6 +57,11 @@ Named exports keep the same spelling:
 Backdrop: @pwax('Backdrop from components.modal'),
 ```
 
+**Do not add an arrow function.** `components: { Modal: () => @pwax('…') }` is the Vue 2
+lazy-component idiom, which Vue 3 dropped — Vue treats the entry as a functional
+component and renders `[object Object]`. `@pwax` is already lazy, so the arrow only
+breaks it. Pwax renders an explanation in place of `[object Object]` if you hit this.
+
 Rename the directive if `@pwax` clashes with something in your app:
 
 ```php
@@ -112,6 +117,12 @@ application — `GET /__pwax__/admin_x_users.json` rendered
 
 2.0 signs identifiers with your `APP_KEY`, so only URLs your application emitted resolve.
 Nothing to do unless you hardcoded a component URL; use `Pwax::url('view.name')` instead.
+
+A component now has exactly **one** representation — `/__pwax__/c/{signed-id}.js`, an ES
+module carrying its template, script, styles and scope together. The `.json` and `.css`
+endpoints are gone. Nothing consumed them, and both rendered the view with no controller
+data, so their output was misleading in exactly the case someone would have reached for
+them. `Pwax::url()` accordingly no longer takes a format argument.
 
 `APP_KEY` must be set. Rotating it invalidates outstanding identifiers; clients recover
 on their next full page load.

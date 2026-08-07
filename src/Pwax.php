@@ -125,11 +125,12 @@ class Pwax
     /**
      * Build the URL a component is served from.
      *
-     * @param  'json'|'js'|'css'  $format
+     * A component has one representation — an ES module carrying its template, script,
+     * styles and scope together — so there is no format to choose.
      */
-    public function url(string $view, string $format = 'json', bool $absolute = false): string
+    public function url(string $view, bool $absolute = false): string
     {
-        return $this->route('pwax.' . ($format === 'json' ? 'module' : $format), $this->id($view), $absolute);
+        return $this->route('pwax.js', $this->id($view), $absolute);
     }
 
     /**
@@ -216,11 +217,9 @@ class Pwax
             ? array_map(trim(...), explode(' from ', $expression, 2))
             : ['', $expression];
 
-        // The `.js` URL, not `.json`: the client resolves this with a dynamic `import()`,
-        // which needs a JavaScript module on the other end.
         return sprintf(
             'window.pwax.component(%s, %s)',
-            json_encode($this->url($view, 'js'), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
+            json_encode($this->url($view), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
             json_encode($export, JSON_THROW_ON_ERROR)
         );
     }

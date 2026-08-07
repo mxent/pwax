@@ -1,3 +1,8 @@
+{{--
+    `$component` is the compiled Mxent\Pwax\Data\Component for this page. Nothing here
+    uses it, but it is passed through deliberately: if you publish this view, it is what
+    you would read to emit per-page <title> or Open Graph tags.
+--}}
 @props(['shell', 'component' => null])
 @php
     $nonce = $shell->nonce();

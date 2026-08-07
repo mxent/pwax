@@ -34,12 +34,14 @@ Route::group(array_filter([
     'middleware' => $middleware,
     'domain' => config('pwax.routes.domain'),
 ]), function (): void {
+    // A component has exactly one representation: an ES module carrying its template,
+    // script, styles and scope together. One request gives the client everything, and
+    // there is no second shape of URL to sign, cache or reason about.
+    //
     // Identifiers are base64url + a hex signature, so the character class is tight.
-    $id = '[A-Za-z0-9_-]+';
-
-    Route::get('/c/{id}.js', [PwaxController::class, 'js'])->where('id', $id)->name('js');
-    Route::get('/c/{id}.css', [PwaxController::class, 'css'])->where('id', $id)->name('css');
-    Route::get('/c/{id}.json', [PwaxController::class, 'module'])->where('id', $id)->name('module');
+    Route::get('/c/{id}.js', [PwaxController::class, 'js'])
+        ->where('id', '[A-Za-z0-9_-]+')
+        ->name('js');
 });
 
 /*

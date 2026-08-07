@@ -382,6 +382,19 @@ Backdrop: @pwax('Backdrop from components.modal'),
   the modal opens.
 - **Each component is fetched once per session**, and cached by the browser after that.
 
+> **Do not wrap it in an arrow function.**
+>
+> ```blade
+> Modal: @pwax('components.modal'),        {{-- correct --}}
+> Modal: () => @pwax('components.modal'),  {{-- renders as [object Object] --}}
+> ```
+>
+> `() => Component` is the Vue **2** idiom for lazy components and was dropped in Vue 3.
+> Vue 3 sees a function and treats the entry as a *functional component*, calls it during
+> render, and gets a component object back where it expected vnodes. `@pwax` is already
+> lazy — the arrow adds nothing. If you do write it, Pwax renders an explanation on the
+> page instead of `[object Object]`.
+
 > The directive is `@pwax`, not `@import`. A Blade directive named `import` also matches
 > the CSS at-rule `@import url(...)` inside `<style>` blocks — see
 > [Upgrading from 1.x](#upgrading-from-1x). You can rename it with

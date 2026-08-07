@@ -4,7 +4,6 @@ namespace Mxent\Pwax\Http\Controllers;
 
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\View\Factory as ViewFactory;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Routing\Controller;
@@ -45,48 +44,27 @@ class PwaxController extends Controller
      */
     public function js(Request $request, string $id): SymfonyResponse
     {
-        return $this->serve(
-            $request,
-            $id,
-            'application/javascript; charset=utf-8',
-            fn (Component $c): string => $this->toModule($c),
-            '// pwax: component unavailable'
-        );
-    }
+        $contentType = 'application/javascript; charset=utf-8';
 
-    /**
-     * Serve only a component's compiled CSS.
-     */
-    public function css(Request $request, string $id): SymfonyResponse
-    {
-        return $this->serve(
-            $request,
-            $id,
-            'text/css; charset=utf-8',
-            fn (Component $c): string => $c->style,
-            '/* pwax: component unavailable */'
-        );
-    }
-
-    /**
-     * Serve a component's full payload as JSON.
-     */
-    public function module(Request $request, string $id): SymfonyResponse
-    {
         try {
             $component = $this->pwax->compile($this->pwax->resolve($id));
         } catch (InvalidComponentId $e) {
-            return $this->failure($request, $id, $e, 400, 'Invalid component identifier.');
+            $this->log($request, $id, $e);
+
+            return $this->plain('// pwax: component unavailable', 400, $contentType);
         } catch (ComponentNotAllowed $e) {
-            return $this->failure($request, $id, $e, 403, 'Component not available.');
+            $this->log($request, $id, $e);
+
+            return $this->plain('// pwax: component unavailable', 403, $contentType);
         } catch (Throwable $e) {
-            return $this->failure($request, $id, $e, $this->statusFor($e), 'Failed to load component.');
+            $this->log($request, $id, $e);
+
+            return $this->plain('// pwax: component unavailable', $this->statusFor($e), $contentType);
         }
 
-        $payload = $this->pwax->payload($component);
-        $body = json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+        $body = $this->toModule($component);
 
-        return $this->cached(new JsonResponse($payload), $request, $body);
+        return $this->cached(new Response($body, 200, ['Content-Type' => $contentType]), $request, $body);
     }
 
     /**
@@ -167,39 +145,6 @@ class PwaxController extends Controller
     }
 
     /**
-     * Shared pipeline for the text-bodied component endpoints.
-     *
-     * @param  callable(Component): string  $extract
-     */
-    private function serve(
-        Request $request,
-        string $id,
-        string $contentType,
-        callable $extract,
-        string $fallback
-    ): SymfonyResponse {
-        try {
-            $component = $this->pwax->compile($this->pwax->resolve($id));
-        } catch (InvalidComponentId $e) {
-            $this->log($request, $id, $e);
-
-            return $this->plain($fallback, 400, $contentType);
-        } catch (ComponentNotAllowed $e) {
-            $this->log($request, $id, $e);
-
-            return $this->plain($fallback, 403, $contentType);
-        } catch (Throwable $e) {
-            $this->log($request, $id, $e);
-
-            return $this->plain($fallback, $this->statusFor($e), $contentType);
-        }
-
-        $body = $extract($component);
-
-        return $this->cached(new Response($body, 200, ['Content-Type' => $contentType]), $request, $body);
-    }
-
-    /**
      * Wrap a component's script in a module that also exposes its template and styles.
      *
      * The author's script is emitted verbatim, so its own `export default` and any named
@@ -227,9 +172,6 @@ class PwaxController extends Controller
 
     /**
      * Apply caching headers and short-circuit to 304 when the client already has the body.
-     *
-     * Typed against the Symfony base class because `JsonResponse` does not extend
-     * `Illuminate\Http\Response` — they are siblings, not parent and child.
      */
     private function cached(SymfonyResponse $response, Request $request, string $body): SymfonyResponse
     {
@@ -276,17 +218,6 @@ class PwaxController extends Controller
         }
 
         return $notModified;
-    }
-
-    private function failure(Request $request, string $id, Throwable $e, int $status, string $message): JsonResponse
-    {
-        $this->log($request, $id, $e);
-
-        $response = new JsonResponse(['error' => $message], $status);
-        $response->headers->set('Cache-Control', 'no-store, private');
-        $response->headers->set('Vary', Pwax::VARY);
-
-        return $response;
     }
 
     private function plain(string $body, int $status, string $contentType): Response

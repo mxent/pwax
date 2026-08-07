@@ -112,7 +112,7 @@ class MiddlewareTest extends TestCase
         $this->app->make(HttpKernelContract::class)
             ->appendMiddlewareToGroup('web', RecordingMiddleware::class);
 
-        $this->get('/__pwax__/c/' . $this->id('pages.home') . '.json')->assertOk();
+        $this->get('/__pwax__/c/' . $this->id('pages.home') . '.js')->assertOk();
 
         $this->assertTrue(
             RecordingMiddleware::$ran,

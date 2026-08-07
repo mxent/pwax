@@ -7,6 +7,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- A component now has exactly one representation: `/__pwax__/c/{id}.js`, an ES module
+  carrying its template, script, styles and scope together. The `.css` and `.json`
+  endpoints were removed. Nothing consumed either — the runtime imports the module and
+  reads its exports — and both rendered the view with **no controller data**, so their
+  output was misleading in precisely the case someone would have reached for them.
+  `Pwax::url()` accordingly drops its `$format` argument.
+
 ### Fixed
 
 - Components returned by `@pwax` are memoised on their URL and export name. Vue treats

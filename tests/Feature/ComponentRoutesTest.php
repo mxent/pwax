@@ -8,23 +8,14 @@ use Mxent\Pwax\Tests\TestCase;
 
 class ComponentRoutesTest extends TestCase
 {
-    private function url(string $view, string $extension): string
+    private function url(string $view): string
     {
-        return '/__pwax__/c/' . $this->id($view) . '.' . $extension;
-    }
-
-    public function test_serves_a_component_as_json(): void
-    {
-        $response = $this->getJson($this->url('pages.home', 'json'));
-
-        $response->assertOk();
-        $response->assertJsonStructure(['id', 'hash', 'template', 'script', 'style', 'styles', 'scripts', 'module']);
-        $this->assertStringContainsString('<h1>{{ title }}</h1>', $response->json('template'));
+        return '/__pwax__/c/' . $this->id($view) . '.js';
     }
 
     public function test_serves_a_component_as_an_es_module(): void
     {
-        $response = $this->get($this->url('pages.home', 'js'));
+        $response = $this->get($this->url('pages.home'));
 
         $response->assertOk();
         $response->assertHeader('Content-Type', 'application/javascript; charset=utf-8');
@@ -41,23 +32,14 @@ class ComponentRoutesTest extends TestCase
 
     public function test_the_module_body_cannot_break_out_of_a_script_tag(): void
     {
-        $body = $this->get($this->url('pages.home', 'js'))->getContent();
+        $body = $this->get($this->url('pages.home'))->getContent();
 
         $this->assertStringNotContainsString('</script>', $body);
     }
 
-    public function test_serves_a_component_stylesheet(): void
-    {
-        $response = $this->get($this->url('pages.home', 'css'));
-
-        $response->assertOk();
-        $response->assertHeader('Content-Type', 'text/css; charset=utf-8');
-        $this->assertStringContainsString('.home', $response->getContent());
-    }
-
     public function test_component_responses_carry_an_etag_and_vary(): void
     {
-        $response = $this->get($this->url('pages.home', 'js'));
+        $response = $this->get($this->url('pages.home'));
 
         $response->assertHeader('Vary', Pwax::VARY);
         $this->assertNotEmpty($response->headers->get('ETag'));
@@ -68,7 +50,7 @@ class ComponentRoutesTest extends TestCase
 
     public function test_a_matching_if_none_match_returns_304(): void
     {
-        $url = $this->url('pages.home', 'js');
+        $url = $this->url('pages.home');
         $etag = $this->get($url)->headers->get('ETag');
 
         $response = $this->get($url, ['If-None-Match' => $etag]);
@@ -80,7 +62,7 @@ class ComponentRoutesTest extends TestCase
 
     public function test_a_weak_etag_still_matches(): void
     {
-        $url = $this->url('pages.home', 'js');
+        $url = $this->url('pages.home');
         $etag = $this->get($url)->headers->get('ETag');
 
         $this->get($url, ['If-None-Match' => 'W/' . $etag])->assertStatus(304);
@@ -88,7 +70,7 @@ class ComponentRoutesTest extends TestCase
 
     public function test_a_stale_if_none_match_returns_the_body(): void
     {
-        $this->get($this->url('pages.home', 'js'), ['If-None-Match' => '"stale"'])->assertOk();
+        $this->get($this->url('pages.home'), ['If-None-Match' => '"stale"'])->assertOk();
     }
 
     /**
@@ -97,7 +79,7 @@ class ComponentRoutesTest extends TestCase
      */
     public function test_an_unsigned_identifier_is_rejected(): void
     {
-        $this->getJson('/__pwax__/c/pages_home.json')->assertStatus(400);
+        $this->get('/__pwax__/c/pages_home.js')->assertStatus(400);
     }
 
     public function test_a_tampered_identifier_is_rejected(): void
@@ -105,7 +87,7 @@ class ComponentRoutesTest extends TestCase
         $id = $this->id('pages.home');
         $tampered = substr($id, 0, -1) . ($id[strlen($id) - 1] === 'a' ? 'b' : 'a');
 
-        $this->getJson('/__pwax__/c/' . $tampered . '.json')->assertStatus(400);
+        $this->get('/__pwax__/c/' . $tampered . '.js')->assertStatus(400);
     }
 
     public function test_a_signature_from_another_key_is_rejected(): void
@@ -114,28 +96,45 @@ class ComponentRoutesTest extends TestCase
         // the signature check can reject it.
         $foreign = (new ComponentId('a-completely-different-key'))->encode('pages.home');
 
-        $this->getJson('/__pwax__/c/' . $foreign . '.json')->assertStatus(400);
+        $this->get('/__pwax__/c/' . $foreign . '.js')->assertStatus(400);
     }
 
     public function test_error_responses_do_not_leak_internals(): void
     {
-        $response = $this->getJson('/__pwax__/c/deadbeefdeadbeefdeadbeef.json');
+        $response = $this->get('/__pwax__/c/deadbeefdeadbeefdeadbeef.js');
 
         $response->assertStatus(400);
-        $this->assertSame(['error' => 'Invalid component identifier.'], $response->json());
+        // Still valid JavaScript, so a failed import fails cleanly rather than with a
+        // parse error, and it carries nothing about why.
+        $this->assertSame('// pwax: component unavailable', $response->getContent());
+    }
+
+    /**
+     * A component has exactly one representation. The separate `.css` and `.json`
+     * endpoints were dropped: nothing consumed them, and both rendered the view without
+     * its controller data, so their output was misleading precisely where someone would
+     * have reached for it.
+     */
+    public function test_there_is_only_one_component_representation(): void
+    {
+        $id = $this->id('pages.home');
+
+        $this->get('/__pwax__/c/' . $id . '.js')->assertOk();
+        $this->get('/__pwax__/c/' . $id . '.css')->assertNotFound();
+        $this->get('/__pwax__/c/' . $id . '.json')->assertNotFound();
     }
 
     public function test_a_missing_view_is_a_404_not_a_500(): void
     {
-        $this->getJson('/__pwax__/c/' . $this->id('pages.does-not-exist') . '.json')->assertStatus(404);
+        $this->get('/__pwax__/c/' . $this->id('pages.does-not-exist') . '.js')->assertStatus(404);
     }
 
     public function test_an_allowlist_blocks_views_outside_it(): void
     {
         config()->set('pwax.components.allowed', ['pages.*']);
 
-        $this->getJson($this->url('pages.home', 'json'))->assertOk();
-        $this->getJson($this->url('components.modal', 'json'))->assertStatus(403);
+        $this->get($this->url('pages.home'))->assertOk();
+        $this->get($this->url('components.modal'))->assertStatus(403);
     }
 
     public function test_the_runtime_bundle_is_served_and_cached_hard(): void

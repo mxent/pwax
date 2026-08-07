@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static \Mxent\Pwax\Http\Responses\ComponentResponse render(string $view, array<string, mixed> $data = [])
  * @method static string id(string $view)
  * @method static string resolve(string $id)
- * @method static string url(string $view, string $format = 'json', bool $absolute = false)
+ * @method static string url(string $view, bool $absolute = false)
  * @method static string route(string $name, array<array-key, mixed>|string $parameters = [], bool $absolute = false)
  * @method static string homeUrl()
  * @method static array<string, mixed> payload(\Mxent\Pwax\Data\Component $component, bool $includeScript = true)

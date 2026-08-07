@@ -213,9 +213,9 @@ return [
     | Caching
     |--------------------------------------------------------------------------
     |
-    | asset_ttl  max-age (seconds) for component .js / .css / .json responses. They
-    |            are served `private` because a component can render differently per
-    |            user, and always carry an ETag so a repeat request costs a 304.
+    | asset_ttl  max-age (seconds) for component module responses. They are served
+    |            `private` because a component can render differently per user, and
+    |            always carry an ETag so a repeat request costs a 304.
     | components Cache compiled components. The cache key is a digest of the rendered
     |            output, so entries can never go stale — a changed component simply
     |            produces a new key.

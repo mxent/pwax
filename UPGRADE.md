@@ -118,6 +118,12 @@ application — `GET /__pwax__/admin_x_users.json` rendered
 2.0 signs identifiers with your `APP_KEY`, so only URLs your application emitted resolve.
 Nothing to do unless you hardcoded a component URL; use `Pwax::url('view.name')` instead.
 
+A component now has exactly **one** representation — `/__pwax__/c/{signed-id}.js`, an ES
+module carrying its template, script, styles and scope together. The `.json` and `.css`
+endpoints are gone. Nothing consumed them, and both rendered the view with no controller
+data, so their output was misleading in exactly the case someone would have reached for
+them. `Pwax::url()` accordingly no longer takes a format argument.
+
 `APP_KEY` must be set. Rotating it invalidates outstanding identifiers; clients recover
 on their next full page load.
 

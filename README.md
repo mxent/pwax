@@ -84,16 +84,18 @@ to a small client runtime that hands the template to Vue's in-browser compiler.
      │  GET /profile                 │
      ├──────────────────────────────►│  Route → pwax_component('pages.profile')
      │                               │    render Blade → split blocks → scope styles
-     │  ◄── HTML shell ──────────────┤    → embed the component in the shell
-     │      + <link modulepreload>   │
+     │  ◄── HTML shell ──────────────┤    → embed template + script + style in the shell
      │                               │
-     │  (in parallel, all cacheable) │
+     │  (in parallel, static, cacheable, no component request at all)
      ├── vue.global.prod.js ────────►│
      ├── vue-router / pinia ────────►│
      ├── pwax.js ───────────────────►│
-     ├── /__pwax__/c/{id}.js ───────►│  the component, as a real ES module
      │                               │
-     │  first paint — no further round trips
+     │  first paint
+     │                               │
+     │  a @pwax('components.modal') first renders
+     ├── GET /__pwax__/c/{id}.js ───►│  the component, as a real ES module:
+     │  ◄── module ──────────────────┤  template + script + styles + scope in one file
      │                               │
      │  click <RouterLink to="/settings">
      ├── GET /settings ─────────────►│  X-Pwax-Component: true
@@ -104,6 +106,11 @@ to a small client runtime that hands the template to Vue's in-browser compiler.
 The same Laravel route answers both a browser navigation and an SPA navigation. Which
 one you get is decided by the `X-Pwax-Component` header, and every response says so in
 `Vary`.
+
+Two shapes of component, for one reason. A **page** is rendered with controller data, so
+it cannot be re-derived from its view name alone — it travels inside the page response,
+script and all. An **imported** component takes no controller data, so it is addressable
+at a stable signed URL, which makes it HTTP-cacheable and importable as a real module.
 
 ## Is this the right tool?
 
@@ -595,7 +602,7 @@ building another one.
 | Response | Caching |
 | --- | --- |
 | Page HTML / JSON | `no-store, private` — may contain user data |
-| Component `.js` / `.css` / `.json` | `private, max-age`, with an `ETag` → `304` |
+| Component module (`/__pwax__/c/{id}.js`) | `private, max-age`, with an `ETag` → `304` |
 | `pwax.js` | `public, max-age=31536000, immutable` |
 | Manifest | `public, max-age=86400`, with an `ETag` |
 
@@ -759,7 +766,7 @@ Headlines:
 | `@import('view')` | `@pwax('view')` |
 | `vue('view', $data)` | `pwax_component('view', $data)` |
 | `router('name')` | `pwax_route('name')` |
-| `/__pwax__/{name}.json` | `/__pwax__/c/{signed-id}.json` |
+| `/__pwax__/{name}.json` | `/__pwax__/c/{signed-id}.js` |
 | Component routes had no middleware | run through `web` |
 | Vue 3.5.18 / Router 4 / Pinia 3 from unpkg | 3.5.41 / 5.2.0 / 4.0.2, self-hosted |
 

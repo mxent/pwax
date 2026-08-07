@@ -217,8 +217,7 @@ class Shell
             ? array_map(trim(...), explode(' from ', $reference, 2))
             : ['', trim($reference)];
 
-        // `.js`, because the runtime resolves this with a dynamic `import()`.
-        return ['type' => 'module', 'url' => $this->pwax->url($view, 'js'), 'export' => $export];
+        return ['type' => 'module', 'url' => $this->pwax->url($view), 'export' => $export];
     }
 
     /**

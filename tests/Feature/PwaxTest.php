@@ -55,13 +55,12 @@ class PwaxTest extends TestCase
         $this->assertSame('pages.home', Pwax::resolve(Pwax::id('pages.home')));
     }
 
-    public function test_builds_component_urls_for_each_format(): void
+    public function test_builds_the_component_module_url(): void
     {
         $id = Pwax::id('pages.home');
 
-        $this->assertSame('/__pwax__/c/' . $id . '.json', Pwax::url('pages.home'));
-        $this->assertSame('/__pwax__/c/' . $id . '.js', Pwax::url('pages.home', 'js'));
-        $this->assertSame('/__pwax__/c/' . $id . '.css', Pwax::url('pages.home', 'css'));
+        $this->assertSame('/__pwax__/c/' . $id . '.js', Pwax::url('pages.home'));
+        $this->assertSame('http://localhost/__pwax__/c/' . $id . '.js', Pwax::url('pages.home', true));
     }
 
     public function test_compiles_a_component_with_its_identifier_attached(): void

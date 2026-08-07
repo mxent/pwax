@@ -1,11 +1,21 @@
-@if(config('pwax.blade.error'))
-    @include(config('pwax.blade.error'))
-@else
-    <h1>@{{ errResponse.statusText }}</h1>
-    <p
-        v-html="errResponse.message || 'Please try to refresh the page.<br/>If the problem persists, please contact the administrator.'">
+{{--
+    Shown when a page fails to load. Rendered by Vue, with `error` in scope:
+    `error.status`, `error.statusText`, `error.message`. `retry()` refetches.
+
+    Override with `pwax.blade.error` in config/pwax.php.
+
+    NOTE: `v-text`, not `v-html`. Part of `error` derives from the response, and
+    rendering that as HTML would turn any reflected content into markup.
+--}}
+<div class="pwax-error" role="alert">
+    <h1 v-text="error.statusText"></h1>
+    <p v-text="error.message"></p>
+
+    <button type="button" class="pwax-retry" @click="retry">
+        Try again
+    </button>
+
+    <p>
+        <a href="{{ app(\Mxent\Pwax\Pwax::class)->homeUrl() }}">Return home</a>
     </p>
-    <a href="{{ router(config('pwax.home', '/')) }}">
-        Return to home
-    </a>
-@endif
+</div>

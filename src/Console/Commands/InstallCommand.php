@@ -8,34 +8,54 @@ class InstallCommand extends Command
 {
     protected $signature = 'pwax:install
         {--force : Overwrite any existing files}
-        {--views : Also publish view files}';
+        {--views : Also publish the Blade views}
+        {--no-assets : Skip publishing Vue, Vue Router and Pinia}';
 
-    protected $description = 'Install the Pwax package (publish config and optionally views)';
+    protected $description = 'Install Pwax: publish the config, the frontend assets and (optionally) the views';
 
     public function handle(): int
     {
-        $this->components->info('Installing Pwax...');
+        $this->components->info('Installing Pwax');
 
-        $this->call('vendor:publish', [
-            '--tag' => 'pwax-config',
-            '--force' => (bool) $this->option('force'),
-        ]);
+        $force = (bool) $this->option('force');
 
-        if ($this->option('views')) {
-            $this->call('vendor:publish', [
-                '--tag' => 'pwax-views',
-                '--force' => (bool) $this->option('force'),
-            ]);
+        $this->publish('pwax-config', $force);
+
+        if (! $this->option('no-assets')) {
+            $this->publish('pwax-assets', $force);
         }
 
-        $this->components->info('Pwax installation complete.');
-        $this->line('');
-        $this->line('  Next steps:');
-        $this->line('  - Review <info>config/pwax.php</info>');
-        $this->line('  - Add <info><link rel="manifest" href="/manifest.webmanifest"></info> if not using the bundled head include');
-        $this->line('  - To enable the service worker, set <info>service_worker.enabled = true</info> in config/pwax.php');
-        $this->line('');
+        if ($this->option('views')) {
+            $this->publish('pwax-views', $force);
+        }
+
+        $this->newLine();
+        $this->components->info('Pwax installed.');
+
+        $this->line('  <options=bold>Next steps</>');
+        $this->line('  1. Review <info>config/pwax.php</info>.');
+        $this->line('  2. Return a component from a route:');
+        $this->line('     <fg=gray>Route::get(\'/\', fn () => pwax_component(\'pages.home\'))->name(\'index\');</>');
+        $this->line('  3. Create your first component:');
+        $this->line('     <fg=gray>php artisan pwax:component pages.home</>');
+        $this->line('  4. Check your setup at any time with <info>php artisan pwax:doctor</info>.');
+        $this->newLine();
+
+        if (! $this->option('no-assets')) {
+            $this->components->warn(
+                'Re-run `php artisan vendor:publish --tag=pwax-assets --force` after every '
+                . 'package update, so the published Vue build matches the one Pwax expects.'
+            );
+        }
 
         return self::SUCCESS;
+    }
+
+    private function publish(string $tag, bool $force): void
+    {
+        $this->call('vendor:publish', array_filter([
+            '--tag' => $tag,
+            '--force' => $force,
+        ]));
     }
 }

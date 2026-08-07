@@ -9,86 +9,60 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  code-style:
+  pint:
     runs-on: ubuntu-latest
-    name: Code Style Check
-
-    permissions:
-      contents: read
-
+    name: Code Style
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
         with:
-          php-version: 8.2
+          php-version: '8.3'
           extensions: dom, curl, libxml, mbstring, zip
           coverage: none
+      - run: composer install --prefer-dist --no-interaction
+      - name: Laravel Pint
+        run: vendor/bin/pint --test
 
-      - name: Install dependencies
-        run: composer install --prefer-dist --no-interaction
-
-      - name: Check code style
-        run: |
-          if [ -f "vendor/bin/phpcs" ]; then
-            vendor/bin/phpcs --standard=PSR12 src/
-          else
-            echo "PHP_CodeSniffer not installed, skipping code style check"
-          fi
-
-  static-analysis:
+  phpstan:
     runs-on: ubuntu-latest
     name: Static Analysis
-
-    permissions:
-      contents: read
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
         with:
-          php-version: 8.2
+          php-version: '8.3'
           extensions: dom, curl, libxml, mbstring, zip
           coverage: none
+      - run: composer install --prefer-dist --no-interaction
+      - name: PHPStan
+        run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G --error-format=github
 
-      - name: Install dependencies
-        run: composer install --prefer-dist --no-interaction
-
-      - name: Run static analysis
-        run: |
-          if [ -f "vendor/bin/phpstan" ]; then
-            vendor/bin/phpstan analyse
-          else
-            echo "PHPStan not installed, skipping static analysis"
-          fi
-
-  security:
+  audit:
     runs-on: ubuntu-latest
-    name: Security Check
-
-    permissions:
-      contents: read
-
+    name: Dependency Audit
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
         with:
-          php-version: 8.2
+          php-version: '8.3'
           extensions: dom, curl, libxml, mbstring, zip
           coverage: none
-
-      - name: Install dependencies
-        run: composer install --prefer-dist --no-interaction
-
-      - name: Security check
-        run: |
-          composer audit || echo "No security issues found"
+      - run: composer install --prefer-dist --no-interaction
+      - name: composer audit
+        run: composer audit --abandoned=report
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      # Every npm dependency here is development-only — the Composer package ships the
+      # prebuilt dist/pwax.js and nothing from node_modules. They are still audited
+      # because contributors run the Vitest and Vite dev servers locally, which is
+      # exactly what this toolchain's advisories tend to concern.
+      - name: npm audit
+        run: npm audit --audit-level=high

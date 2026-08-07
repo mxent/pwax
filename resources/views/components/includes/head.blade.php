@@ -1,10 +1,16 @@
+@props(['shell', 'component' => null])
+@php
+    $nonce = $shell->nonce();
+    $nonceAttr = $nonce ? ' nonce="' . e($nonce) . '"' : '';
+    $manifestPath = config('pwax.manifest_path', '/manifest.webmanifest');
+    $themeColor = config('pwax.manifest.theme_color');
+    $background = config('pwax.customization.init_background', '#ffffff');
+    $spinnerBg = config('pwax.customization.init_spinner_bg', '#f3f3f3');
+    $spinnerColor = config('pwax.customization.init_spinner_color', '#0c83ff');
+@endphp
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-
-@php
-    $themeColor = config('pwax.manifest.theme_color');
-    $manifestPath = config('pwax.manifest_path', '/manifest.webmanifest');
-@endphp
+<meta name="csrf-token" content="{{ csrf_token() }}">
 
 @if ($themeColor)
     <meta name="theme-color" content="{{ $themeColor }}">
@@ -12,57 +18,77 @@
 
 <link rel="manifest" href="{{ $manifestPath }}">
 
-<style>
-    .preloader {
+<style{!! $nonceAttr !!}>
+    .pwax-preloader {
         position: relative;
-        height: 100vh;
-        width: 100vw;
+        /* dvh, not vh: on mobile browsers vh includes the collapsing toolbar, so a
+           100vh box is taller than the visible area and the spinner sits off-centre. */
+        min-height: 100dvh;
         overflow: hidden;
     }
 
-    .preloader:before {
+    .pwax-preloader::before {
         content: '';
         position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: #fff;
+        inset: 0;
+        background: {{ $background }};
         z-index: 9999;
     }
 
-    .preloader:after {
+    .pwax-preloader::after {
         content: '';
         position: absolute;
-        transform: translate(-50%, -50%);
         top: 50%;
         left: 50%;
-        width: 60px;
-        height: 60px;
-        margin: -30px 0 0 -30px;
-        border: 6px solid {{ config('pwax.customization.init_spinner_bg', '#f3f3f3') }};
-        border-top-color: {{ config('pwax.customization.init_spinner_color', '#0c83ff') }};
+        width: 48px;
+        height: 48px;
+        margin: -24px 0 0 -24px;
+        border: 5px solid {{ $spinnerBg }};
+        border-top-color: {{ $spinnerColor }};
         border-radius: 50%;
         animation: pwax-spin 1s linear infinite;
-        z-index: 9999;
+        z-index: 10000;
     }
 
     @keyframes pwax-spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
+        to { transform: rotate(360deg); }
+    }
+
+    /* A spinning element is a known migraine and vestibular-disorder trigger. */
+    @media (prefers-reduced-motion: reduce) {
+        .pwax-preloader::after {
+            animation-duration: 3s;
+        }
     }
 
     .pwax-error {
-        padding: 1rem;
+        padding: 1.5rem;
+        font-family: system-ui, sans-serif;
         color: #b91c1c;
-        font-family: sans-serif;
+    }
+
+    .pwax-error h1 {
+        font-size: 1.25rem;
+        margin: 0 0 .5rem;
+    }
+
+    .pwax-retry {
+        margin-top: 1rem;
+        padding: .5rem 1rem;
+        font: inherit;
+        cursor: pointer;
+    }
+
+    .pwax-loading {
+        padding: 1.5rem;
+        font-family: system-ui, sans-serif;
     }
 </style>
 
-@foreach (config('pwax.styles', []) as $style)
-    <link rel="stylesheet" href="{{ $style }}">
+@foreach ($shell->stylesheets() as $style)
+    <link rel="stylesheet" {{ $shell->attributes($style) }}>
 @endforeach
 
-@if(config('pwax.blade.head'))
+@if (config('pwax.blade.head'))
     @include(config('pwax.blade.head'))
 @endif

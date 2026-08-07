@@ -1,124 +1,137 @@
-# Contributing to PWax
+# Contributing to Pwax
 
-First off, thank you for considering contributing to PWax! It's people like you that make PWax such a great tool.
+Thanks for taking the time. Bug reports, questions and pull requests are all welcome.
 
-## Code of Conduct
+**Security issues do not belong in the tracker.** Email `opensource@mxent.com` — see
+[SECURITY.md](SECURITY.md).
 
-This project and everyone participating in it is governed by our commitment to maintain a welcoming and inclusive environment. By participating, you are expected to uphold this code.
+## Development setup
 
-## How Can I Contribute?
-
-### Reporting Bugs
-
-Before creating bug reports, please check the existing issues to avoid duplicates. When you create a bug report, include as many details as possible:
-
-- **Use a clear and descriptive title**
-- **Describe the exact steps to reproduce the problem**
-- **Provide specific examples** to demonstrate the steps
-- **Describe the behavior you observed** and what you expected to see
-- **Include screenshots or code snippets** if relevant
-- **Specify your environment**: PHP version, Laravel version, operating system
-
-### Suggesting Enhancements
-
-Enhancement suggestions are tracked as GitHub issues. When creating an enhancement suggestion, include:
-
-- **Use a clear and descriptive title**
-- **Provide a detailed description** of the suggested enhancement
-- **Explain why this enhancement would be useful**
-- **List any alternatives you've considered**
-
-### Pull Requests
-
-1. **Fork the repository** and create your branch from `main`
-2. **Follow the coding standards** used throughout the project
-3. **Add tests** if you're adding functionality
-4. **Update documentation** if you're changing functionality
-5. **Ensure the test suite passes** before submitting
-6. **Write a good commit message** describing your changes
-
-#### Coding Standards
-
-- Follow PSR-12 coding standards for PHP
-- Use meaningful variable and function names
-- Add comments for complex logic
-- Keep functions focused and concise
-- Write clear commit messages
-
-#### Testing
-
-Before submitting your pull request:
+PHP is enough to work on the server side. Node is only needed if you touch the client
+runtime under `src/js/`.
 
 ```bash
-# Run tests
+git clone https://github.com/mxent/pwax.git
+cd pwax
+
+composer install
+composer check          # Pint, PHPStan, PHPUnit
+
+npm ci                  # only for src/js work
+npm run lint && npm test
+```
+
+## Project layout
+
+```
+src/
+  Compiler/        Blade output → Component: block extraction, style scoping, stamping
+  Console/         Artisan commands
+  Contracts/       Minifier interface
+  Data/            Component value object
+  Exceptions/
+  Facades/
+  Http/            Controller, middleware, ComponentResponse
+  Minification/    matthiasmullie, null and caching decorators
+  Support/         ComponentId (signing), Shell (asset and config assembly)
+  js/              Client runtime source → dist/pwax.js
+  Pwax.php         Public API
+  helpers.php      pwax(), pwax_component(), pwax_route()
+config/            Published configuration
+resources/
+  views/           Shell, partials, service worker
+  vendor/          Vendored Vue, Vue Router, Pinia (see its README)
+routes/
+dist/              Built client runtime — COMMITTED, see below
+tests/
+  Unit/            No framework boot
+  Feature/         Orchestra Testbench
+  fixtures/views/  Component fixtures
+  js/              Vitest
+```
+
+## The `dist/` directory is committed
+
+`dist/pwax.js` ships inside the Composer package, so a Laravel developer never needs
+Node. That means **if you change anything in `src/js/`, you must rebuild and commit**:
+
+```bash
+npm run build
+git add dist/
+```
+
+CI runs `npm run build && git diff --exit-code -- dist/` and fails if the committed
+bundle does not match the source.
+
+## Standards
+
+- **PHP:** PSR-12 via Laravel Pint. Run `composer lint:fix`.
+- **Static analysis:** PHPStan at level 6, must pass clean.
+- **JavaScript:** ESLint and Prettier. Run `npm run lint:fix && npm run format`.
+- **Tests:** `snake_case` method names in PHP, `it('does something')` in Vitest.
+
+### Comments
+
+Comment the *why*, not the *what*. The reader can see that a loop iterates; what they
+cannot see is which bug it exists to prevent. Much of this codebase carries notes
+explaining what 1.x got wrong and why the current shape is different — that context is
+the point, so please keep it accurate when you change the surrounding code.
+
+## Tests
+
+Every behaviour change needs a test. When fixing a bug, write the test that fails first
+and say in a comment what the failure was.
+
+```bash
 composer test
+vendor/bin/phpunit --filter=ComponentId
+vendor/bin/phpunit tests/Feature/ComponentRoutesTest.php
 
-# Check code style
-composer cs-check
-
-# Fix code style automatically
-composer cs-fix
+npm test
+npx vitest --watch
 ```
 
-#### Commit Messages
+Unit tests must not boot Laravel. Feature tests extend `Mxent\Pwax\Tests\TestCase`, which
+adds `tests/fixtures/views` to the view finder — put new component fixtures there.
 
-- Use the present tense ("Add feature" not "Added feature")
-- Use the imperative mood ("Move cursor to..." not "Moves cursor to...")
-- Limit the first line to 72 characters or less
-- Reference issues and pull requests liberally after the first line
+## Manual verification
 
-Example:
+`orchestra/testbench` can serve a real application against the package:
+
+```bash
+php vendor/bin/testbench serve
 ```
-Add validation for view names
 
-- Prevents path traversal attacks
-- Validates against whitelist pattern
-- Adds proper error handling
+Worth checking by hand for anything touching the runtime or the shell:
+
+1. A cold load renders with **no** component fetch before first paint.
+2. Navigating A → B → A leaves exactly one `<style data-pwax-style>` per live component.
+3. A route behind `auth` redirects through the SPA router rather than throwing.
+4. With `service_worker.enabled`, DevTools offline mode still boots the app.
+
+## Pull requests
+
+1. Branch from `main`.
+2. Keep the change focused; unrelated refactors belong in their own PR.
+3. Update `README.md`, `CHANGELOG.md` and — for breaking changes — `UPGRADE.md`.
+4. Make sure `composer check` and `npm test` pass.
+5. Rebuild `dist/` if `src/js/` changed.
+
+### Commit messages
+
+Imperative mood, present tense, first line under 72 characters:
+
+```
+Reference-count injected component styles
+
+Navigating away removed every element marked `pwax-attached`, including
+styles belonging to imported components that were still mounted.
 
 Fixes #123
 ```
 
-## Security Vulnerabilities
+## Breaking changes
 
-**DO NOT** open public issues for security vulnerabilities. Instead, email security concerns to `opensource@mxent.com`. We will address them promptly.
-
-## Development Setup
-
-1. Clone the repository:
-```bash
-git clone https://github.com/mxent/pwax.git
-cd pwax
-```
-
-2. Install dependencies:
-```bash
-composer install
-```
-
-3. Run tests:
-```bash
-composer test
-```
-
-## Project Structure
-
-```
-pwax/
-├── src/               # Source code
-│   └── Http/
-│       └── Controllers/
-├── config/            # Configuration files
-├── resources/         # Views and assets
-│   └── views/
-├── routes/            # Route definitions
-├── tests/             # Test suite
-└── helpers.php        # Helper functions
-```
-
-## Questions?
-
-Feel free to open an issue with your question, or reach out to the maintainers at `opensource@mxent.com`.
-
-## Attribution
-
-This Contributing guide is adapted from the open-source contribution guidelines template.
+Pwax follows semantic versioning. A breaking change needs a clear justification, an
+`UPGRADE.md` entry, and — where it is possible — a deprecation path. If a compatible fix
+exists, prefer it.

@@ -2,61 +2,256 @@
 
 namespace Mxent\Pwax;
 
+use Illuminate\Contracts\Cache\Factory as CacheFactory;
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
+use Illuminate\Contracts\Config\Repository as Config;
+use Illuminate\Contracts\Http\Kernel as HttpKernelContract;
+use Illuminate\Contracts\View\Factory as ViewFactory;
+use Illuminate\Foundation\Http\Kernel as HttpKernel;
+use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\ServiceProvider;
+use Mxent\Pwax\Compiler\BlockExtractor;
+use Mxent\Pwax\Compiler\ComponentCompiler;
+use Mxent\Pwax\Compiler\StyleScoper;
+use Mxent\Pwax\Compiler\TemplateStamper;
+use Mxent\Pwax\Console\Commands\ClearCommand;
+use Mxent\Pwax\Console\Commands\ComponentMakeCommand;
+use Mxent\Pwax\Console\Commands\DoctorCommand;
 use Mxent\Pwax\Console\Commands\InstallCommand;
+use Mxent\Pwax\Contracts\Minifier;
+use Mxent\Pwax\Http\Middleware\HandlePwaxRequests;
+use Mxent\Pwax\Minification\CachedMinifier;
+use Mxent\Pwax\Minification\MatthiasMullieMinifier;
+use Mxent\Pwax\Minification\NullMinifier;
+use Mxent\Pwax\Support\ComponentId;
+use Mxent\Pwax\Support\Shell;
 
 class PwaxServiceProvider extends ServiceProvider
 {
-    /**
-     * Register services. Bindings, config merging, and command registration
-     * happen here so they are available during the boot phase.
-     */
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/pwax.php', 'pwax');
 
+        $this->registerCompiler();
+        $this->registerPwax();
+
         if ($this->app->runningInConsole()) {
             $this->commands([
                 InstallCommand::class,
+                ClearCommand::class,
+                ComponentMakeCommand::class,
+                DoctorCommand::class,
             ]);
         }
     }
 
-    /**
-     * Bootstrap services.
-     */
     public function boot(): void
     {
+        $this->loadViewsFrom(__DIR__ . '/../resources/views', 'pwax');
+
         $this->bootHelpers();
         $this->bootDirectives();
+        $this->bootMiddleware();
         $this->bootRoutes();
-        $this->bootViews();
         $this->bootPublishing();
     }
 
+    /**
+     * Optionally define the 1.x `vue()` and `router()` globals.
+     *
+     * They are not autoloaded via composer's `files` because those names are generic
+     * enough to collide with application code; `pwax_component()` and `pwax_route()`
+     * always exist and are the supported spelling.
+     */
     protected function bootHelpers(): void
     {
-        // helpers.php is autoloaded via composer "files"; require_once here only
-        // as a safety net for environments where autoload hasn't kicked in.
-        require_once __DIR__ . '/../helpers.php';
+        if ($this->app->make(Config::class)->get('pwax.helpers.global', false)) {
+            require_once __DIR__ . '/helpers-compat.php';
+        }
+    }
+
+    protected function registerCompiler(): void
+    {
+        $this->app->singleton(BlockExtractor::class);
+        $this->app->singleton(StyleScoper::class);
+        $this->app->singleton(TemplateStamper::class);
+
+        $this->app->singleton(Minifier::class, function ($app): Minifier {
+            /** @var Config $config */
+            $config = $app->make(Config::class);
+
+            $enabled = $config->get('pwax.minify.enabled');
+
+            // Default to production only: while developing, a readable stack trace is
+            // worth far more than the bytes minification would save.
+            $enabled ??= $app->environment('production');
+
+            if (! $enabled) {
+                return new NullMinifier;
+            }
+
+            $minifier = new MatthiasMullieMinifier;
+
+            $cache = $this->cacheStore($app, (string) $config->get('pwax.minify.store', '') ?: null);
+
+            if ($cache === null) {
+                return $minifier;
+            }
+
+            $ttl = $config->get('pwax.minify.ttl');
+
+            return new CachedMinifier($minifier, $cache, $ttl === null ? null : (int) $ttl);
+        });
+
+        $this->app->singleton(ComponentCompiler::class, function ($app): ComponentCompiler {
+            /** @var Config $config */
+            $config = $app->make(Config::class);
+
+            $cache = $config->get('pwax.cache.components', true)
+                ? $this->cacheStore($app, (string) $config->get('pwax.cache.store', '') ?: null)
+                : null;
+
+            return new ComponentCompiler(
+                $app->make(ViewFactory::class),
+                $app->make(BlockExtractor::class),
+                $app->make(StyleScoper::class),
+                $app->make(TemplateStamper::class),
+                $app->make(Minifier::class),
+                $cache,
+                (bool) $config->get('pwax.components.scoped_styles', true),
+            );
+        });
+    }
+
+    protected function registerPwax(): void
+    {
+        $this->app->singleton(ComponentId::class, function ($app): ComponentId {
+            /** @var Config $config */
+            $config = $app->make(Config::class);
+
+            return new ComponentId(self::normaliseKey((string) $config->get('app.key', '')));
+        });
+
+        $this->app->singleton(Pwax::class, fn ($app): Pwax => new Pwax(
+            $app->make(ComponentCompiler::class),
+            $app->make(ComponentId::class),
+            $app->make(Config::class),
+            $app->make('url'),
+        ));
+
+        $this->app->alias(Pwax::class, 'pwax');
+
+        $this->app->singleton(Shell::class, fn ($app): Shell => new Shell(
+            $app->make(Config::class),
+            $app->make(Pwax::class),
+            $app->make(ViewFactory::class),
+        ));
+    }
+
+    /**
+     * Register the component import directive.
+     *
+     * The directive emits PHP rather than its final output, so the URL is resolved when
+     * the view runs, not when Blade compiles it. In 1.x the directive returned a literal
+     * string, which froze the resolved URL into `storage/framework/views` — so changing
+     * `route_prefix`, or running `view:cache` in a build step with no routes loaded,
+     * produced imports that pointed nowhere.
+     *
+     * The name is configurable and defaults to `@pwax`. It must never be `import`: Blade
+     * matches a directive even with no arguments, so `@import` would also swallow the CSS
+     * at-rule `@import url("…")` in every <style> block in the application.
+     */
+    protected function bootDirectives(): void
+    {
+        /** @var Config $config */
+        $config = $this->app->make(Config::class);
+
+        $name = self::assertDirectiveName((string) $config->get('pwax.components.directive', 'pwax') ?: 'pwax');
+
+        Blade::directive($name, static fn (?string $expression): string => sprintf(
+            '<?php echo \Mxent\Pwax\Facades\Pwax::importExpression(%s); ?>',
+            $expression === null || trim($expression) === '' ? 'null' : $expression
+        ));
+    }
+
+    /**
+     * Reject directive names that would capture unrelated Blade or CSS syntax.
+     *
+     * @throws \InvalidArgumentException
+     */
+    public static function assertDirectiveName(string $name): string
+    {
+        if ($name === 'import') {
+            throw new \InvalidArgumentException(
+                'pwax.components.directive cannot be "import": Blade matches a directive even with '
+                . 'no arguments, so an "import" directive also captures the CSS at-rule '
+                . '@import url("…") inside every <style> block in the application and replaces it '
+                . 'with JavaScript. Use the default "pwax".'
+            );
+        }
+
+        if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name) !== 1) {
+            throw new \InvalidArgumentException(sprintf(
+                'pwax.components.directive must be a valid Blade directive name, got "%s".',
+                $name
+            ));
+        }
+
+        return $name;
+    }
+
+    protected function bootMiddleware(): void
+    {
+        /** @var Config $config */
+        $config = $this->app->make(Config::class);
+
+        if (! $config->get('pwax.routes.register', true)) {
+            return;
+        }
+
+        /** @var Router $router */
+        $router = $this->app->make(Router::class);
+
+        $router->aliasMiddleware('pwax', HandlePwaxRequests::class);
+
+        // Applied to the application's own routes too, so a `pwax_component()` route in
+        // web.php gets redirect translation without the developer wiring anything.
+        //
+        // This goes through the HTTP kernel rather than `Router::pushMiddlewareToGroup`.
+        // The kernel owns the canonical group definitions and copies them onto the router
+        // with `syncMiddlewareToRouter`, which *replaces* each group wholesale — so a push
+        // made directly on the router is discarded the moment the kernel is resolved.
+        $groups = array_values(array_filter(
+            (array) $config->get('pwax.middleware', ['web']),
+            'is_string'
+        ));
+
+        if ($groups === [] || ! $this->app->bound(HttpKernelContract::class)) {
+            return;
+        }
+
+        $this->app->booted(function () use ($groups): void {
+            $kernel = $this->app->make(HttpKernelContract::class);
+
+            if (! $kernel instanceof HttpKernel) {
+                return;
+            }
+
+            foreach ($groups as $group) {
+                $kernel->appendMiddlewareToGroup($group, HandlePwaxRequests::class);
+            }
+        });
     }
 
     protected function bootRoutes(): void
     {
-        $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');
-    }
+        /** @var Config $config */
+        $config = $this->app->make(Config::class);
 
-    protected function bootViews(): void
-    {
-        $this->loadViewsFrom(__DIR__ . '/../resources/views', 'pwax');
-    }
-
-    protected function bootDirectives(): void
-    {
-        Blade::directive('import', function ($expression) {
-            return import($expression);
-        });
+        if ($config->get('pwax.routes.register', true)) {
+            $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');
+        }
     }
 
     protected function bootPublishing(): void
@@ -74,8 +269,44 @@ class PwaxServiceProvider extends ServiceProvider
         ], 'pwax-views');
 
         $this->publishes([
-            __DIR__ . '/../resources/views/js/service-worker.blade.php'
-                => resource_path('views/vendor/pwax/js/service-worker.blade.php'),
+            __DIR__ . '/../resources/views/js/service-worker.blade.php' => resource_path(
+                'views/vendor/pwax/js/service-worker.blade.php'
+            ),
         ], 'pwax-service-worker');
+
+        // Vue, Vue Router and Pinia, so the app works offline and leaks nothing to a CDN.
+        $this->publishes([
+            __DIR__ . '/../resources/vendor' => public_path('vendor/pwax'),
+        ], 'pwax-assets');
+    }
+
+    /**
+     * Resolve a cache repository, tolerating applications with no cache configured.
+     */
+    private function cacheStore(mixed $app, ?string $store): ?CacheRepository
+    {
+        if (! $app->bound(CacheFactory::class)) {
+            return null;
+        }
+
+        try {
+            return $app->make(CacheFactory::class)->store($store);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Turn Laravel's `base64:` application key into raw bytes.
+     */
+    private static function normaliseKey(string $key): string
+    {
+        if (str_starts_with($key, 'base64:')) {
+            $decoded = base64_decode(substr($key, 7), true);
+
+            return $decoded === false ? $key : $decoded;
+        }
+
+        return $key;
     }
 }

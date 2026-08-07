@@ -1,314 +1,784 @@
-# mxent/pwax
+# Pwax
 
-Progressive Web App built with Laravel & Vue
+**Write Vue components as Blade views. Ship them as a progressive web app.**
 
-A Laravel package that seamlessly integrates Vue 3, Vue Router, and Pinia to build Progressive Web Applications with dynamic component loading and SPA-like experiences.
+[![Tests](https://github.com/mxent/pwax/actions/workflows/tests.yml/badge.svg)](https://github.com/mxent/pwax/actions/workflows/tests.yml)
+[![Code Quality](https://github.com/mxent/pwax/actions/workflows/code-quality.yml/badge.svg)](https://github.com/mxent/pwax/actions/workflows/code-quality.yml)
+[![Latest Version](https://img.shields.io/packagist/v/mxent/pwax.svg)](https://packagist.org/packages/mxent/pwax)
+[![PHP Version](https://img.shields.io/packagist/dependency-v/mxent/pwax/php.svg)](https://packagist.org/packages/mxent/pwax)
+[![License](https://img.shields.io/packagist/l/mxent/pwax.svg)](LICENSE)
 
-## Features
+Pwax lets you write a Vue single-file component *as a Blade view* — `<template>`,
+`<script>` and `<style>` in one file — and serves it to the browser, where Vue compiles
+it at runtime. You get an SPA with client-side routing, a service worker and an
+installable app manifest, and you never leave PHP or run a frontend build.
 
-- 🚀 **Vue 3 Integration** - Modern reactive framework with Composition API support
-- 🛣️ **Vue Router** - Client-side routing with hash or history mode
-- 🗄️ **Pinia State Management** - Official Vue state management library
-- 📦 **Dynamic Component Loading** - Load Vue components on-demand via AJAX
-- ⚡ **Code Minification** - Automatic JS/CSS minification for optimal performance
-- 🎨 **Customizable** - Extensive configuration options for plugins, directives, and middleware
-- 🔄 **Hot Module Injection** - Dynamically inject CSS, JavaScript, and templates from Blade views
+```blade
+{{-- resources/views/pages/home.blade.php --}}
+<template>
+    <div class="home">
+        <h1>@{{ greeting }}</h1>
+        <button type="button" @click="count++">Clicked @{{ count }} times</button>
+    </div>
+</template>
+
+<script>
+    export default {
+        data() {
+            return { greeting: @json($greeting), count: 0 };
+        },
+    };
+</script>
+
+<style scoped>
+    .home { padding: 2rem; }
+</style>
+```
+
+```php
+Route::get('/', fn () => pwax_component('pages.home', [
+    'greeting' => 'Hello, ' . auth()->user()?->name,
+]))->name('index');
+```
+
+That is the whole application. No `npm run build`, no `.vue` files, no separate route
+table in JavaScript.
+
+---
+
+## Contents
+
+- [How it works](#how-it-works)
+- [Is this the right tool?](#is-this-the-right-tool)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Writing components](#writing-components)
+- [Blade and Vue together](#blade-and-vue-together)
+- [Passing data](#passing-data)
+- [Routing](#routing)
+- [Redirects and errors](#redirects-and-errors)
+- [Importing components](#importing-components)
+- [Scoped styles](#scoped-styles)
+- [Plugins, directives and middleware](#plugins-directives-and-middleware)
+- [Progressive web app](#progressive-web-app)
+- [Frontend assets](#frontend-assets)
+- [Performance](#performance)
+- [Security](#security)
+- [Configuration reference](#configuration-reference)
+- [Artisan commands](#artisan-commands)
+- [JavaScript API](#javascript-api)
+- [Upgrading from 1.x](#upgrading-from-1x)
+- [Testing](#testing)
+- [Contributing](#contributing)
+
+---
+
+## How it works
+
+A component is a Blade view. Pwax renders it, splits it into its parts, and returns them
+to a small client runtime that hands the template to Vue's in-browser compiler.
+
+```
+  Browser                         Laravel
+     │                               │
+     │  GET /profile                 │
+     ├──────────────────────────────►│  Route → pwax_component('pages.profile')
+     │                               │    render Blade → split blocks → scope styles
+     │  ◄── HTML shell ──────────────┤    → embed the component in the shell
+     │      + <link modulepreload>   │
+     │                               │
+     │  (in parallel, all cacheable) │
+     ├── vue.global.prod.js ────────►│
+     ├── vue-router / pinia ────────►│
+     ├── pwax.js ───────────────────►│
+     ├── /__pwax__/c/{id}.js ───────►│  the component, as a real ES module
+     │                               │
+     │  first paint — no further round trips
+     │                               │
+     │  click <RouterLink to="/settings">
+     ├── GET /settings ─────────────►│  X-Pwax-Component: true
+     │  ◄── JSON payload ────────────┤  → same route, JSON instead of the shell
+     │                               │
+```
+
+The same Laravel route answers both a browser navigation and an SPA navigation. Which
+one you get is decided by the `X-Pwax-Component` header, and every response says so in
+`Vary`.
+
+## Is this the right tool?
+
+| | Pwax | [Inertia](https://inertiajs.com) | [Livewire](https://livewire.laravel.com) |
+| --- | --- | --- | --- |
+| Frontend build step | none | Vite required | none |
+| Component source | Blade views | `.vue` / `.jsx` files | Blade + PHP class |
+| Where components render | browser (Vue) | browser (Vue) | server (round trip per interaction) |
+| Client-side reactivity | full Vue | full Vue | server-driven |
+| Ships a compiler to the browser | yes (~50 kB of Vue) | no | no |
+
+Reach for Pwax when you want real client-side Vue but not a Node toolchain — internal
+tools, admin panels, prototypes, or apps that must be installable and work offline.
+Reach for **Inertia** if you are happy running Vite and want tree-shaking, TypeScript,
+and `<script setup>`. Reach for **Livewire** if you would rather not write JavaScript.
+
+The honest trade-off: Vue's in-browser compiler is about 50 kB gzipped more than the
+runtime-only build, and compiling templates in the browser requires
+`script-src 'unsafe-eval'` in your Content-Security-Policy. See [Security](#security).
 
 ## Requirements
 
-- PHP >= 8.2
-- Laravel >= 12.0
-- Composer
+- PHP 8.2 or higher (8.3+ if you are on Laravel 13)
+- Laravel 12 or 13
+
+Node is **not** required to use Pwax. It is only needed to contribute to the client
+runtime.
 
 ## Installation
 
-Install the package via Composer:
-
 ```bash
 composer require mxent/pwax
-```
-
-The service provider is auto-discovered by Laravel. After installation, run:
-
-```bash
 php artisan pwax:install
 ```
 
-This publishes `config/pwax.php`. Pass `--views` to also publish the bundled
-Blade views, and `--force` to overwrite existing files.
+`pwax:install` publishes `config/pwax.php` and copies Vue, Vue Router and Pinia into
+`public/vendor/pwax`. Add `--views` to publish the Blade views as well.
 
-## Configuration
-
-Publish the configuration file manually if you prefer:
+Then point a route at a component and create it:
 
 ```bash
-php artisan vendor:publish --tag=pwax-config
+php artisan pwax:component pages.home
 ```
-
-Key options in `config/pwax.php`:
 
 ```php
-return [
-    'hash_route'   => false,            // hash (#/) vs history routing
-    'home'         => 'index',          // fallback named route
-    'route_prefix' => '__pwax__',       // internal asset prefix
-
-    'blade' => [
-        'content' => null, 'head' => null, 'foot' => null,
-        'error' => null, 'loader' => null,
-    ],
-
-    'customization' => [
-        'init_spinner_color' => '#0c83ff',
-        'init_spinner_bg'    => '#f3f3f3',
-    ],
-
-    'styles'  => [],
-    'scripts' => [
-        'https://unpkg.com/vue@3.5.18/dist/vue.global.prod.js',
-        'https://unpkg.com/vue-router@4.5.1/dist/vue-router.global.prod.js',
-        'https://unpkg.com/pinia@3.0.3/dist/pinia.iife.prod.js',
-    ],
-
-    'plugins'    => [],
-    'directives' => [],
-    'middleware' => [],
-
-    'cache' => [
-        'asset_ttl' => 3600,            // .js/.css cache lifetime
-    ],
-
-    'manifest_path' => '/manifest.webmanifest',
-    'manifest' => [                     // Web App Manifest fields
-        'name'        => env('APP_NAME', 'Pwax App'),
-        'short_name'  => env('APP_NAME', 'Pwax'),
-        'start_url'   => '/',
-        'display'     => 'standalone',
-        'theme_color' => '#0c83ff',
-        'icons'       => [/* { src, sizes, type } */],
-    ],
-
-    'service_worker' => [
-        'enabled'       => false,       // turn on to register /service-worker.js
-        'path'          => '/service-worker.js',
-        'cache_name'    => 'pwax-cache-v1',
-        'precache'      => ['/'],
-        'network_first' => true,
-    ],
-];
+// routes/web.php
+Route::get('/', fn () => pwax_component('pages.home'))->name('index');
 ```
 
-## Progressive Web App
+Check your setup at any time:
 
-Pwax serves a Web App Manifest at `/manifest.webmanifest` and a service
-worker at `/service-worker.js`. The bundled `<head>` partial already
-emits the `<link rel="manifest">` and `theme-color` meta tags.
+```bash
+php artisan pwax:doctor
+```
 
-To enable the service worker, set `service_worker.enabled = true` in
-`config/pwax.php`. The worker template can be customised by publishing it:
+> **After every `composer update`**, re-run
+> `php artisan vendor:publish --tag=pwax-assets --force` so the published Vue build stays
+> in step with the package. `pwax:doctor` will tell you if it drifts.
+
+## Writing components
+
+A component is a Blade view containing any of `<template>`, `<script>` and `<style>`.
+
+```blade
+<template>
+    <article class="post">
+        <h1>@{{ post.title }}</h1>
+        <p>@{{ post.body }}</p>
+    </article>
+</template>
+
+<script>
+    export default {
+        props: { post: { type: Object, required: true } },
+    };
+</script>
+
+<style scoped>
+    .post { max-width: 60ch; }
+</style>
+```
+
+Rules worth knowing:
+
+- **`<template>` is the root.** Nested `<template v-if>` and `<template #slot>` work;
+  the parser matches closing tags by depth.
+- **`<script>` is an ES module.** `export default` is your component; `import` statements
+  resolve relative to the component's URL; named exports are importable by other
+  components.
+- **Multiple blocks are allowed.** Several `<script>` blocks are concatenated, several
+  `<style>` blocks are merged.
+- **`<script src>` and `<link rel="stylesheet">` are treated as external assets** and
+  loaded before the component renders, rather than inlined.
+- **One HTML rule applies:** a literal `</script>` inside a JavaScript string ends the
+  block. Write `<\/script>`, exactly as in a plain HTML page.
+
+## Blade and Vue together
+
+Both languages use `{{ }}` and `@`. Two rules cover it:
+
+**Escape Vue's interpolation with `@{{ }}`.** Blade renders `@{{ x }}` as `{{ x }}`, so
+Vue receives it:
+
+```blade
+<h1>@{{ title }}</h1>       {{-- Vue renders this --}}
+<h1>{{ $title }}</h1>       {{-- Blade renders this, once, on the server --}}
+```
+
+**Most `@` attributes are safe, but a few collide.** Blade only compiles `@name` when
+`name` is a registered directive. `@click`, `@submit`, `@input` and friends pass
+through untouched — but Laravel ships directives called `@error`, `@class`, `@style`,
+`@checked`, `@disabled`, `@selected` and `@readonly`. Writing `@error="onError"` in a
+Vue template invokes Blade's `@error` directive instead.
+
+Use the `v-on:` longhand for those:
+
+```blade
+<video v-on:error="onError"></video>   {{-- not @error --}}
+<input v-on:change="save">             {{-- @change is fine, but be consistent --}}
+```
+
+For a larger block, `@verbatim` disables Blade entirely:
+
+```blade
+@verbatim
+<template>
+    <p>{{ message }}</p>
+    <video @error="onError"></video>
+</template>
+@endverbatim
+```
+
+Note that `@verbatim` also disables `@json()` and `{{ $phpVariable }}`, so keep
+server-injected values outside it.
+
+## Passing data
+
+Pass an array as the second argument. It becomes ordinary Blade view data:
+
+```php
+Route::get('/posts/{post}', fn (Post $post) => pwax_component('pages.post', [
+    'post' => $post,
+    'canEdit' => auth()->user()?->can('update', $post),
+]))->name('posts.show');
+```
+
+```blade
+<script>
+    export default {
+        data() {
+            return {
+                post: @json($post),
+                canEdit: @json($canEdit),
+            };
+        },
+    };
+</script>
+```
+
+`@json()` escapes for a JavaScript context — always prefer it to `{!! json_encode(...) !!}`.
+
+Because components render inside your middleware stack, `auth()`, `session()`,
+`request()` and policies all work exactly as they do in any other Blade view.
+
+## Routing
+
+Routes stay in `routes/web.php`. There is no second route table to maintain. Vue Router
+hands every path to Pwax, which asks the server what to render.
+
+```php
+Route::get('/', fn () => pwax_component('pages.home'))->name('index');
+Route::get('/about', fn () => pwax_component('pages.about'))->name('about');
+
+Route::middleware('auth')->group(function () {
+    Route::get('/settings', fn () => pwax_component('pages.settings'))->name('settings');
+});
+```
+
+Link between pages with `<RouterLink>`, using `pwax_route()` to resolve named routes:
+
+```blade
+<template>
+    <nav>
+        <RouterLink to="{{ pwax_route('index') }}">Home</RouterLink>
+        <RouterLink to="{{ pwax_route('posts.show', ['post' => 1]) }}">First post</RouterLink>
+    </nav>
+</template>
+```
+
+`pwax_route()` returns a path (`/posts/1`); pass `true` as the third argument for an
+absolute URL. Unlike 1.x's `router()`, an unknown route name **throws** when
+`APP_DEBUG` is on rather than silently sending the link to your home page.
+
+### History mode
+
+Pwax uses the History API by default, so URLs have no `#`. Your web server must send
+unknown paths to `index.php` — Laravel's default `nginx`/Apache configuration already
+does. If yours cannot, set `hash_route => true`.
+
+## Redirects and errors
+
+`fetch` follows redirects transparently, which would normally turn a `302` from your
+`auth` middleware into an unparseable HTML body. Pwax's middleware translates them:
+
+| Server response | What the client does |
+| --- | --- |
+| `return redirect('/somewhere')` | SPA navigation, no page reload |
+| `return redirect()->away(...)` | full page navigation |
+| `auth` middleware rejects the request | full page load of your login screen |
+| `419` expired CSRF token | full page reload to pick up a fresh token |
+| `404`, `403`, `401`, `5xx` | renders the error template |
+
+The first two are translated by Pwax's middleware. The next two cannot be — `auth` and
+`VerifyCsrfToken` *throw*, so their redirects are produced by the exception handler
+outside the middleware pipeline — so the client handles them instead, by treating a
+followed redirect that returns HTML as an instruction to reload.
+
+So this just works:
+
+```php
+Route::middleware('auth')->get('/settings', fn () => pwax_component('pages.settings'));
+```
+
+An unauthenticated visitor is taken to your login page by the SPA router.
+
+Customise the error and loading markup by publishing the views, or by pointing
+`pwax.blade.error` / `pwax.blade.loader` at your own:
+
+```blade
+{{-- resources/views/pwax/error.blade.php --}}
+<div class="error" role="alert">
+    <h1 v-text="error.statusText"></h1>
+    <p v-text="error.message"></p>
+    <button type="button" @click="retry">Try again</button>
+</div>
+```
+
+`error` exposes `status`, `statusText` and `message`; `retry()` refetches the page.
+
+> Use `v-text`, not `v-html`. Part of `error` derives from the HTTP response, and
+> rendering that as HTML would make reflected content executable.
+
+## Importing components
+
+Use the `@pwax` directive to reference another component:
+
+```blade
+<template>
+    <div>
+        <Modal v-if="open" @close="open = false" />
+    </div>
+</template>
+
+<script>
+    export default {
+        components: {
+            Modal: @pwax('components.modal'),
+        },
+        data() {
+            return { open: false };
+        },
+    };
+</script>
+```
+
+To pick a named export instead of the default one:
+
+```blade
+Backdrop: @pwax('Backdrop from components.modal'),
+```
+
+`@pwax` returns a Vue async component, resolved the first time it renders. That means:
+
+- **Circular imports work.** Two components can reference each other freely.
+- **Nothing loads until it is needed.** A modal behind a `v-if` is never fetched until
+  the modal opens.
+- **Each component is fetched once per session**, and cached by the browser after that.
+
+> The directive is `@pwax`, not `@import`. A Blade directive named `import` also matches
+> the CSS at-rule `@import url(...)` inside `<style>` blocks — see
+> [Upgrading from 1.x](#upgrading-from-1x). You can rename it with
+> `pwax.components.directive`; the name `import` is rejected.
+
+## Scoped styles
+
+Add `scoped` to a `<style>` block and its rules only apply to that component:
+
+```blade
+<template>
+    <div class="card"><p class="title">Hi</p></div>
+</template>
+
+<style scoped>
+    .card { border: 1px solid #ddd; }
+    .title { font-weight: 600; }
+</style>
+```
+
+Pwax rewrites the selectors to `.card[data-pwax-a1b2c3d4]` and stamps the template's
+elements with the matching attribute — the same approach Vue's SFC compiler takes at
+build time, done here at render time.
+
+Two escape hatches, named as in Vue:
+
+```css
+.wrapper :deep(.child-component-class) { color: red; }  /* reach into a child */
+:global(.body-modifier) { overflow: hidden; }           /* opt out entirely */
+```
+
+`@keyframes`, `@font-face` and `@import` are left untouched. Turn the whole feature off
+with `pwax.components.scoped_styles => false`.
+
+## Plugins, directives and middleware
+
+Register Vue plugins and directives in `config/pwax.php`. Each value is either a
+component reference or a dotted path to a global:
+
+```php
+'plugins' => [
+    // A Pwax component whose default export is a Vue plugin.
+    'toast' => "@pwax('plugins.toast')",
+
+    // A UMD library already loaded by a <script> tag.
+    'i18n'  => 'VueI18n.createI18n',
+],
+
+'directives' => [
+    'focus' => "@pwax('directives.focus')",
+],
+```
+
+> These values are **never evaluated as code**. A component reference is imported; a
+> dotted path is looked up on `window`. In 1.x they were interpolated straight into the
+> page inside `{!! !!}`, so a stray quote broke the whole application and any path by
+> which config could be influenced was remote code execution.
+
+### Client middleware
+
+`middleware_js` entries run before a page component mounts, and may redirect:
+
+```php
+'middleware_js' => [
+    'confirmed' => "@pwax('middleware.confirmed')",
+],
+```
+
+```blade
+{{-- resources/views/middleware/confirmed.blade.php --}}
+<script>
+    export default async function ({ component, meta, redirect }) {
+        if (meta.requiresConfirmation && !window.localStorage.getItem('confirmed')) {
+            redirect('/confirm');
+        }
+    };
+</script>
+```
+
+Opt a page in from its own script:
+
+```js
+export default {
+    middleware: ['confirmed'],
+    meta: { requiresConfirmation: true },
+};
+```
+
+> Client middleware is for user experience, not for access control. It runs in the
+> browser and can be bypassed. Enforce authorisation with Laravel middleware and
+> policies.
+
+## Progressive web app
+
+### Manifest
+
+Served from `/manifest.webmanifest` and configured in `config/pwax.php`. Browsers require
+a 192×192 and a 512×512 icon before offering to install:
+
+```php
+'manifest' => [
+    'name' => 'My Application',
+    'short_name' => 'MyApp',
+    'theme_color' => '#0c83ff',
+    'icons' => [
+        ['src' => '/images/icon-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
+        ['src' => '/images/icon-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
+        ['src' => '/images/maskable.png', 'sizes' => '512x512', 'type' => 'image/png',
+         'purpose' => 'maskable'],
+    ],
+],
+```
+
+### Service worker
+
+Off by default. Turn it on and pick a strategy:
+
+```php
+'service_worker' => [
+    'enabled' => true,
+    'version' => 'v1',              // bump to invalidate every client's cache
+    'precache' => ['/', '/offline'],
+    'strategy' => 'network-first',  // or 'stale-while-revalidate'
+    'offline_url' => '/offline',
+],
+```
+
+Navigations are always network-first — serving a stale HTML shell would pin visitors to
+an old build. Component and vendor assets use stale-while-revalidate. The cache is
+bounded by `max_entries`, only Pwax's own caches are ever deleted, and opaque
+cross-origin and partial (`206`) responses are never stored.
+
+Publish the worker to customise it:
 
 ```bash
 php artisan vendor:publish --tag=pwax-service-worker
 ```
 
-## Publishing Views
+### Update prompts
 
-Publish the view files to customize the layout:
+When a new version is waiting, Pwax fires an event instead of silently leaving the
+visitor on the old build:
 
-```bash
-php artisan vendor:publish --tag=pwax-views
-```
-
-This publishes views to `resources/views/vendor/pwax/`.
-
-## Usage
-
-### Creating a Vue Component
-
-Create a Blade view that contains `<template>`, `<script>`, and `<style>` sections:
-
-```blade
-{{-- resources/views/hello.blade.php --}}
-<template>
-    <div class="hello">
-        <h1>@{{ message }}</h1>
-        <button @click="increment">Count: @{{ count }}</button>
-    </div>
-</template>
-
-<script>
-export default {
-    data() {
-        return {
-            message: 'Hello from PWax!',
-            count: 0
-        }
-    },
-    methods: {
-        increment() {
-            this.count++
-        }
+```js
+document.addEventListener('pwax:update-available', (event) => {
+    if (confirm('A new version is available. Reload now?')) {
+        event.detail.activate(); // page reloads once the new worker takes over
     }
-}
-</script>
-
-<style>
-.hello {
-    padding: 20px;
-    text-align: center;
-}
-</style>
+});
 ```
 
-### Rendering a Component
+## Frontend assets
 
-In your controller, use the `vue()` helper function:
+Vue, Vue Router and Pinia are **self-hosted by default**, published to
+`public/vendor/pwax`:
+
+| Package | Version |
+| --- | --- |
+| [vue](https://www.npmjs.com/package/vue) | 3.5.41 |
+| [vue-router](https://www.npmjs.com/package/vue-router) | 5.2.0 |
+| [pinia](https://www.npmjs.com/package/pinia) | 4.0.2 |
+
+Self-hosting is the default because a progressive web app that fetches its framework
+from a third-party CDN cannot start offline — which defeats the purpose — and discloses
+every visitor's IP address to that CDN.
+
+To use a CDN anyway, with subresource integrity:
 
 ```php
-use Illuminate\Http\Request;
-
-class HomeController extends Controller
-{
-    public function index()
-    {
-        return vue('hello');
-    }
-    
-    public function profile()
-    {
-        return vue('profile', [
-            'user' => auth()->user()
-        ]);
-    }
-}
+'assets' => ['strategy' => 'cdn'],
 ```
 
-### Routing
-
-Define your routes as usual in `routes/web.php`:
+Pinia can be dropped if you do not use a store:
 
 ```php
-Route::get('/', [HomeController::class, 'index'])->name('index');
-Route::get('/profile', [HomeController::class, 'profile'])->name('profile');
-Route::get('/about', [HomeController::class, 'about'])->name('about');
+'assets' => ['pinia' => false],
 ```
 
-Use the `router()` helper to generate Vue Router compatible paths:
+> Pwax needs the **full** Vue build (`vue.global.prod.js`). The runtime-only build has no
+> template compiler and cannot render a template string.
 
-```blade
-<template>
-    <nav>
-        <RouterLink to="{{ router('index') }}">Home</RouterLink>
-        <RouterLink to="{{ router('profile') }}">Profile</RouterLink>
-        <RouterLink to="{{ router('about') }}">About</RouterLink>
-    </nav>
-</template>
+To update Vue, see [`resources/vendor/README.md`](resources/vendor/README.md).
 
-<script>
-export default {
-    //
-}
-</script>
-```
+## Performance
 
-### Dynamic Imports
+**First paint costs one round trip.** The shell arrives with the current component fully
+embedded — template, styles and script — so there is no follow-up request for the page at
+all. Only the framework and the runtime are fetched, in parallel, and both are static and
+cacheable. In 1.x the browser made six sequential requests before it could render
+anything.
 
-Use the `import()` helper to dynamically import components:
+**Repeat navigation compiles each component once.** Compiled modules are cached on the
+content hash the server sends, so returning to a page reuses the module rather than
+building another one.
 
-```blade
-<script>
-export default {
-    async mounted() {
-        // Import a component
-        const { default: MyComponent } = @import('components.my-component')
-        
-        // Import with variable assignment
-        const MyModal = @import('MyModal from components.modal')
-    }
-}
-</script>
-```
+**Everything is cached at the right layer:**
 
-## Advanced Configuration
+| Response | Caching |
+| --- | --- |
+| Page HTML / JSON | `no-store, private` — may contain user data |
+| Component `.js` / `.css` / `.json` | `private, max-age`, with an `ETag` → `304` |
+| `pwax.js` | `public, max-age=31536000, immutable` |
+| Manifest | `public, max-age=86400`, with an `ETag` |
 
-### Custom Plugins
+**Compilation is memoised** on a digest of the rendered output, so a component that has
+not changed is not re-parsed, re-scoped or re-minified. Because the key is the output
+itself, the cache can never go stale.
 
-Register custom Vue plugins in `config/pwax.php`:
+**Minification** runs in production only, and its results are cached by content. If your
+web server already applies gzip or brotli, turn it off — you recover most of the bytes
+with no CPU cost and no risk of a regex-based minifier mangling valid JavaScript:
 
 ```php
-'plugins' => [
-    [
-        'name' => 'myPlugin',
-        'init' => 'app.use(MyCustomPlugin, { option: "value" })'
-    ]
-],
+'minify' => ['enabled' => false],
 ```
 
-### Custom Directives
+## Security
 
-Add custom Vue directives:
+### Component identifiers are signed
+
+Component URLs carry an HMAC derived from your `APP_KEY`:
+
+```
+/__pwax__/c/cGFnZXMuaG9tZQ3f9a1c0d4b8e2a67.js
+```
+
+Only identifiers your application itself emitted will resolve, so these endpoints cannot
+be used to render arbitrary Blade views. Signatures are compared with `hash_equals`.
+
+For defence in depth, restrict which views may be served at all:
 
 ```php
-'directives' => [
-    [
-        'name' => 'focus',
-        'init' => 'app.directive("focus", { mounted(el) { el.focus() } })'
-    ]
-],
+'components' => ['allowed' => ['pages.*', 'components.*']],
 ```
 
-### Middleware
+> Rotating `APP_KEY` invalidates every previously emitted identifier. Clients recover on
+> their next full page load.
 
-Execute JavaScript before component loads:
+### Content-Security-Policy
+
+Vue compiles templates in the browser with the `Function` constructor, so
+`script-src 'unsafe-eval'` is required. There is no way around it while templates are
+compiled client-side — if that is unacceptable in your environment, use Inertia instead.
+
+Imported components are fetched from real same-origin URLs. A **page** component cannot
+be — it is rendered with controller data, so it ships its script inline and the runtime
+compiles it from a `blob:` URL. That needs `blob:` in `script-src`. (`data:` is never
+used: unlike `blob:`, a `data:` URL in `script-src` makes any injected string
+executable.)
+
+```
+Content-Security-Policy:
+    default-src 'self';
+    script-src 'self' blob: 'unsafe-eval';
+    style-src 'self' 'nonce-{NONCE}';
+    connect-src 'self';
+    img-src 'self' data:;
+    base-uri 'self';
+    form-action 'self';
+    frame-ancestors 'none';
+    object-src 'none'
+```
+
+Supply the nonce for Pwax's inline `<style>` and JSON blocks:
 
 ```php
-'middleware' => [
-    [
-        'name' => 'auth',
-        'init' => 'if (!user.isAuthenticated) { window.location = "/login" }'
-    ]
-],
+'csp' => ['nonce' => fn () => request()->attributes->get('csp-nonce')],
 ```
 
-## Security Best Practices
+### Your responsibilities
 
-- ⚠️ **View Names**: Only use trusted view names. The package validates view names to prevent path traversal attacks.
-- 🔒 **Config Values**: Avoid adding user-supplied data directly to config arrays like plugins or directives.
-- 🛡️ **CSRF Protection**: Ensure CSRF tokens are included in AJAX requests if modifying data.
-- 📝 **Input Validation**: Always validate and sanitize user input in your components.
+- **Never put user input in `plugins`, `directives` or `middleware_js`.** They describe
+  what the page loads.
+- **Never interpolate unescaped user input into a `<template>`.** Blade's `{{ }}`
+  escapes; `{!! !!}` and Vue's `v-html` do not.
+- **Authorise on the server.** Client middleware is a UX affordance, not access control.
+- **Keep `APP_KEY` secret and stable.**
+
+CSRF tokens are read from the `<meta name="csrf-token">` tag and sent with every runtime
+request automatically.
+
+Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
+
+## Configuration reference
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `hash_route` | `false` | Use `#/` URLs instead of the History API |
+| `home` | `'index'` | Named route used as a fallback target |
+| `route_prefix` | `'__pwax__'` | URL prefix for component endpoints |
+| `shell` | `'pwax::layouts.shell'` | Blade view used as the SPA shell |
+| `middleware` | `['web']` | Middleware for component routes |
+| `routes.register` | `true` | Register package routes automatically |
+| `routes.domain` | `null` | Restrict package routes to a domain |
+| `routes.static_middleware` | `[]` | Middleware for runtime/manifest/worker |
+| `components.directive` | `'pwax'` | Blade directive name (`import` is rejected) |
+| `components.allowed` | `[]` | Allowlist of servable view patterns |
+| `components.scoped_styles` | `true` | Honour `<style scoped>` |
+| `blade.*` | `null` | Override bundled partials |
+| `assets.strategy` | `'local'` | `local` or `cdn` |
+| `assets.local_path` | `'/vendor/pwax'` | Where published assets live |
+| `assets.versions` | see config | Pinned Vue / Router / Pinia versions |
+| `assets.pinia` | `true` | Load Pinia at all |
+| `styles`, `scripts` | `[]` | Extra tags; string or attribute array |
+| `plugins`, `directives`, `middleware_js` | `[]` | Vue extensions |
+| `minify.enabled` | production only | Minify component sources |
+| `minify.store`, `minify.ttl` | `null` | Cache for minified output |
+| `cache.asset_ttl` | `3600` | `max-age` for component assets |
+| `cache.components` | `true` | Memoise compiled components |
+| `csp.nonce` | `null` | Nonce (or callable) for inline blocks |
+| `customization.*` | see config | Preloader colours |
+| `manifest_path`, `manifest` | see config | Web App Manifest |
+| `service_worker.*` | disabled | Service worker behaviour |
+| `helpers.global` | `false` | Define 1.x `vue()` / `router()` |
+
+## Artisan commands
+
+| Command | Purpose |
+| --- | --- |
+| `pwax:install` | Publish config and frontend assets (`--views`, `--force`, `--no-assets`) |
+| `pwax:component <name>` | Scaffold a component view (`--plain`, `--force`) |
+| `pwax:doctor` | Check for common misconfigurations |
+| `pwax:clear` | Flush compiled and minified caches |
+
+## JavaScript API
+
+The runtime publishes `window.pwax`:
+
+| Member | Description |
+| --- | --- |
+| `pwax.component(url, export?)` | Vue async component for a component URL |
+| `pwax.load(url, export?)` | Promise of the component's options |
+| `pwax.http.json(url, options?)` | Fetch JSON with Pwax's headers and CSRF token |
+| `pwax.styles` | The reference-counted style manager |
+| `pwax.app`, `pwax.router` | The Vue app and router instances |
+| `pwax.config`, `pwax.version` | Runtime configuration and package version |
+
+Events on `document`:
+
+| Event | Fired when |
+| --- | --- |
+| `pwax:ready` | The app has mounted |
+| `pwax:navigating` | A navigation has started |
+| `pwax:navigated` | A page component has mounted |
+| `pwax:error` | A page failed to load |
+| `pwax:update-available` | A new service worker is waiting |
+
+## Upgrading from 1.x
+
+2.0 is a breaking release. See [UPGRADE.md](UPGRADE.md) for the full checklist.
+
+The change to make first, even if you upgrade nothing else: **1.x registered a Blade
+directive named `import`.** Blade matches a directive even with no arguments, so
+`@import url("fonts.css")` inside *any* `<style>` block in your application — not just in
+Pwax components — was replaced with JavaScript. If you have ever had a stylesheet
+mysteriously stop working, that was why. The directive is now `@pwax`.
+
+Headlines:
+
+| 1.x | 2.0 |
+| --- | --- |
+| `@import('view')` | `@pwax('view')` |
+| `vue('view', $data)` | `pwax_component('view', $data)` |
+| `router('name')` | `pwax_route('name')` |
+| `/__pwax__/{name}.json` | `/__pwax__/c/{signed-id}.json` |
+| Component routes had no middleware | run through `web` |
+| Vue 3.5.18 / Router 4 / Pinia 3 from unpkg | 3.5.41 / 5.2.0 / 4.0.2, self-hosted |
 
 ## Testing
 
-The test suite uses Orchestra Testbench:
-
 ```bash
+composer install
+composer check            # Pint, PHPStan and PHPUnit
 composer test
 ```
 
-Coverage report:
+For the client runtime:
 
 ```bash
-composer test-coverage
+npm ci
+npm run lint
+npm test
+npm run build             # dist/pwax.js is committed
 ```
-
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md) for version history and updates.
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports, questions and pull requests are all
+welcome. Please report security issues privately — see [SECURITY.md](SECURITY.md).
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-This package is open-sourced software licensed under the [MIT license](LICENSE).
+MIT — see [LICENSE](LICENSE).
 
-## Credits
-
-- [Mxent Open Source Team](mailto:opensource@mxent.com)
-- [All Contributors](../../contributors)
-
-## Support
-
-For issues, questions, or feature requests, please [open an issue](../../issues) on GitHub.
-
+Vue, Vue Router and Pinia are redistributed unchanged under their own MIT licenses; see
+[`resources/vendor/README.md`](resources/vendor/README.md).

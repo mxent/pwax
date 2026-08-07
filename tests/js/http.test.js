@@ -119,14 +119,12 @@ describe('http', () => {
     it('reloads when a 200 arrives that is not a component payload', async () => {
         vi.stubGlobal(
             'fetch',
-            vi
-                .fn()
-                .mockResolvedValue(
-                    response(null, {
-                        headers: { 'Content-Type': 'text/html' },
-                        url: '/maintenance',
-                    })
-                )
+            vi.fn().mockResolvedValue(
+                response(null, {
+                    headers: { 'Content-Type': 'text/html' },
+                    url: '/maintenance',
+                })
+            )
         );
 
         expect(await createHttp({}).json('/page')).toEqual({ __location: '/maintenance' });

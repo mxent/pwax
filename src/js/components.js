@@ -46,8 +46,16 @@ export function createComponentLoader({ styles, nonce = null }) {
         return toComponentOptions(module, exportName);
     }
 
+    /** @type {Map<string, object>} */
+    const components = new Map();
+
     /**
      * A Vue async component for a Pwax component URL.
+     *
+     * Memoised on url + export name. Vue treats each `defineAsyncComponent` result as a
+     * distinct component type, so minting a new one per call would remount the subtree
+     * whenever a parent re-rendered and would give `<KeepAlive>` a different identity to
+     * cache each time. Returning the same object keeps that stable.
      *
      * @param {string} url
      * @param {string} exportName
@@ -59,7 +67,32 @@ export function createComponentLoader({ styles, nonce = null }) {
             );
         }
 
-        return Vue.defineAsyncComponent(() => load(url, exportName));
+        const key = `${url}|${exportName}`;
+        const cached = components.get(key);
+
+        if (cached) {
+            return cached;
+        }
+
+        const async = Vue.defineAsyncComponent(() => load(url, exportName));
+
+        // Make the commonest misuse explain itself.
+        //
+        // `components: { Button: () => @pwax('button') }` is the Vue 2 idiom, dropped in
+        // Vue 3. Vue sees a function, treats the entry as a *functional component*, calls
+        // it during render, and gets this object back instead of vnodes — at which point
+        // it falls back to `String(child)`. The default `Object.prototype.toString` makes
+        // that `[object Object]` on screen, with no warning anywhere.
+        //
+        // Overriding toString puts the fix itself where the developer is already looking.
+        async.toString = () =>
+            'pwax: a component was rendered as text. This usually means it was wrapped in ' +
+            `an arrow function — write \`@pwax('…')\` rather than \`() => @pwax('…')\`. ` +
+            'Vue 3 does not accept `() => Component` in the `components` option.';
+
+        components.set(key, async);
+
+        return async;
     }
 
     return { load, component };

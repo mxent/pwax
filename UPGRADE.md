@@ -57,6 +57,11 @@ Named exports keep the same spelling:
 Backdrop: @pwax('Backdrop from components.modal'),
 ```
 
+**Do not add an arrow function.** `components: { Modal: () => @pwax('…') }` is the Vue 2
+lazy-component idiom, which Vue 3 dropped — Vue treats the entry as a functional
+component and renders `[object Object]`. `@pwax` is already lazy, so the arrow only
+breaks it. Pwax renders an explanation in place of `[object Object]` if you hit this.
+
 Rename the directive if `@pwax` clashes with something in your app:
 
 ```php

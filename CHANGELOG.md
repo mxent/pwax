@@ -7,6 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Components returned by `@pwax` are memoised on their URL and export name. Vue treats
+  every `defineAsyncComponent` result as a distinct component type, so minting a new one
+  per call remounted the subtree whenever a parent re-rendered and gave `<KeepAlive>` a
+  different identity to cache each time.
+- Wrapping the directive in an arrow function — `components: { Modal: () => @pwax('…') }`,
+  the Vue 2 lazy-component idiom that Vue 3 dropped — rendered `[object Object]` with no
+  warning anywhere. Vue sees a function, treats the entry as a functional component, calls
+  it during render, and falls back to `String(child)` when it gets a component object
+  instead of vnodes. The component now carries a `toString()` that names the mistake and
+  its fix, so the page says what to change. Documented in the README and upgrade guide.
+
 ## [2.0.0]
 
 A rewrite of the internals. See [UPGRADE.md](UPGRADE.md) for the migration checklist.

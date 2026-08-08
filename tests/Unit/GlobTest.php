@@ -3,6 +3,7 @@
 namespace Mxent\Pwax\Tests\Unit;
 
 use Mxent\Pwax\Pwa\Glob;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -40,8 +41,10 @@ class GlobTest extends TestCase
     }
 
     /**
-     * @dataProvider patterns
+     * The attribute, not the `@dataProvider` annotation: PHPUnit 12 removed the
+     * annotation form, and this package supports both 11 and 12.
      */
+    #[DataProvider('patterns')]
     public function test_it_matches_the_way_angular_does(string $glob, string $path, bool $expected): void
     {
         $this->assertSame($expected, Glob::matches($glob, $path));

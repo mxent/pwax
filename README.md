@@ -593,6 +593,18 @@ php artisan pwax:precache --verify   # …and which components actually render
 php artisan pwax:precache --json     # the manifest itself
 ```
 
+> **Developing against `php artisan serve`.** PHP's built-in server handles one request
+> at a time. Pwax precaches at most six assets at once for that reason, but an install is
+> still the largest burst of requests your app will ever make, and it will feel slow. Give
+> the server some workers:
+>
+> ```bash
+> PHP_CLI_SERVER_WORKERS=8 php artisan serve
+> ```
+>
+> Or develop against Herd, Valet, Octane or nginx. Nothing breaks either way — a precache
+> entry that fails is retried on the next install — but the difference is noticeable.
+
 ### Cache busting
 
 Each entry is content-addressed and the digest of the whole table names the cache, so

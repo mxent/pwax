@@ -75,6 +75,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   line failed.
 - `Support\Shell` was a singleton that read the request, so under Octane or FrankenPHP it
   held the first request it ever saw for the life of the process.
+- A failed request was rethrown into `respondWith`, which fails the request *and* reports
+  `Uncaught (in promise) TypeError: Failed to fetch` against the worker. Any SPA produces
+  those routinely — navigating away aborts the in-flight page request — so the console
+  filled with errors attributed to the service worker rather than to the caller. The
+  worker returns `Response.error()` instead: the page's own `fetch` still rejects at its
+  own call site, which the runtime already reads as "no connection".
+- Stale-while-revalidate resolved to `undefined` when nothing was cached and the network
+  was unreachable, so `respondWith` failed with "the promise was resolved with an object
+  that is not a Response" in place of an ordinary offline error.
+- Precaching ran every request in parallel. An application with a hundred components
+  produced a hundred simultaneous requests, which `php artisan serve` — single-threaded —
+  answers by queueing until connections are refused. At most six now run at once.
 
 ### Changed
 

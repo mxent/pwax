@@ -14,7 +14,7 @@ class MiddlewareTest extends TestCase
         parent::defineRoutes($router);
 
         $router->middleware('web')->group(function ($router): void {
-            $router->get('/page', fn () => pwax_component('pages.home'));
+            $router->get('/page', fn () => pwaxRender('pages.home'));
             $router->get('/needs-auth', fn () => redirect('/login'));
             $router->get('/goes-offsite', fn () => redirect()->away('https://example.test/sso'));
             $router->post('/save', fn () => redirect('/page'));

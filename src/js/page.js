@@ -178,6 +178,13 @@ export function createPageComponent({
                         return;
                     }
 
+                    // Set here rather than only in the shell. A title rendered server-side
+                    // is right for the page you landed on and wrong for every page you
+                    // navigate to afterwards, which is worse than never setting one.
+                    if (payload.title) {
+                        document.title = payload.title;
+                    }
+
                     this.component = Vue.shallowRef(
                         Vue.defineAsyncComponent(() => Promise.resolve(options))
                     );

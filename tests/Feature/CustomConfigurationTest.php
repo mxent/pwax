@@ -19,9 +19,11 @@ class CustomConfigurationTest extends TestCase
 
         $app['config']->set('pwax.route_prefix', 'assets/spa');
         $app['config']->set('pwax.manifest_path', '/app.webmanifest');
-        $app['config']->set('pwax.service_worker.path', '/sw.js');
+        // Cleared so the assertion below distinguishes "not served" from "redirected";
+        // the default aliases are covered in PwaEndpointsTest.
+        $app['config']->set('pwax.manifest_aliases', []);
+        $app['config']->set('pwax.service_worker.path', '/worker.js');
         $app['config']->set('pwax.hash_route', true);
-        $app['config']->set('pwax.helpers.global', true);
     }
 
     public function test_the_route_prefix_is_configurable(): void
@@ -50,23 +52,11 @@ class CustomConfigurationTest extends TestCase
     {
         config()->set('pwax.service_worker.enabled', true);
 
-        $this->get('/sw.js')->assertOk();
+        $this->get('/worker.js')->assertOk();
     }
 
     public function test_hash_routing_reaches_the_runtime_config(): void
     {
         $this->assertTrue($this->app->make(Shell::class)->runtimeConfig()['hashRouting']);
-    }
-
-    /**
-     * The 1.x helper names are still reachable for applications mid-migration.
-     */
-    public function test_the_legacy_helpers_are_defined_when_enabled(): void
-    {
-        $this->assertTrue(function_exists('vue'));
-        $this->assertTrue(function_exists('router'));
-
-        $this->assertSame('/about', router('pwax.test.about'));
-        $this->assertIsArray(vue('pages.home', null, ['arr' => true]));
     }
 }

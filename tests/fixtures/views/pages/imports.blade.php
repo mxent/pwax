@@ -5,7 +5,7 @@
 <script>
     export default {
         components: {
-            Modal: @pwax('components.modal'),
+            Modal: @pwaxImport('components.modal'),
         },
     };
 </script>

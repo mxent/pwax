@@ -64,9 +64,9 @@ class CacheablePagesTest extends TestCase
         parent::defineRoutes($router);
 
         $router->middleware('web')->group(function ($router): void {
-            $router->get('/private-page', fn () => pwax_component('pages.home'));
-            $router->get('/public-page', fn () => pwax_component('pages.home')->cacheable(600));
-            $router->get('/shared-page', fn () => pwax_component('pages.home')->cacheable(600, shared: true));
+            $router->get('/private-page', fn () => pwaxRender('pages.home'));
+            $router->get('/public-page', fn () => pwaxRender('pages.home')->cacheable(600));
+            $router->get('/shared-page', fn () => pwaxRender('pages.home')->cacheable(600, shared: true));
         });
     }
 }

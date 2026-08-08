@@ -172,7 +172,7 @@ class ShellTest extends TestCase
      */
     public function test_a_module_reference_resolves_to_a_component_url(): void
     {
-        config()->set('pwax.plugins', ['toast' => "@pwax('components.modal')"]);
+        config()->set('pwax.plugins', ['toast' => "@pwaxImport('components.modal')"]);
 
         $entry = $this->shell()->runtimeConfig()['plugins']['toast'];
 
@@ -184,7 +184,7 @@ class ShellTest extends TestCase
 
     public function test_a_module_reference_supports_a_named_export(): void
     {
-        config()->set('pwax.plugins', ['backdrop' => "@pwax('Backdrop from components.modal')"]);
+        config()->set('pwax.plugins', ['backdrop' => "@pwaxImport('Backdrop from components.modal')"]);
 
         $this->assertSame('Backdrop', $this->shell()->runtimeConfig()['plugins']['backdrop']['export']);
     }
@@ -236,7 +236,7 @@ class ShellTest extends TestCase
     {
         config()->set('pwax.service_worker.enabled', true);
 
-        $this->assertSame('/service-worker.js', $this->shell()->runtimeConfig()['serviceWorker']);
+        $this->assertSame('/sw.js', $this->shell()->runtimeConfig()['serviceWorker']);
     }
 
     public function test_the_error_template_escapes_rather_than_renders_response_text(): void

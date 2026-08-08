@@ -340,7 +340,7 @@ class Shell
     /**
      * Turn configured plugin/directive/middleware entries into resolvable descriptors.
      *
-     * A value of `@pwax('view.name')` (or `module:view.name`) becomes a component module
+     * A value of `@pwaxImport('view.name')` (or `module:view.name`) becomes a component module
      * for the runtime to import. Anything else is treated as a dotted path to look up on
      * `window` — never as code to evaluate.
      *
@@ -348,8 +348,11 @@ class Shell
      */
     private function extensions(string $key): array
     {
-        $directive = (string) $this->config->get('pwax.components.directive', 'pwax');
-        $pattern = '/^@(?:' . preg_quote($directive, '/') . '|import)\s*\(\s*[\'"]?(.+?)[\'"]?\s*\)$/';
+        // The canonical directive first, then whatever this application renamed it to.
+        // Longest alternative first so the intent is readable, though PCRE would
+        // backtrack to the same answer either way.
+        $directive = (string) $this->config->get('pwax.components.directive', 'pwaxImport');
+        $pattern = '/^@(?:pwaxImport|' . preg_quote($directive, '/') . ')\s*\(\s*[\'"]?(.+?)[\'"]?\s*\)$/';
 
         $resolved = [];
 

@@ -12,8 +12,8 @@ use Illuminate\Support\Facades\Facade;
  * @method static string url(string $view, bool $absolute = false)
  * @method static string route(string $name, array<array-key, mixed>|string $parameters = [], bool $absolute = false)
  * @method static string homeUrl()
- * @method static array<string, mixed> payload(\Mxent\Pwax\Data\Component $component, bool $includeScript = true)
- * @method static string importExpression(?string $expression)
+ * @method static array<string, mixed> payload(\Mxent\Pwax\Data\Component $component, bool $addressable = true)
+ * @method static string import(?string $expression)
  * @method static bool wantsComponent(\Illuminate\Http\Request $request)
  * @method static string shell()
  *

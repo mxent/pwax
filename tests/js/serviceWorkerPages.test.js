@@ -315,6 +315,49 @@ describe('page payloads offline', () => {
         expect(await caches.has('pwax-precache-v1-h1')).toBe(true);
     });
 
+    it('never stores a page the server marked X-Pwax-Cache: none', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        // ->offline(false): stronger than omitting ->cacheable(), which only declines to
+        // precache. This must be refused by the runtime cache too.
+        const worker = createWorker({
+            manifest: current,
+            caches,
+            routes: (path, request) => {
+                if (path === '/sw.json') {
+                    return Response.json(current);
+                }
+
+                if (path === SHELL) {
+                    return new Response('<html>shell</html>', {
+                        headers: { 'Content-Type': 'text/html', 'Cache-Control': 'public' },
+                    });
+                }
+
+                if (path === DASHBOARD && request.headers.get('X-Pwax-Component') === 'true') {
+                    return new Response('{"template":"secret"}', {
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Cache-Control': 'private, max-age=600',
+                            'X-Pwax-Cache': 'none',
+                        },
+                    });
+                }
+
+                return new Response('x', { headers: { 'Cache-Control': 'public' } });
+            },
+        });
+
+        await worker.dispatch('install');
+        await worker.dispatch('activate');
+        await visit(worker, DASHBOARD);
+
+        const pages = await caches.open('pwax-pages-v1-h1-anon');
+
+        await expect(pages.match(asRuntime(DASHBOARD), { ignoreVary: true })).resolves.toBeUndefined();
+    });
+
     it('goes to the network first for a page when there is one', async () => {
         const current = manifest();
         const caches = new FakeCaches();

@@ -50,7 +50,7 @@ class ComponentMakeCommand extends Command
         $this->components->info(sprintf('Component created: %s', $path));
         $this->line('  Serve it with:');
         $this->line(sprintf(
-            "  <fg=gray>Route::get('/%s', fn () => pwax_component('%s'))->name('%s');</>",
+            "  <fg=gray>Route::get('/%s', fn () => pwaxRender('%s'))->name('%s');</>",
             str_replace('.', '/', $name),
             $name,
             $name

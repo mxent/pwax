@@ -244,7 +244,7 @@ async function install() {
     const failures = urls.filter((_, i) => results[i].status === 'rejected');
 
     // Kept apart from failures. A response the server marked `no-store` was not lost, it
-    // was refused — every page rendered by `pwax_component()` says exactly that, on
+    // was refused — every page rendered by `pwaxRender()` says exactly that, on
     // purpose, so that one visitor's HTML is never written to another's disk. Reporting
     // that as "could not be precached" reads like a broken install and sends people
     // looking for a network problem that is not there.
@@ -976,6 +976,14 @@ async function put(request, response, manifest, identity) {
  */
 function cacheable(response) {
     if (!response || !response.ok || response.status === 206 || response.type === 'opaque') {
+        return false;
+    }
+
+    // `->offline(false)` on a page, for content that must not reach disk at all — a
+    // one-time code, a recovery key, a record on a shared terminal. Checked before
+    // `Cache-Control` because it is the stronger statement of the two and admits no
+    // exception anywhere in this file.
+    if (response.headers.get('X-Pwax-Cache') === 'none') {
         return false;
     }
 

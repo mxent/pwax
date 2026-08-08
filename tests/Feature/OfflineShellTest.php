@@ -7,7 +7,7 @@ use Mxent\Pwax\Tests\TestCase;
 /**
  * The offline shell is the document a navigation falls back to when the network cannot be
  * reached. It exists so that offline navigation does not require caching real pages: a
- * page rendered by `pwax_component()` carries the signed-in user's data and CSRF token,
+ * page rendered by `pwaxRender()` carries the signed-in user's data and CSRF token,
  * and the Cache API ignores the `no-store` the server sends with it.
  */
 class OfflineShellTest extends TestCase
@@ -111,6 +111,6 @@ class OfflineShellTest extends TestCase
     {
         parent::defineRoutes($router);
 
-        $router->middleware('web')->get('/component-page', fn () => pwax_component('pages.home'));
+        $router->middleware('web')->get('/component-page', fn () => pwaxRender('pages.home'));
     }
 }

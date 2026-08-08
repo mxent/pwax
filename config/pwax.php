@@ -72,7 +72,7 @@ return [
     */
 
     'components' => [
-        'directive' => 'pwax',
+        'directive' => 'pwaxImport',
         'allowed' => [],
         'scoped_styles' => true,
     ],
@@ -170,9 +170,9 @@ return [
     |--------------------------------------------------------------------------
     |
     | Keyed by name. Each value is either a raw JavaScript expression or an
-    | "@pwax('view.name')" string referencing a component that default-exports one.
+    | "@pwaxImport('view.name')" string referencing a component that default-exports one.
     |
-    |     'plugins' => ['toast' => "@pwax('plugins.toast')"],
+    |     'plugins' => ['toast' => "@pwaxImport('plugins.toast')"],
     |
     | SECURITY: these values are emitted into the page as JavaScript. They are
     | configuration, never a place for user input.
@@ -509,7 +509,7 @@ return [
         'paths' => [],
 
         /*
-        | Package view namespaces to scan as well, e.g. ['ui'] for `@pwax('ui::button')`.
+        | Package view namespaces to scan as well, e.g. ['ui'] for `@pwaxImport('ui::button')`.
         |
         | Empty by default, and deliberately so. Every package that calls
         | `loadViewsFrom()` registers a namespace — Laravel's own exception page renderer
@@ -671,21 +671,6 @@ return [
         | served a worker that unregisters itself.
         */
         'legacy_paths' => [],
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Global helper functions
-    |--------------------------------------------------------------------------
-    |
-    | Pwax's canonical API is the `Pwax` facade. Setting this to true additionally
-    | defines the bare `vue()` and `router()` helpers from 1.x. They occupy very
-    | common names in the global namespace, so they are opt-in.
-    |
-    */
-
-    'helpers' => [
-        'global' => false,
     ],
 
 ];

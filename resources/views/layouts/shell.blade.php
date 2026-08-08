@@ -29,7 +29,7 @@
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
 
 <head>
-    <x-pwax::includes.head :shell="$pwaxShell" :component="$pwaxComponent ?? null" />
+    <x-pwax::includes.head :shell="$pwaxShell" :component="$pwaxComponent ?? null" :title="$pwaxTitle ?? null" />
     @stack('pwax-head')
 </head>
 

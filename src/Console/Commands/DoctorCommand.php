@@ -232,7 +232,7 @@ class DoctorCommand extends Command
         if ($precache !== []) {
             $this->warn_(sprintf(
                 'pwax.service_worker.precache lists %d application route(s). Pages rendered by '
-                . 'pwax_component() are sent as "no-store" and the worker refuses to store them, '
+                . 'pwaxRender() are sent as "no-store" and the worker refuses to store them, '
                 . 'so these entries do nothing unless the routes are genuinely public and static.',
                 count($precache)
             ));

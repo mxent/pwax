@@ -78,7 +78,7 @@ export function createComponentLoader({ styles, nonce = null }) {
 
         // Make the commonest misuse explain itself.
         //
-        // `components: { Button: () => @pwax('button') }` is the Vue 2 idiom, dropped in
+        // `components: { Button: () => @pwaxImport('button') }` is the Vue 2 idiom, dropped in
         // Vue 3. Vue sees a function, treats the entry as a *functional component*, calls
         // it during render, and gets this object back instead of vnodes — at which point
         // it falls back to `String(child)`. The default `Object.prototype.toString` makes
@@ -87,7 +87,7 @@ export function createComponentLoader({ styles, nonce = null }) {
         // Overriding toString puts the fix itself where the developer is already looking.
         async.toString = () =>
             'pwax: a component was rendered as text. This usually means it was wrapped in ' +
-            `an arrow function — write \`@pwax('…')\` rather than \`() => @pwax('…')\`. ` +
+            `an arrow function — write \`@pwaxImport('…')\` rather than \`() => @pwaxImport('…')\`. ` +
             'Vue 3 does not accept `() => Component` in the `components` option.';
 
         components.set(key, async);

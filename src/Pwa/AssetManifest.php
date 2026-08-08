@@ -43,6 +43,7 @@ use Throwable;
  *     strategy?: string,
  *     timeout?: int,
  *     credentials?: string,
+ *     maxEntries?: int,
  * }
  */
 class AssetManifest

@@ -57,25 +57,10 @@ class PwaxServiceProvider extends ServiceProvider
     {
         $this->loadViewsFrom(__DIR__ . '/../resources/views', 'pwax');
 
-        $this->bootHelpers();
         $this->bootDirectives();
         $this->bootMiddleware();
         $this->bootRoutes();
         $this->bootPublishing();
-    }
-
-    /**
-     * Optionally define the 1.x `vue()` and `router()` globals.
-     *
-     * They are not autoloaded via composer's `files` because those names are generic
-     * enough to collide with application code; `pwax_component()` and `pwax_route()`
-     * always exist and are the supported spelling.
-     */
-    protected function bootHelpers(): void
-    {
-        if ($this->app->make(Config::class)->get('pwax.helpers.global', false)) {
-            require_once __DIR__ . '/helpers-compat.php';
-        }
     }
 
     protected function registerCompiler(): void
@@ -214,7 +199,7 @@ class PwaxServiceProvider extends ServiceProvider
      * `route_prefix`, or running `view:cache` in a build step with no routes loaded,
      * produced imports that pointed nowhere.
      *
-     * The name is configurable and defaults to `@pwax`. It must never be `import`: Blade
+     * The name is configurable and defaults to `@pwaxImport`. It must never be `import`: Blade
      * matches a directive even with no arguments, so `@import` would also swallow the CSS
      * at-rule `@import url("…")` in every <style> block in the application.
      */
@@ -223,12 +208,21 @@ class PwaxServiceProvider extends ServiceProvider
         /** @var Config $config */
         $config = $this->app->make(Config::class);
 
-        $name = self::assertDirectiveName((string) $config->get('pwax.components.directive', 'pwax') ?: 'pwax');
-
-        Blade::directive($name, static fn (?string $expression): string => sprintf(
-            '<?php echo \Mxent\Pwax\Facades\Pwax::importExpression(%s); ?>',
+        $compile = static fn (?string $expression): string => sprintf(
+            '<?php echo \Mxent\Pwax\Facades\Pwax::import(%s); ?>',
             $expression === null || trim($expression) === '' ? 'null' : $expression
-        ));
+        );
+
+        Blade::directive('pwaxImport', $compile);
+
+        // An application may still name it something else. Registered in addition to the
+        // canonical directive rather than instead of it, so a published view and a
+        // freshly generated one can sit in the same codebase.
+        $name = self::assertDirectiveName((string) $config->get('pwax.components.directive', 'pwaxImport'));
+
+        if ($name !== 'pwaxImport') {
+            Blade::directive($name, $compile);
+        }
     }
 
     /**
@@ -243,7 +237,7 @@ class PwaxServiceProvider extends ServiceProvider
                 'pwax.components.directive cannot be "import": Blade matches a directive even with '
                 . 'no arguments, so an "import" directive also captures the CSS at-rule '
                 . '@import url("…") inside every <style> block in the application and replaces it '
-                . 'with JavaScript. Use the default "pwax".'
+                . 'with JavaScript. Use the default "pwaxImport".'
             );
         }
 
@@ -271,7 +265,7 @@ class PwaxServiceProvider extends ServiceProvider
 
         $router->aliasMiddleware('pwax', HandlePwaxRequests::class);
 
-        // Applied to the application's own routes too, so a `pwax_component()` route in
+        // Applied to the application's own routes too, so a `pwaxRender()` route in
         // web.php gets redirect translation without the developer wiring anything.
         //
         // This goes through the HTTP kernel rather than `Router::pushMiddlewareToGroup`.

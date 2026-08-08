@@ -39,6 +39,13 @@ class PageDiscoveryTest extends TestCase
 
             // Only GET is precacheable.
             $router->post('/submit', fn () => pwaxRender('pages.home'));
+
+            // Branches between two views. One URL, and precachable if either is selected.
+            $router->get('/branching', function () {
+                return request()->boolean('scoped')
+                    ? pwaxRender('pages.scoped')
+                    : pwaxRender('pages.home');
+            });
         });
     }
 
@@ -94,6 +101,25 @@ class PageDiscoveryTest extends TestCase
 
         $this->assertContains('/scoped-page', $urls);
         $this->assertNotContains('/settings', $urls);
+    }
+
+    /**
+     * A controller that branches still answers one URL. Precaching it stores whichever
+     * view the server renders for an anonymous request, so any one selected view is
+     * enough to include the route.
+     */
+    public function test_a_route_that_branches_is_kept_if_either_view_is_selected(): void
+    {
+        config()->set('pwax.service_worker.components', ['pages.scoped']);
+
+        $this->assertContains('/branching', $this->discovered());
+    }
+
+    public function test_a_route_that_branches_is_dropped_when_neither_view_is_selected(): void
+    {
+        config()->set('pwax.service_worker.components', ['components.*']);
+
+        $this->assertNotContains('/branching', $this->discovered());
     }
 
     public function test_turning_components_off_turns_page_discovery_off(): void

@@ -44,6 +44,13 @@ class PageRegistry
      */
     private const RENDER_CALL = '/(?:pwaxRender|Pwax::render|\bpwax)\s*\(\s*[\'"]([^\'"]+)[\'"]/';
 
+    /**
+     * Files already read, so a controller holding twenty routes is read once.
+     *
+     * @var array<string, list<string>|null>
+     */
+    private array $sources = [];
+
     public function __construct(
         private readonly Router $router,
         private readonly Config $config,
@@ -51,9 +58,9 @@ class PageRegistry
     ) {}
 
     /**
-     * Every discoverable page route, as a URL path.
+     * Every discoverable page route, with the views its action can render.
      *
-     * @return list<array{url: string, view: string}>
+     * @return list<array{url: string, views: list<string>}>
      */
     public function all(): array
     {
@@ -66,9 +73,18 @@ class PageRegistry
                 continue;
             }
 
-            foreach ($this->viewsRenderedBy($route) as $view) {
-                $pages[$url] ??= ['url' => $url, 'view' => $view];
+            $views = $this->viewsRenderedBy($route);
+
+            if ($views === []) {
+                continue;
             }
+
+            // Merged rather than replaced. Two routes can answer the same path — one
+            // named, one not — and a controller that branches renders more than one view;
+            // keeping all of them is what lets the selection below consider each.
+            $pages[$url] = ['url' => $url, 'views' => array_values(array_unique(
+                array_merge($pages[$url]['views'] ?? [], $views)
+            ))];
         }
 
         ksort($pages);
@@ -83,7 +99,7 @@ class PageRegistry
      * narrows the routes as well as the modules and there is one answer to "what goes
      * offline" rather than two that can disagree.
      *
-     * @return list<array{url: string, view: string}>
+     * @return list<array{url: string, views: list<string>}>
      */
     public function precachable(): array
     {
@@ -91,17 +107,29 @@ class PageRegistry
             return [];
         }
 
-        $allowed = array_column($this->components->precachable(), 'view');
+        /** @var list<string> $views */
+        $views = array_column($this->components->precachable(), 'view');
 
-        if ($allowed === []) {
+        if ($views === []) {
             return [];
         }
 
-        $allowed = array_flip($allowed);
+        $allowed = array_flip($views);
 
+        // Any one selected view is enough. A controller that branches between an admin
+        // view and a public one still answers a single URL, and precaching it stores
+        // whichever the server renders for an anonymous request.
         return array_values(array_filter(
             $this->all(),
-            static fn (array $page): bool => isset($allowed[$page['view']])
+            static function (array $page) use ($allowed): bool {
+                foreach ($page['views'] as $view) {
+                    if (isset($allowed[$view])) {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
         ));
     }
 
@@ -198,16 +226,39 @@ class PageRegistry
         $start = $reflection->getStartLine();
         $end = $reflection->getEndLine();
 
-        if ($file === false || $start === false || $end === false || ! is_readable($file)) {
+        if ($file === false || $start === false || $end === false) {
             return null;
         }
 
-        $lines = @file($file, FILE_IGNORE_NEW_LINES);
+        $lines = $this->linesIn($file);
 
-        if ($lines === false) {
+        if ($lines === null) {
             return null;
         }
 
         return implode("\n", array_slice($lines, $start - 1, $end - $start + 1));
+    }
+
+    /**
+     * A file's lines, read once per build.
+     *
+     * A single controller commonly holds every page route in an application, and reading
+     * it once per route turns discovery into an O(routes × filesize) walk for no reason.
+     *
+     * @return list<string>|null
+     */
+    private function linesIn(string $file): ?array
+    {
+        if (array_key_exists($file, $this->sources)) {
+            return $this->sources[$file];
+        }
+
+        if (! is_readable($file)) {
+            return $this->sources[$file] = null;
+        }
+
+        $lines = @file($file, FILE_IGNORE_NEW_LINES);
+
+        return $this->sources[$file] = $lines === false ? null : array_values($lines);
     }
 }

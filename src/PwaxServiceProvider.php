@@ -208,21 +208,12 @@ class PwaxServiceProvider extends ServiceProvider
         /** @var Config $config */
         $config = $this->app->make(Config::class);
 
-        $compile = static fn (?string $expression): string => sprintf(
-            '<?php echo \Mxent\Pwax\Facades\Pwax::import(%s); ?>',
-            $expression === null || trim($expression) === '' ? 'null' : $expression
-        );
-
-        Blade::directive('pwaxImport', $compile);
-
-        // An application may still name it something else. Registered in addition to the
-        // canonical directive rather than instead of it, so a published view and a
-        // freshly generated one can sit in the same codebase.
         $name = self::assertDirectiveName((string) $config->get('pwax.components.directive', 'pwaxImport'));
 
-        if ($name !== 'pwaxImport') {
-            Blade::directive($name, $compile);
-        }
+        Blade::directive($name, static fn (?string $expression): string => sprintf(
+            '<?php echo \Mxent\Pwax\Facades\Pwax::import(%s); ?>',
+            $expression === null || trim($expression) === '' ? 'null' : $expression
+        ));
     }
 
     /**

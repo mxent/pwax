@@ -1,10 +1,10 @@
 {{--
     Default Pwax service worker.
 
-    Driven by the asset manifest at `sw.json`, in the same way Angular's worker is driven
-    by `ngsw.json`: the server enumerates every URL the application is made of with a
-    content hash, and this installs the lot in one pass. A visitor who has loaded one page
-    can go offline and still reach every route and every component.
+    Driven by the asset manifest at `sw.json`: the server enumerates every URL the
+    application is made of with a content hash, and this installs the lot in one pass. A
+    visitor who has loaded one page can go offline and still reach every route and every
+    component.
 
     Publish and edit with:
         php artisan vendor:publish --tag=pwax-service-worker
@@ -712,7 +712,7 @@ function dataGroupFor(manifest, key) {
 }
 
 /**
- * An API response, cached under Angular's data-group rules.
+ * An API response, cached under its data group's rules.
  *
  * `freshness` goes to the network with a deadline and falls back to what is stored;
  * `performance` serves what is stored while it is young enough, and only then asks the
@@ -872,7 +872,7 @@ async function shellDocument(manifest) {
 }
 
 /**
- * Angular's `navigationUrls`, with the same semantics.
+ * Which navigations belong to the application.
  *
  * A list of globs, already compiled to regexes by the server. A leading `!` excludes.
  * With no list configured every navigation is ours, which is the behaviour that existed

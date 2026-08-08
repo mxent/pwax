@@ -226,46 +226,6 @@ class PwaxController extends Controller
     }
 
     /**
-     * A worker that removes itself, served at a path Pwax no longer uses.
-     *
-     * A service worker outlives the page that registered it, so moving the script to a new
-     * URL leaves the old registration running indefinitely — two workers claiming the same
-     * scope, the old one still answering from caches built by a version of the application
-     * that no longer exists. The registration cannot simply be redirected: the spec fails
-     * an update whose script response is a redirect, so the old URL has to keep answering
-     * with something, and the only useful something is a worker that stands down.
-     *
-     * Clients are reloaded after it unregisters so they come back under the new worker
-     * rather than running uncontrolled until their next navigation.
-     */
-    public function legacyServiceWorker(): SymfonyResponse
-    {
-        $body = <<<'JS'
-        /* pwax: this worker has moved. This copy exists only to retire the old registration. */
-        self.addEventListener('install', () => self.skipWaiting());
-
-        self.addEventListener('activate', (event) => {
-            event.waitUntil(
-                (async () => {
-                    await self.registration.unregister();
-
-                    for (const client of await self.clients.matchAll({ type: 'window' })) {
-                        client.navigate(client.url).catch(() => {});
-                    }
-                })()
-            );
-        });
-        JS;
-
-        $response = new Response($body, 200, ['Content-Type' => 'application/javascript; charset=utf-8']);
-
-        $response->headers->set('Service-Worker-Allowed', '/');
-        $response->headers->set('Cache-Control', 'no-cache, must-revalidate');
-
-        return $response;
-    }
-
-    /**
      * Wrap a component's script in a module that also exposes its template and styles.
      *
      * The author's script is emitted verbatim, so its own `export default` and any named

@@ -3,7 +3,7 @@
 namespace Mxent\Pwax\Pwa;
 
 /**
- * Angular's `ngsw-config.json` glob syntax, compiled to a regular expression.
+ * Glob patterns, compiled to regular expressions.
  *
  * The same patterns work in two places, which is why this is a compiler rather than a
  * matcher: the manifest builder uses them to decide which files under `public/` to list,
@@ -11,13 +11,13 @@ namespace Mxent\Pwax\Pwa;
  * whether a URL belongs to a lazy asset group or a data group without shipping a glob
  * implementation of its own.
  *
- * The syntax is deliberately Angular's rather than PHP's:
+ * The syntax is path-oriented rather than PHP's:
  *
  *     *          anything within one path segment
  *     **         anything, across segments
  *     ?          one character, not a separator
  *     {a,b}      either
- *     (a|b)      either — the spelling Angular's own defaults use for extensions
+ *     (a|b)      either — convenient for a list of file extensions
  *     !prefix    excludes; handled by the caller, since a rule list has to be read in order
  *
  * `fnmatch()` is not used. Its `**` handling varies by platform and `FNM_PATHNAME` is not
@@ -41,9 +41,9 @@ class Glob
         foreach ($segments as $index => $segment) {
             if ($segment === '**') {
                 // Trailing `**` matches the rest of the path, including nothing at all.
-                // In the middle it stands for whole segments, and the group is optional so
-                // that `/a/**/b` also matches `/a/b` — which is what someone writing it
-                // means, and what Angular does.
+                // In the middle it stands for whole segments, and the group is optional
+                // so that `/a/**/b` also matches `/a/b` — which is what someone writing
+                // it means.
                 $regex .= $index === $last ? '.*' : '(?:.+/)?';
 
                 continue;
@@ -153,7 +153,7 @@ class Glob
     }
 
     /**
-     * Read a rule list the way Angular reads `navigationUrls`: in order, `!` excluding.
+     * Read a rule list in order, with `!` excluding.
      *
      * A path has to be claimed by at least one positive rule and refused by none. With no
      * rules at all everything matches, which keeps an empty configuration meaning "no

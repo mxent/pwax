@@ -278,19 +278,12 @@ return [
     'manifest_path' => '/manifest.json',
 
     /*
-    | Older paths the Web App Manifest was served from, permanently redirected to
-    | `manifest_path`. The manifest moved from /manifest.webmanifest in 3.0; an install
-    | survives the move because `id` defaults to `start_url`, not to the manifest URL.
-    */
-    'manifest_aliases' => ['/manifest.webmanifest'],
-
-    /*
     |--------------------------------------------------------------------------
     | Document head
     |--------------------------------------------------------------------------
     |
-    | What goes in <head>, in a fixed order modelled on Angular's index.html so that
-    | the markup is predictable whichever page rendered it.
+    | What goes in <head>, in a fixed order so that the markup is predictable whichever
+    | page rendered it.
     |
     | title            Falls back to `manifest.name`. Override per page with
     |                  pwaxRender('pages.about')->title('About us').
@@ -396,9 +389,9 @@ return [
     | Service worker
     |--------------------------------------------------------------------------
     |
-    | The worker is driven by an asset manifest — `sw.json` — in the same way Angular's
-    | worker is driven by `ngsw.json`. The manifest lists every URL the application is
-    | made of together with a content hash, so the worker precaches the whole app at
+    | The worker is driven by an asset manifest — `sw.json`. The manifest lists every URL
+    | the application is made of together with a content hash, so the worker precaches
+    | the whole app at
     | install time and busts individual entries when their hash changes. There is no
     | "visit the page once to cache it" step, and no manual version bump needed to ship
     | a change.
@@ -446,9 +439,9 @@ return [
         'navigation_strategy' => 'network-first',
 
         /*
-        | Which navigations belong to the application, in Angular's `navigationUrls`
-        | syntax. A path matched by none of these, or excluded by a leading !, bypasses
-        | the worker entirely and goes straight to the network.
+        | Which navigations belong to the application. A path matched by none of these,
+        | or excluded by a leading !, bypasses the worker entirely and goes straight to
+        | the network.
         |
         | The defaults claim everything except paths containing a file extension or a
         | double underscore — so /reports/2024.pdf and /admin/__debug are left alone.
@@ -524,9 +517,9 @@ return [
         | Asset groups
         |----------------------------------------------------------------------
         |
-        | The same shape as Angular's ngsw-config.json. `files` are globs resolved
-        | against your public/ directory and hashed from disk, so changing one file
-        | busts exactly that entry. `urls` are literal and may be cross-origin.
+        | `files` are globs resolved against your public/ directory and hashed from
+        | disk, so changing one file busts exactly that entry. `urls` are literal and
+        | may be cross-origin.
         |
         |   install_mode  'prefetch' fetches everything at install, so the application
         |                 works offline after a single visit. 'lazy' fetches on first
@@ -627,8 +620,8 @@ return [
         | Data groups
         |----------------------------------------------------------------------
         |
-        | Runtime caching for API responses, as in Angular's dataGroups. Without them an
-        | offline page renders but every fetch it makes fails.
+        | Runtime caching for API responses. Without them an offline page renders but
+        | every fetch it makes fails.
         |
         |   freshness    go to the network, fall back to the cache after `timeout` ms
         |   performance  serve the cache while it is younger than `max_age`
@@ -660,17 +653,6 @@ return [
         | offline capability with it. Oldest go first.
         */
         'identity_cache_limit' => 2,
-
-        /*
-        | Service worker scripts served from paths Pwax no longer uses.
-        |
-        | The worker moved from /service-worker.js to /sw.js in 3.0. The client runtime
-        | unregisters a worker left at an old path as soon as a page loads, which covers
-        | every visitor who comes back online. List a path here only if you have
-        | installed clients that may never load a fresh page — each listed path is then
-        | served a worker that unregisters itself.
-        */
-        'legacy_paths' => [],
     ],
 
 ];

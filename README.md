@@ -541,8 +541,8 @@ Off by default. Turn it on:
 ```
 
 That is the whole configuration for a fully offline-capable app. Pwax generates an asset
-manifest at **`/sw.json`** — the same idea as Angular's `ngsw.json` — listing every URL
-the application is made of with a content hash:
+manifest at **`/sw.json`**, listing every URL the application is made of with a content
+hash:
 
 ```json
 {
@@ -604,7 +604,7 @@ for plugins, directives and client middleware. Include all of them, or pick:
 ```
 
 Your own static files — images, fonts, stylesheets, build output — come from asset groups,
-which take globs in Angular's `ngsw-config.json` syntax:
+which take globs:
 
 ```php
 'service_worker' => [
@@ -955,7 +955,6 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `csp.nonce` | `null` | Nonce (or callable) for inline blocks |
 | `customization.*` | see config | Preloader colours |
 | `manifest_path`, `manifest` | see config | Web App Manifest (all spec members) |
-| `manifest_aliases` | `['/manifest.webmanifest']` | Old manifest paths, permanently redirected |
 | `head.title`, `.title_template` | `null` | Document title and its wrapper |
 | `head.description`, `.icon` | `null` | Fall back to the manifest's |
 | `head.base` | `null` | `<base href>`; off because it rewrites every relative URL |
@@ -985,11 +984,10 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `service_worker.pages.runtime` | `true` | Cache pages as they are visited |
 | `service_worker.pages.strategy`, `.timeout` | `freshness`, `2000` | How a page payload is fetched |
 | `service_worker.pages.credentials` | `'omit'` | Precache the guest rendering, not one visitor's |
-| `service_worker.data_groups` | `[]` | API response caching, Angular-style |
+| `service_worker.data_groups` | `[]` | API response caching |
 | `service_worker.navigation_strategy` | `network-first` | Or `app-shell` for zero-round-trip navigation |
 | `service_worker.navigation_urls` | see config | Which navigations the worker claims |
 | `service_worker.identity_cache_limit` | `2` | Signed-in identities keeping caches on one device |
-| `service_worker.legacy_paths` | `[]` | Old worker paths served a self-unregistering worker |
 | `service_worker.offline_url` | `null` | Page shown offline; defaults to the shell |
 | `service_worker.navigation_preload` | `true` | Start the network request before the worker boots |
 

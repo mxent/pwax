@@ -62,21 +62,10 @@ Route::group(array_filter([
 ]), function () use ($prefix): void {
     Route::get($prefix . '/pwax.js', [PwaxController::class, 'runtime'])->name('pwax.runtime');
 
-    $manifestPath = ltrim((string) config('pwax.manifest_path', '/manifest.json'), '/');
-
-    Route::get($manifestPath, [PwaxController::class, 'manifest'])->name('pwax.manifest');
-
-    // The manifest moved from /manifest.webmanifest to /manifest.json in 3.0. A redirect
-    // is safe here — unlike the worker script, whose registration a browser refuses
-    // outright if the response is a redirect — and an install survives the move because
-    // the manifest's `id` defaults to `start_url`, not to the manifest's own URL.
-    foreach ((array) config('pwax.manifest_aliases', []) as $alias) {
-        if (! is_string($alias) || trim($alias, '/') === '' || ltrim($alias, '/') === $manifestPath) {
-            continue;
-        }
-
-        Route::get(ltrim($alias, '/'), fn () => redirect('/' . $manifestPath, 301));
-    }
+    Route::get(
+        ltrim((string) config('pwax.manifest_path', '/manifest.json'), '/'),
+        [PwaxController::class, 'manifest']
+    )->name('pwax.manifest');
 
     // Registered unconditionally so that toggling `service_worker.enabled` at runtime
     // takes effect without rebuilding the route table; the controller returns 404 when
@@ -85,15 +74,6 @@ Route::group(array_filter([
         ltrim((string) config('pwax.service_worker.path', '/sw.js'), '/'),
         [PwaxController::class, 'serviceWorker']
     )->name('pwax.service-worker');
-
-    // A worker still registered at a path Pwax no longer serves. The runtime unregisters
-    // these as soon as any page loads, so this exists only for installs that may never
-    // load a fresh page — each one is answered with a worker that removes itself.
-    foreach ((array) config('pwax.service_worker.legacy_paths', []) as $legacy) {
-        if (is_string($legacy) && trim($legacy, '/') !== '') {
-            Route::get(ltrim($legacy, '/'), [PwaxController::class, 'legacyServiceWorker']);
-        }
-    }
 
     // The asset manifest the worker installs the application from — every vendor bundle,
     // the runtime, the offline shell and every component, each with a content hash.

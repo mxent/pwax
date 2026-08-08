@@ -14,11 +14,11 @@ use Throwable;
 /**
  * Builds `sw.json`, the asset manifest that drives the service worker.
  *
- * This is the same idea as Angular's `ngsw.json`: the server enumerates every URL the
- * application is made of, hashes each one, and hands the browser a table. The worker
- * installs the whole application from that table in one pass, so a visitor who has loaded
- * exactly one page can go offline and still reach every route, every component and every
- * asset. Nothing has to be visited first to be available.
+ * The server enumerates every URL the application is made of, hashes each one, and hands
+ * the browser a table. The worker installs the whole application from that table in one
+ * pass, so a visitor who has loaded exactly one page can go offline and still reach every
+ * route, every component and every asset. Nothing has to be visited first to be
+ * available.
  *
  * The hashes are the cache-busting mechanism. Each entry is content-addressed, so a
  * deploy that changed one component re-downloads one file and copies the rest from the
@@ -364,7 +364,7 @@ class AssetManifest
      * This is where images, fonts, stylesheets and build output enter the manifest. The
      * compiled patterns travel to the worker as well as the resolved URLs, because a lazy
      * group has to be recognised at request time for a file that was never fetched at
-     * install.
+     * install and so has no entry in the URL list.
      *
      * @param  array<string, string>  $hashes
      * @return list<PwaxAssetGroup>
@@ -478,7 +478,7 @@ class AssetManifest
     }
 
     /**
-     * Angular-style data groups: runtime caching rules for API responses.
+     * Runtime caching rules for API responses.
      *
      * @return list<array<string, mixed>>
      */

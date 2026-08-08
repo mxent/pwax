@@ -27,10 +27,10 @@
     $description = config('pwax.head.description') ?: config('pwax.manifest.description');
 @endphp
 {{--
-    Ordered the way Angular's index.html is: charset, title, base, viewport, then the
-    metadata, then the icons and the manifest, then what has to be fetched. The order is
-    fixed so that reading the head of any Pwax application tells you the same story, and
-    so that charset is settled before a byte of anything else is parsed.
+    Charset, title, base, viewport, then the metadata, then the icons and the manifest,
+    then what has to be fetched. The order is fixed so that reading the head of any Pwax
+    application tells you the same story, and so that charset is settled before a byte of
+    anything else is parsed.
 --}}
 <meta charset="utf-8">
 

@@ -7,7 +7,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Angular's glob syntax, compiled to a regular expression.
+ * The glob syntax, compiled to a regular expression.
  *
  * These patterns decide what an application precaches, so getting one subtly wrong is
  * either a file missing offline or — for the deny list — a `.env.backup` handed to the
@@ -45,7 +45,7 @@ class GlobTest extends TestCase
      * annotation form, and this package supports both 11 and 12.
      */
     #[DataProvider('patterns')]
-    public function test_it_matches_the_way_angular_does(string $glob, string $path, bool $expected): void
+    public function test_it_matches_paths_against_patterns(string $glob, string $path, bool $expected): void
     {
         $this->assertSame($expected, Glob::matches($glob, $path));
     }

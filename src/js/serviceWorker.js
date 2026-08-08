@@ -20,16 +20,7 @@ const UPDATE_INTERVAL = 60 * 60 * 1000;
 /** Connectivity listeners belong to the page, not to a registration. */
 let connectivityWatched = false;
 
-/**
- * Paths Pwax has served a worker from before now.
- *
- * A registration outlives the page that made it, so when the script moves the old one
- * keeps running — answering from caches built by a version of the application that is no
- * longer deployed. Nothing about loading the new page retires it on its own.
- */
-const LEGACY_PATHS = ['/service-worker.js', '/serviceworker.js', '/sw.js'];
-
-export function registerServiceWorker(path, { scope = '/', legacyPaths = [] } = {}) {
+export function registerServiceWorker(path, { scope = '/' } = {}) {
     // Truthiness, not `in`. Service workers require a secure context, and on a page
     // served over plain HTTP the property is present on the prototype but the value is
     // `undefined` — so an `in` check passes and the next line throws.
@@ -39,14 +30,9 @@ export function registerServiceWorker(path, { scope = '/', legacyPaths = [] } = 
 
     return navigator.serviceWorker
         .register(path, { scope })
-        .then(async (registration) => {
+        .then((registration) => {
             watchForUpdates(registration);
             watchConnectivity();
-
-            // Only after the replacement is registered. Retiring the old worker first
-            // would leave a device that lost its connection in between with no worker at
-            // all — offline, and now without the offline capability it installed this for.
-            await retireLegacyWorkers(path, legacyPaths);
 
             return registration;
         })
@@ -55,43 +41,6 @@ export function registerServiceWorker(path, { scope = '/', legacyPaths = [] } = 
 
             return null;
         });
-}
-
-/**
- * Unregister any worker of ours left at a path we no longer serve from.
- *
- * Scoped to a known list rather than "everything that is not the current script": another
- * library may legitimately own a worker on this origin, and unregistering someone else's
- * is an outage with no obvious cause.
- */
-async function retireLegacyWorkers(current, extra) {
-    if (!navigator.serviceWorker.getRegistrations) {
-        return;
-    }
-
-    const stale = new Set([...LEGACY_PATHS, ...extra]);
-
-    stale.delete(new URL(current, location.origin).pathname);
-
-    try {
-        for (const registration of await navigator.serviceWorker.getRegistrations()) {
-            const worker = registration.active || registration.waiting || registration.installing;
-
-            if (!worker) {
-                continue;
-            }
-
-            const url = new URL(worker.scriptURL);
-
-            if (url.origin === location.origin && stale.has(url.pathname)) {
-                await registration.unregister();
-            }
-        }
-    } catch (error) {
-        // A browser that refuses to enumerate registrations is not a reason to fail the
-        // page. The worst case is one stale worker that the browser retires on its own.
-        console.warn('pwax: could not retire an old service worker', error);
-    }
 }
 
 function watchForUpdates(registration) {

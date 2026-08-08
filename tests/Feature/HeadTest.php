@@ -7,10 +7,10 @@ use Mxent\Pwax\Tests\TestCase;
 /**
  * The document head.
  *
- * Ordered deliberately, the way Angular's index.html is, so that reading the head of any
- * Pwax application tells the same story. The order is asserted rather than assumed because
- * two of the positions matter for more than tidiness: `charset` has to be settled before
- * anything else is parsed, and `<base>` changes how every relative URL below it resolves.
+ * Ordered deliberately, so that reading the head of any Pwax application tells the same
+ * story. The order is asserted rather than assumed because two of the positions matter for
+ * more than tidiness: `charset` has to be settled before anything else is parsed, and
+ * `<base>` changes how every relative URL below it resolves.
  */
 class HeadTest extends TestCase
 {

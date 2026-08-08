@@ -19,9 +19,6 @@ class CustomConfigurationTest extends TestCase
 
         $app['config']->set('pwax.route_prefix', 'assets/spa');
         $app['config']->set('pwax.manifest_path', '/app.webmanifest');
-        // Cleared so the assertion below distinguishes "not served" from "redirected";
-        // the default aliases are covered in PwaEndpointsTest.
-        $app['config']->set('pwax.manifest_aliases', []);
         $app['config']->set('pwax.service_worker.path', '/worker.js');
         $app['config']->set('pwax.hash_route', true);
     }

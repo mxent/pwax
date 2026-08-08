@@ -105,10 +105,7 @@ async function boot() {
     document.dispatchEvent(new CustomEvent('pwax:ready', { detail: { app, router } }));
 
     if (config.serviceWorker) {
-        registerServiceWorker(config.serviceWorker, {
-            scope: config.serviceWorkerScope || '/',
-            legacyPaths: config.serviceWorkerLegacyPaths || [],
-        });
+        registerServiceWorker(config.serviceWorker, { scope: config.serviceWorkerScope || '/' });
     }
 }
 

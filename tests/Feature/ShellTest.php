@@ -190,14 +190,12 @@ class ShellTest extends TestCase
     }
 
     /**
-     * The 1.x `@import(...)` spelling is no longer recognised in config values.
+     * A directive spelling this application does not use is not special-cased.
      *
-     * It was deprecated in 2.0 alongside the directive rename and is removed in 3.0. The
-     * failure is quiet by construction — an unrecognised value becomes a global lookup
-     * rather than an error — so this asserts the new behaviour deliberately, and
-     * `pwax:doctor` is where a stale value gets reported.
+     * The failure is quiet by construction — an unrecognised value becomes a global
+     * lookup rather than an error — so it is worth asserting deliberately.
      */
-    public function test_the_one_x_import_spelling_is_no_longer_understood(): void
+    public function test_an_unrecognised_spelling_is_not_treated_as_a_module(): void
     {
         config()->set('pwax.directives', ['focus' => "@import('components.modal')"]);
 
@@ -205,13 +203,13 @@ class ShellTest extends TestCase
     }
 
     /**
-     * A renamed directive still resolves in config values, so an application that kept
-     * `@pwax` does not have to rewrite its plugin and directive lists as well as its views.
+     * Config values follow the configured directive name, so they read the same way as
+     * the views in the same application do.
      */
-    public function test_a_renamed_directive_is_understood_in_config_values(): void
+    public function test_config_values_follow_the_configured_directive_name(): void
     {
-        config()->set('pwax.components.directive', 'pwax');
-        config()->set('pwax.directives', ['focus' => "@pwax('components.modal')"]);
+        config()->set('pwax.components.directive', 'component');
+        config()->set('pwax.directives', ['focus' => "@component('components.modal')"]);
 
         $this->assertSame('module', $this->shell()->runtimeConfig()['directives']['focus']['type']);
     }

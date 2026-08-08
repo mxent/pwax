@@ -45,10 +45,6 @@ class Shell
                 ? (string) $this->config->get('pwax.service_worker.path', '/sw.js')
                 : null,
             'serviceWorkerScope' => (string) $this->config->get('pwax.service_worker.scope', '/'),
-            'serviceWorkerLegacyPaths' => array_values(array_filter(
-                (array) $this->config->get('pwax.service_worker.legacy_paths', []),
-                'is_string'
-            )),
             'csrf' => $this->csrfToken(),
             'identity' => $this->identity(),
             'home' => $this->pwax->homeUrl(),
@@ -348,11 +344,10 @@ class Shell
      */
     private function extensions(string $key): array
     {
-        // The canonical directive first, then whatever this application renamed it to.
-        // Longest alternative first so the intent is readable, though PCRE would
-        // backtrack to the same answer either way.
+        // Whatever the directive is called in this application, so a config value reads
+        // the same way as the views do.
         $directive = (string) $this->config->get('pwax.components.directive', 'pwaxImport');
-        $pattern = '/^@(?:pwaxImport|' . preg_quote($directive, '/') . ')\s*\(\s*[\'"]?(.+?)[\'"]?\s*\)$/';
+        $pattern = '/^@' . preg_quote($directive, '/') . '\s*\(\s*[\'"]?(.+?)[\'"]?\s*\)$/';
 
         $resolved = [];
 

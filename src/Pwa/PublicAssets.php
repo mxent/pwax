@@ -16,10 +16,10 @@ use Throwable;
  * compiled stylesheet or a Vite bundle had to be listed one URL at a time, and anything
  * missed was a blank space or an unstyled page for whoever went offline.
  *
- * The pattern language is Angular's, so `ngsw-config.json` translates without a manual;
- * see {@see Glob}. Matching happens against one directory walk, memoised, because a
- * manifest typically has several groups and walking `public/` once per group on a site
- * with a large media directory is the difference between a fast build and a slow one.
+ * The pattern language is described in {@see Glob}. Matching happens against one
+ * directory walk, memoised, because a manifest typically has several groups and walking
+ * `public/` once per group on a site with a large media directory is the difference
+ * between a fast build and a slow one.
  */
 class PublicAssets
 {

@@ -21,9 +21,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not merely cleared when another signs in — it was never reachable under their name.
   `pwax.sw.forgetIdentity()` drops one identity's caches on sign-out without discarding the
   precache.
-- **Angular-style asset groups** (`service_worker.asset_groups`) with `install_mode`,
-  `update_mode` and glob patterns resolved against `public/`. Images, fonts, stylesheets
-  and build output are precached without listing each one.
+- **Asset groups** (`service_worker.asset_groups`) with `install_mode`, `update_mode` and
+  glob patterns resolved against `public/`. Images, fonts, stylesheets and build output are
+  precached without listing each one.
 - **Data groups** (`service_worker.data_groups`) with `freshness` and `performance`
   strategies, `max_age` and `max_size`. An offline page used to render and then fail every
   fetch it made.
@@ -34,7 +34,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `ComponentResponse::offline(false)` for a page that must never reach disk — stronger than
   omitting `->cacheable()`, which only declines to precache.
 - `<title>`, `<meta name="description">`, `<link rel="icon">` and an opt-in `<base href>` in
-  the head, in a fixed order modelled on Angular's `index.html`.
+  the head, in a fixed order.
 - `pwax:doctor` and `pwax:precache` report manifest `warnings`, including a glob truncated
   by `max_files` or `max_bytes`.
 
@@ -71,13 +71,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Each helper is now named after the facade method it wraps. See `UPGRADE.md`.
 - **BREAKING:** the 1.x `vue()` and `router()` helpers and the `pwax.helpers.global` config
   key are removed. They were deprecated in 2.0.
-- **BREAKING:** the service worker moves from `/service-worker.js` to `/sw.js`. The runtime
-  unregisters a worker left at the old path; `service_worker.legacy_paths` serves a
-  self-unregistering worker for installs that may never load a fresh page. A worker script
-  response cannot be a redirect, so the path cannot 301.
-- **BREAKING:** the web manifest moves from `/manifest.webmanifest` to `/manifest.json`,
-  with a 301 from the old path via `manifest_aliases`. Installs survive: the manifest's `id`
-  defaults to `start_url`.
+- **BREAKING:** the service worker moves from `/service-worker.js` to `/sw.js` and the web
+  manifest from `/manifest.webmanifest` to `/manifest.json`. No redirect or shim is shipped
+  for either — a worker script response cannot be a redirect, so a worker already registered
+  at the old path has to be unregistered once in the browser. See `UPGRADE.md`. Installs
+  survive the manifest move: its `id` defaults to `start_url`.
+- **BREAKING:** `pwax.components.directive` now replaces the default name rather than
+  registering a second directive alongside it, so an application has exactly one spelling.
+  The 1.x `@import('…')` form is no longer special-cased in config values.
 - **BREAKING:** `service_worker.precache` becomes `service_worker.pages.urls` and
   `service_worker.files` becomes `service_worker.asset_groups`.
 - Page payloads may now be stored by the service worker when a route opts in, where
@@ -91,8 +92,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   which is why none of the page-caching defects were visible to the suite. It now stores
   each key request's headers and honours `Vary`, with tests of its own pinning that
   behaviour.
-- New `Mxent\Pwax\Pwa\Glob` compiles Angular's glob syntax to regular expressions, used
-  both server-side and — serialised into `sw.json` — by the worker.
+- New `Mxent\Pwax\Pwa\Glob` compiles glob patterns to regular expressions, used both
+  server-side and — serialised into `sw.json` — by the worker.
 - New `Mxent\Pwax\Pwa\PublicAssets` walks `public/` once per manifest build, refusing
   symlinks, `.php` files, dotfiles and source maps.
 
@@ -101,8 +102,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **The whole application is now available offline after one visit.** Pwax generates an
-  asset manifest at `/sw.json` — the equivalent of Angular's `ngsw.json` — listing every
-  URL the application is made of with a content hash, and the service worker installs the
+  asset manifest at `/sw.json`, listing every URL the application is made of with a
+  content hash, and the service worker installs the
   lot in one pass. Previously the worker precached one URL (`/`) and everything else was
   cached lazily, after having been fetched online at least once: a visitor who installed
   the app and then lost their connection had no framework, no runtime and no components.

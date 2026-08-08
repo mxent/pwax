@@ -1,6 +1,6 @@
 {
     "name": "mxent/pwax",
-    "description": "Server-driven Vue 3 SPAs and Progressive Web Apps for Laravel — author components as Blade views, render them as Vue components, and ship them to the client with a single Blade directive.",
+    "description": "Write Vue components as Blade views. Ship them as a progressive web app.",
     "type": "library",
     "license": "MIT",
     "keywords": [

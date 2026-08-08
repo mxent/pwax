@@ -114,9 +114,14 @@ asks for a component payload, so the server answered with the HTML shell; that s
   ],
 ```
 
-No per-route opt-in is needed. Listed routes are fetched without cookies, so what is
-stored is the guest rendering; a route behind `auth` answers with a login screen instead
-of a payload and is refused, which `php artisan pwax:precache --verify` reports.
+In most applications the list can stay empty: every GET route whose action hands a literal
+view name to `pwaxRender()` is discovered and precached automatically, scoped by
+`service_worker.components`. `urls` is for what cannot be read statically — a computed view
+name, or a parameterised route like `/posts/{post}`.
+
+No per-route opt-in is needed. Pages are fetched without cookies, so what is stored is the
+guest rendering; a route behind `auth` answers with a login screen instead of a payload and
+is refused, which `php artisan pwax:precache --verify` reports.
 
 **`runtime` is new, defaults to true, and is worth a decision.** With it on, every page a
 visitor opens is cached so that everywhere they have been works offline. Those pages are

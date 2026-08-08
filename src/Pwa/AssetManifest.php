@@ -76,6 +76,7 @@ class AssetManifest
         private readonly Shell $shell,
         private readonly WebManifest $webManifest,
         private readonly ComponentRegistry $registry,
+        private readonly PageRegistry $pages,
         private readonly Application $app,
         private readonly ViewFactory $views,
         private readonly PublicAssets $assets,
@@ -435,6 +436,13 @@ class AssetManifest
             if (is_string($url) && $url !== '') {
                 $urls[] = $url;
             }
+        }
+
+        // Every route that renders a page, so offline is not limited to wherever the
+        // visitor happened to go first. Installing from the home page and then opening
+        // Settings offline used to fail on the one page nobody had opened yet.
+        foreach ($this->pages->precachable() as $page) {
+            $urls[] = $page['url'];
         }
 
         $defaults = $this->pageDefaults();

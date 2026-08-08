@@ -255,20 +255,10 @@ class DoctorCommand extends Command
 
         if ($config->get('pwax.service_worker.components', 'all') === false) {
             $this->warn_(
-                'pwax.service_worker.components is false, so components are only cached after they '
-                . 'have been loaded online. Pages the visitor has not opened will not work offline.'
+                'pwax.service_worker.components is false, so neither components nor pages are '
+                . 'precached — that setting scopes both. Nothing is available offline until it '
+                . 'has been loaded online at least once.'
             );
-        }
-
-        $precache = (array) $config->get('pwax.service_worker.precache', []);
-
-        if ($precache !== []) {
-            $this->warn_(sprintf(
-                'pwax.service_worker.precache lists %d application route(s). Pages rendered by '
-                . 'pwaxRender() are sent as "no-store" and the worker refuses to store them, '
-                . 'so these entries do nothing unless the routes are genuinely public and static.',
-                count($precache)
-            ));
         }
     }
 

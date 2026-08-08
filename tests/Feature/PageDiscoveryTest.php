@@ -150,6 +150,32 @@ class PageDiscoveryTest extends TestCase
         $this->assertContains('/settings', $urls);
     }
 
+    /**
+     * A page's module URL is never fetched to render that page — the payload carries the
+     * script inline — so precaching it costs a request for nothing, and for a view that
+     * needs controller data it fails with an error naming a URL nothing would ask for.
+     */
+    public function test_a_page_view_is_not_also_precached_as_a_component(): void
+    {
+        $this->assertNotContains($this->pwaxUrl('pages.home'), $this->componentGroupUrls());
+    }
+
+    public function test_a_page_view_can_be_kept_as_a_component(): void
+    {
+        config()->set('pwax.service_worker.pages.as_components', true);
+
+        $this->assertContains($this->pwaxUrl('pages.home'), $this->componentGroupUrls());
+    }
+
+    /**
+     * Only the page views. A component nothing routes to is still precached as a module,
+     * which is the whole point of the components group.
+     */
+    public function test_an_ordinary_component_is_still_precached(): void
+    {
+        $this->assertContains($this->pwaxUrl('components.modal'), $this->componentGroupUrls());
+    }
+
     public function test_the_manifest_stays_deterministic_with_discovery_on(): void
     {
         $this->assertSame(
@@ -164,6 +190,31 @@ class PageDiscoveryTest extends TestCase
     private function discovered(): array
     {
         return array_column($this->app->make(PageRegistry::class)->precachable(), 'url');
+    }
+
+    private function pwaxUrl(string $view): string
+    {
+        return '/__pwax__/c/' . $this->id($view) . '.js';
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function componentGroupUrls(): array
+    {
+        /** @var list<array<string, mixed>> $groups */
+        $groups = $this->get('/sw.json')->json('assetGroups');
+
+        foreach ($groups as $group) {
+            if (($group['name'] ?? null) === 'components') {
+                /** @var list<string> $urls */
+                $urls = $group['urls'];
+
+                return $urls;
+            }
+        }
+
+        return [];
     }
 
     /**

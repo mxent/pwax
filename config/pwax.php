@@ -618,6 +618,16 @@ return [
             'urls' => [],
             'discover' => true,
             'runtime' => true,
+
+            /*
+            | A view rendered as a page is precached as a page, not as an importable
+            | module. The page payload carries its script inline, so the module URL is
+            | never fetched to render that page — precaching it costs a request and, for
+            | a view that needs controller data, fails with an error pointing at a URL
+            | nothing would have asked for. Turn this on only if you also import a page
+            | view into another component with @pwaxImport.
+            */
+            'as_components' => false,
             'strategy' => 'freshness',   // 'freshness' | 'performance'
             'timeout' => 2000,
             'max_entries' => 60,

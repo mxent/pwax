@@ -226,7 +226,10 @@ export function createWorker({ manifest, caches = new FakeCaches(), routes }) {
             fetches.push(url);
 
             const parsed = new URL(url);
-            const response = routes(parsed.pathname + parsed.search);
+
+            // Awaited, so a route handler may be async — which is how a test observes
+            // how many requests the worker has in flight at once.
+            const response = await routes(parsed.pathname + parsed.search);
 
             if (!response) {
                 throw new TypeError('Failed to fetch');

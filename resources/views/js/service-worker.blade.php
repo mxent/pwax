@@ -58,6 +58,15 @@ const STATE_KEY = '/__pwax__/sw-state';
 const PENDING_KEY = '/__pwax__/sw-pending';
 
 /**
+ * How many assets to precache at once.
+ *
+ * Six, matching what a browser opens to one origin anyway. The number that matters is
+ * that it is bounded: PHP's built-in server — `php artisan serve`, what most people
+ * develop against — handles one request at a time.
+ */
+const CONCURRENCY = 6;
+
+/**
  * The routing-relevant part of the manifest, rendered into this file.
  *
  * Deliberately not the whole thing: the asset table belongs in `sw.json`, which is
@@ -149,15 +158,18 @@ async function install() {
     // Individually, not with `cache.addAll`. `addAll` is atomic: one 404 anywhere in the
     // list rejects the whole thing, and the usual `.catch(console.warn)` around it then
     // activates a worker with an entirely empty cache while reporting success.
-    const results = await Promise.allSettled(
-        entries.map((url) =>
-            store(cache, url, {
-                hash: (manifest.hashTable || {})[url],
-                inherited,
-                previous,
-                crossOrigin: crossOrigin.has(url),
-            })
-        )
+    //
+    // And a few at a time, not all at once. An application with a hundred components
+    // produces a hundred requests, and `php artisan serve` handles one at a time — so an
+    // install would queue behind itself until connections started being refused, which
+    // looks exactly like the app being broken.
+    const results = await settleWithLimit(entries, CONCURRENCY, (url) =>
+        store(cache, url, {
+            hash: (manifest.hashTable || {})[url],
+            inherited,
+            previous,
+            crossOrigin: crossOrigin.has(url),
+        })
     );
 
     const failures = entries.filter((_, i) => results[i].status === 'rejected');
@@ -247,6 +259,37 @@ async function store(cache, url, { hash, inherited, previous, crossOrigin }) {
     await cache.put(url, response);
 }
 
+/**
+ * `Promise.allSettled` with a ceiling on how many run at once.
+ *
+ * Same result shape, so failures are still counted rather than thrown.
+ */
+async function settleWithLimit(items, limit, fn) {
+    const results = new Array(items.length);
+    let cursor = 0;
+
+    const worker = async () => {
+        for (;;) {
+            const index = cursor++;
+
+            if (index >= items.length) {
+                return;
+            }
+
+            try {
+                await fn(items[index]);
+                results[index] = { status: 'fulfilled' };
+            } catch (reason) {
+                results[index] = { status: 'rejected', reason };
+            }
+        }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+
+    return results;
+}
+
 /** Every URL in a prefetch asset group, deduplicated and in manifest order. */
 function prefetchUrls(manifest) {
     const urls = [];
@@ -292,7 +335,31 @@ async function fetchManifest() {
 
 /* --------------------------------------------------------------------- routing ----- */
 
+/**
+ * Answer a request, and never reject.
+ *
+ * `respondWith` given a rejected promise fails the request *and* reports an unhandled
+ * rejection — `Uncaught (in promise) TypeError: Failed to fetch`, attributed to the
+ * worker rather than to whatever asked for the URL. Any SPA produces those routinely:
+ * navigating away aborts the in-flight page request, and a dev server that restarts
+ * refuses connections for a moment.
+ *
+ * `Response.error()` is the same outcome without the noise. The page's own `fetch` still
+ * rejects with a TypeError at its own call site, which is what the runtime already reads
+ * as "no connection" — the worker just stops claiming the failure as its own.
+ */
 async function route(event) {
+    try {
+        return await serve(event);
+    } catch {
+        // A navigation still gets a page. Nothing above should be able to throw on that
+        // path, but "should" is not a guarantee worth handing the browser's own error
+        // screen to someone who installed this to work offline.
+        return event.request.mode === 'navigate' ? offlineDocument() : Response.error();
+    }
+}
+
+async function serve(event) {
     const request = event.request;
     const manifest = await state();
 
@@ -356,11 +423,15 @@ async function navigate(event, manifest) {
             }
         }
 
-        return new Response(OFFLINE_HTML, {
-            status: 503,
-            headers: { 'Content-Type': 'text/html; charset=utf-8' },
-        });
+        return offlineDocument();
     }
+}
+
+function offlineDocument() {
+    return new Response(OFFLINE_HTML, {
+        status: 503,
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
 }
 
 async function networkFirst(request, manifest) {
@@ -388,7 +459,11 @@ async function staleWhileRevalidate(request, manifest) {
             await put(request, response.clone(), manifest);
             return response;
         })
-        .catch(() => cached);
+        // `?? Response.error()` matters: with nothing cached and the network down this
+        // resolved to `undefined`, and `respondWith` given a non-Response fails the
+        // request with "the promise was resolved with an object that is not a Response"
+        // — a confusing error in place of an ordinary offline one.
+        .catch(() => cached ?? Response.error());
 
     return cached || network;
 }

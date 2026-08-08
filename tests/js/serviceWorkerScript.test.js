@@ -321,4 +321,60 @@ describe('with no network', () => {
         expect(response.status).toBe(503);
         await expect(response.text()).resolves.toMatch(/You are offline/);
     });
+
+    it('fails a request without reporting an unhandled rejection', async () => {
+        const caches = new FakeCaches();
+        await boot(manifest(), { caches });
+
+        // Rethrowing into `respondWith` fails the request *and* logs
+        // `Uncaught (in promise) TypeError: Failed to fetch` against the worker. The page
+        // still sees a rejected fetch at its own call site either way.
+        const response = await offline(manifest(), caches).request('/settings');
+
+        expect(response).toBeInstanceOf(Response);
+        expect(response.type).toBe('error');
+    });
+
+    it('resolves an uncached asset to an error response, never to undefined', async () => {
+        const caches = new FakeCaches();
+        await boot(manifest(), { caches });
+
+        // Under an asset prefix, so this takes the stale-while-revalidate path. With
+        // nothing cached and no network it used to resolve `undefined`, which
+        // `respondWith` rejects with a far more confusing message than being offline.
+        const response = await offline(manifest(), caches).request('/__pwax__/c/never-seen.js');
+
+        expect(response).toBeInstanceOf(Response);
+        expect(response.type).toBe('error');
+    });
+});
+
+describe('being a good citizen of the dev server', () => {
+    it('precaches a few at a time rather than all at once', async () => {
+        // `php artisan serve` handles one request at a time. An app with a hundred
+        // components would queue an install behind itself until connections were refused.
+        const urls = Array.from({ length: 30 }, (_, i) => `/__pwax__/c/component-${i}.js`);
+        const current = manifest();
+        current.assetGroups.push({ name: 'many', installMode: 'prefetch', urls });
+
+        let inFlight = 0;
+        let peak = 0;
+
+        const base = server(current);
+        const routes = async (path) => {
+            inFlight++;
+            peak = Math.max(peak, inFlight);
+            await new Promise((resolve) => setTimeout(resolve, 1));
+            inFlight--;
+
+            return base(path);
+        };
+
+        const worker = createWorker({ manifest: current, caches: new FakeCaches(), routes });
+        await worker.dispatch('install');
+
+        expect(peak).toBeLessThanOrEqual(6);
+        // …and still fetched everything.
+        expect(worker.fetches.length).toBeGreaterThanOrEqual(urls.length);
+    });
 });

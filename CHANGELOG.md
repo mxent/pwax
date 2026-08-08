@@ -7,8 +7,84 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The whole application is now available offline after one visit.** Pwax generates an
+  asset manifest at `/sw.json` — the equivalent of Angular's `ngsw.json` — listing every
+  URL the application is made of with a content hash, and the service worker installs the
+  lot in one pass. Previously the worker precached one URL (`/`) and everything else was
+  cached lazily, after having been fetched online at least once: a visitor who installed
+  the app and then lost their connection had no framework, no runtime and no components.
+- Components are discovered by scanning the view paths for Blade files with a `<template>`
+  block, or a `<script>` block that exports — which also finds the script-only views used
+  for plugins, directives and client middleware. Nothing in an application declares its
+  components, because `@pwax` resolves at request time, so there was previously no list
+  for a worker to precache. Select them with `service_worker.components`: `'all'`,
+  `false`, or a list of view-name patterns, narrowed further by `service_worker.exclude`.
+- `pwax:precache` prints exactly what will be available offline. `--verify` renders every
+  selected component so a view that cannot be served without controller data is found
+  before a user reaches it with no connection; `--json` prints the manifest itself.
+- A session-free offline shell at `/__pwax__/shell`: the SPA shell with no CSRF token and
+  no page component, precached and served for any navigation that cannot reach the
+  network. The runtime boots from it and routes client-side as usual.
+- `ComponentResponse::cacheable()` opts a page's JSON payload out of `no-store` so the
+  route works offline, for pages that render the same for every visitor. The HTML shell
+  stays `no-store` regardless — it carries the CSRF token.
+- `window.pwax.sw` with `update()`, `clearCaches()` and `unregister()`. An open tab now
+  re-checks for a new build hourly and on regaining focus.
+- `pwax:offline` and `pwax:online` events on `document`.
+- The Web App Manifest supports every member of the specification, including `id`, `lang`,
+  `dir`, `display_override`, `categories`, `screenshots`, `shortcuts`, `launch_handler`,
+  `share_target`, `protocol_handlers` and `scope_extensions`. `id` defaults to `start_url`
+  and `lang` to the application locale.
+- The shell emits the tags iOS needs and the manifest cannot supply: `apple-touch-icon`
+  (chosen from the non-maskable icons), `apple-mobile-web-app-capable`,
+  `apple-mobile-web-app-title` and `application-name`. Without them an iPhone installs the
+  app with a screenshot of the page as its icon.
+- `<link rel="preload">` for the vendor scripts, so the browser starts all of them from
+  the head rather than discovering each in turn.
+- `pwax:doctor` checks maskable icons, a missing manifest `id`, `start_url` inside
+  `scope`, missing screenshots, the offline shell, precache coverage and cross-origin
+  assets.
+
+### Fixed
+
+- **The service worker called `self.skipWaiting()` during install, which defeated the
+  entire update mechanism.** The new worker activated immediately, `controllerchange`
+  fired, and the client reloaded every open tab on every deploy — discarding whatever the
+  user was typing. It also made `registration.waiting` unobservable, so the
+  `pwax:update-available` prompt the package documents could essentially never fire. The
+  worker now waits, and the page reloads only when it asked to activate the update.
+- **The worker cached authenticated HTML.** Cache Storage ignores HTTP cache directives,
+  so navigations marked `no-store, private` by the server were persisted to disk anyway
+  and served to the next user of a shared device. Navigations are no longer cached at all,
+  and no response carrying `no-store` is stored.
+- Precached entries lived in the same cache as everything else and were trimmed to
+  `max_entries` in insertion order, so ordinary browsing could evict the app shell and
+  silently take offline capability away. Precache and runtime cache are now separate, and
+  the precache is never trimmed.
+- `precache` used `cache.addAll`, which is atomic: one 404 anywhere in the list rejected
+  the whole install, and the surrounding `catch` then activated a worker with an empty
+  cache while reporting success. Entries are now fetched individually, failures are
+  reported, and only a missing shell or runtime aborts the install.
+- A deploy did not reach existing installs unless `version` was bumped by hand. A browser
+  only installs a worker whose bytes differ from the one it has, and the worker's source
+  never changed. The manifest hash is now embedded in it.
+- `registerServiceWorker` threw on an insecure origin. `'serviceWorker' in navigator` is
+  true over plain HTTP while the value is `undefined`, so the guard passed and the next
+  line failed.
+- `Support\Shell` was a singleton that read the request, so under Octane or FrankenPHP it
+  held the first request it ever saw for the life of the process.
+
 ### Changed
 
+- `service_worker.precache` now defaults to `[]` rather than `['/']`. Precaching `/`
+  stored one signed-in user's rendered HTML for the next user of the device to be served,
+  and only covered that one route; the offline shell covers every route and has nothing in
+  it to leak. Routes listed here are still precached, but a response the server marked
+  `no-store` — which is every page Pwax renders — is not stored, and `pwax:doctor` says so.
+- `service_worker.max_entries` now bounds only the runtime cache. Precached entries are
+  never evicted.
 - A component now has exactly one representation: `/__pwax__/c/{id}.js`, an ES module
   carrying its template, script, styles and scope together. The `.css` and `.json`
   endpoints were removed. Nothing consumed either — the runtime imports the module and

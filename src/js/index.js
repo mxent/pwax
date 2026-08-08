@@ -13,7 +13,7 @@ import { createHttp } from './http.js';
 import { importModule } from './modules.js';
 import { createPageComponent } from './page.js';
 import { createRouter } from './router.js';
-import { registerServiceWorker } from './serviceWorker.js';
+import { createServiceWorkerApi, registerServiceWorker } from './serviceWorker.js';
 import { createStyleManager } from './styles.js';
 
 const DEFAULT_CONTENT = '<main><router-view></router-view></main>';
@@ -36,6 +36,7 @@ async function boot() {
         component: loader.component,
         load: loader.load,
         import: importModule,
+        sw: createServiceWorkerApi(),
     };
 
     if (typeof Vue === 'undefined') {

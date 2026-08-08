@@ -13,7 +13,10 @@ use InvalidArgumentException;
 use Mxent\Pwax\Data\Component;
 use Mxent\Pwax\Exceptions\ComponentNotAllowed;
 use Mxent\Pwax\Exceptions\InvalidComponentId;
+use Mxent\Pwax\Pwa\AssetManifest;
+use Mxent\Pwax\Pwa\WebManifest;
 use Mxent\Pwax\Pwax;
+use Mxent\Pwax\Support\Shell;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Throwable;
@@ -94,32 +97,109 @@ class PwaxController extends Controller
     /**
      * Serve the Web App Manifest, rendered from configuration.
      */
-    public function manifest(Request $request): SymfonyResponse
+    public function manifest(Request $request, WebManifest $manifest): SymfonyResponse
     {
-        /** @var array<string, mixed> $manifest */
-        $manifest = $this->config->get('pwax.manifest', []);
-
-        $manifest = array_filter(
-            $manifest,
-            static fn (mixed $value): bool => $value !== null && $value !== ''
-        );
-
-        $body = json_encode(
-            $manifest,
-            JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT
-        );
+        $body = $manifest->toJson();
 
         $response = new Response($body, 200, ['Content-Type' => 'application/manifest+json']);
         $response->headers->set('Cache-Control', 'public, max-age=86400');
+        $response->headers->set('ETag', '"' . $manifest->hash() . '"');
+
+        return $this->notModified($request, $response) ?? $response;
+    }
+
+    /**
+     * Serve the asset manifest that drives the service worker.
+     *
+     * This is the list the worker installs the application from — every vendor bundle,
+     * the runtime, the offline shell and every component, each with a content hash. It
+     * is what makes the app available offline after a single visit rather than only the
+     * pages the visitor happened to open.
+     */
+    public function assetManifest(Request $request, AssetManifest $manifest): SymfonyResponse
+    {
+        if (! $this->config->get('pwax.service_worker.enabled', false)) {
+            return $this->plain('{}', 404, 'application/json; charset=utf-8');
+        }
+
+        try {
+            $built = $manifest->get();
+
+            $body = (string) json_encode(
+                $built,
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT
+            );
+
+            $hash = (string) ($built['hash'] ?? '');
+        } catch (Throwable $e) {
+            Log::error('pwax: failed to build the asset manifest.', ['exception' => $e]);
+
+            return $this->plain('{}', 500, 'application/json; charset=utf-8');
+        }
+
+        $response = new Response($body, 200, ['Content-Type' => 'application/json; charset=utf-8']);
+
+        // Revalidated rather than cached: this document is how a client discovers that a
+        // new build exists, so serving a stale copy would delay every update by its TTL.
+        $response->headers->set('Cache-Control', 'no-cache, must-revalidate');
+        $response->headers->set('ETag', '"' . $hash . '"');
+
+        return $this->notModified($request, $response) ?? $response;
+    }
+
+    /**
+     * Serve the offline application shell.
+     *
+     * The SPA shell with no session and no page component: no CSRF token, no controller
+     * data, byte-identical for every visitor. The worker precaches this and serves it for
+     * any navigation it cannot reach the network for, and the client runtime takes over
+     * routing from there.
+     *
+     * Precaching a real application URL instead — which is what `precache => ['/']` used
+     * to do — stores one signed-in user's HTML on disk, where the next user of the same
+     * device is served it. The shell exists so that offline navigation does not require
+     * that trade.
+     */
+    public function shell(Request $request, Shell $shell): SymfonyResponse
+    {
+        if (! $this->config->get('pwax.service_worker.shell.enabled', true)) {
+            return $this->plain('', 404, 'text/html; charset=utf-8');
+        }
+
+        try {
+            $body = $this->views->make($this->pwax->shell(), [
+                'pwaxInitial' => null,
+                'pwaxComponent' => null,
+                'pwaxShell' => $shell,
+            ])->render();
+        } catch (Throwable $e) {
+            Log::error('pwax: failed to render the offline shell.', ['exception' => $e]);
+
+            return $this->plain('', 500, 'text/html; charset=utf-8');
+        }
+
+        $response = new Response($body, 200, ['Content-Type' => 'text/html; charset=utf-8']);
+
+        // Public, because there is deliberately nothing user-specific in it. That is the
+        // whole reason this route exists rather than precaching `/`.
+        $response->headers->set('Cache-Control', 'public, max-age=0, must-revalidate');
         $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
+        $response->headers->set('X-Robots-Tag', 'noindex');
 
         return $this->notModified($request, $response) ?? $response;
     }
 
     /**
      * Serve the service worker.
+     *
+     * The worker source carries the current asset-manifest hash. That is what makes a
+     * deploy reach existing installs: a browser only treats a worker as new if its bytes
+     * differ from the one it already has, so a worker whose source never changes would
+     * leave every client running the build it first installed until something else
+     * happened to evict it. With the hash embedded, adding a component or changing a file
+     * changes the worker, the browser installs it, and the new manifest is applied.
      */
-    public function serviceWorker(): Response
+    public function serviceWorker(Request $request, AssetManifest $manifest): SymfonyResponse
     {
         if (! $this->config->get('pwax.service_worker.enabled', false)) {
             return $this->plain('// pwax: service worker disabled', 404, 'application/javascript; charset=utf-8');
@@ -127,7 +207,7 @@ class PwaxController extends Controller
 
         try {
             $view = (string) ($this->config->get('pwax.service_worker.blade') ?: 'pwax::js.service-worker');
-            $body = $this->views->make($view)->render();
+            $body = $this->views->make($view, ['manifest' => $manifest->get()])->render();
         } catch (Throwable $e) {
             Log::error('pwax: failed to render the service worker.', ['exception' => $e]);
 
@@ -140,8 +220,9 @@ class PwaxController extends Controller
         // served from, and never cache it — this file is how updates reach clients.
         $response->headers->set('Service-Worker-Allowed', '/');
         $response->headers->set('Cache-Control', 'no-cache, must-revalidate');
+        $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
 
-        return $response;
+        return $this->notModified($request, $response) ?? $response;
     }
 
     /**

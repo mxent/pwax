@@ -74,4 +74,19 @@ Route::group(array_filter([
         ltrim((string) config('pwax.service_worker.path', '/service-worker.js'), '/'),
         [PwaxController::class, 'serviceWorker']
     )->name('pwax.service-worker');
+
+    // The asset manifest the worker installs the application from — every vendor bundle,
+    // the runtime, the offline shell and every component, each with a content hash.
+    Route::get(
+        ltrim((string) config('pwax.service_worker.asset_manifest.path', '/sw.json'), '/'),
+        [PwaxController::class, 'assetManifest']
+    )->name('pwax.asset-manifest');
+
+    // The offline shell. Deliberately in this group and not in `web`: it must render
+    // without a session so that what gets precached carries no CSRF token and no
+    // signed-in user's data.
+    Route::get(
+        ltrim((string) config('pwax.service_worker.shell.path', '/__pwax__/shell'), '/'),
+        [PwaxController::class, 'shell']
+    )->name('pwax.shell');
 });

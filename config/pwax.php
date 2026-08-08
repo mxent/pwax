@@ -269,28 +269,85 @@ return [
     | Installability requires at least a 192x192 and a 512x512 icon. Run
     | `php artisan pwax:doctor` to check the manifest against that requirement.
     |
+    | Every key below is emitted verbatim, so any member the specification gains can
+    | simply be added here. Empty values (null, '', []) are dropped; `false` and `0`
+    | are kept, because `prefer_related_applications => false` is meaningful.
+    |
     */
 
     'manifest_path' => '/manifest.webmanifest',
 
     'manifest' => [
+        // A stable identity for the installed app, independent of `start_url`. Without
+        // it a browser identifies the installation by `start_url`, so changing that
+        // orphans every existing install and creates a second one. Defaults to
+        // `start_url`; set it explicitly and never change it again.
+        'id' => null,
+
         'name' => env('APP_NAME', 'Pwax App'),
         'short_name' => env('APP_NAME', 'Pwax'),
         'description' => null,
+
+        // Defaults to the application locale when null.
+        'lang' => null,
+        'dir' => 'auto',
+
         'start_url' => '/',
         'scope' => '/',
+
         'display' => 'standalone',
+
+        // Tried in order before falling back to `display`. 'window-controls-overlay'
+        // and 'tabbed' are ignored by browsers that do not implement them.
+        'display_override' => [],
+
         'orientation' => 'any',
         'background_color' => '#ffffff',
         'theme_color' => '#0c83ff',
+
+        'categories' => [],
+
         'icons' => [
             // [
             //     'src' => '/images/icons/icon-192.png',
             //     'sizes' => '192x192',
             //     'type' => 'image/png',
-            //     'purpose' => 'any maskable',
+            //     'purpose' => 'any',
+            // ],
+            // A maskable icon should be a separate entry: 'any maskable' asks one image
+            // to satisfy two incompatible safe zones and is padded wrongly in one of them.
+            // [
+            //     'src' => '/images/icons/maskable-512.png',
+            //     'sizes' => '512x512',
+            //     'type' => 'image/png',
+            //     'purpose' => 'maskable',
             // ],
         ],
+
+        // Required by Chromium for a richer install dialogue on desktop and Android.
+        'screenshots' => [
+            // ['src' => '/images/screens/wide.png', 'sizes' => '1280x720',
+            //  'type' => 'image/png', 'form_factor' => 'wide', 'label' => 'Dashboard'],
+        ],
+
+        'shortcuts' => [
+            // ['name' => 'New invoice', 'url' => '/invoices/create',
+            //  'icons' => [['src' => '/images/icons/new-96.png', 'sizes' => '96x96']]],
+        ],
+
+        // ['client_mode' => 'navigate-existing'] focuses the running window instead of
+        // opening a second one when the app is launched again.
+        'launch_handler' => null,
+
+        'handle_links' => null,
+        'protocol_handlers' => [],
+        'file_handlers' => [],
+        'share_target' => null,
+        'scope_extensions' => [],
+        'edge_side_panel' => null,
+        'iarc_rating_id' => null,
+        'related_applications' => [],
+        'prefer_related_applications' => false,
     ],
 
     /*
@@ -298,29 +355,108 @@ return [
     | Service worker
     |--------------------------------------------------------------------------
     |
+    | The worker is driven by an asset manifest — `sw.json` — in the same way Angular's
+    | worker is driven by `ngsw.json`. The manifest lists every URL the application is
+    | made of together with a content hash, so the worker precaches the whole app at
+    | install time and busts individual entries when their hash changes. There is no
+    | "visit the page once to cache it" step, and no manual version bump needed to ship
+    | a change.
+    |
     | enabled     Register and serve a service worker.
     | path        URL it is served from. Keep it at the root so its scope covers the
     |             whole origin.
+    | scope       Scope passed to `navigator.serviceWorker.register`.
     | blade       Optional Blade view rendering the worker source. Publish the default
     |             with `--tag=pwax-service-worker`.
-    | version     Bump to force every client to discard its caches on next visit.
-    | precache    URLs cached at install time so the app shell works offline.
-    | strategy    'network-first' favours freshness; 'stale-while-revalidate' favours
+    | version     Mixed into the manifest hash. Bump it to force every client to discard
+    |             its caches even when no file changed.
+    | strategy    Applies to same-origin requests that are not in the manifest.
+    |             'network-first' favours freshness; 'stale-while-revalidate' favours
     |             speed and serves the cached copy while refreshing in the background.
-    | offline_url Page shown when a navigation fails and nothing is cached.
+    | offline_url Page shown when a navigation fails. Defaults to the app shell.
+    | max_entries Cap on the *runtime* cache only. Precached entries are never evicted,
+    |             so ordinary browsing can no longer push the app shell out of storage.
     |
     */
 
     'service_worker' => [
         'enabled' => false,
         'path' => '/service-worker.js',
+        'scope' => '/',
         'blade' => null,
         'version' => 'v1',
         'cache_name' => 'pwax',
-        'precache' => ['/'],
         'strategy' => 'network-first',
         'offline_url' => null,
         'max_entries' => 60,
+        'navigation_preload' => true,
+
+        /*
+        | The asset manifest itself. `ttl` is how long the built manifest is memoised
+        | server-side; building it scans the view directory. Set it to 0 to rebuild on
+        | every request while developing.
+        */
+        'asset_manifest' => [
+            'path' => '/sw.json',
+            'ttl' => 60,
+        ],
+
+        /*
+        | The offline app shell.
+        |
+        | This is the SPA shell rendered with no session and no page component: no CSRF
+        | token, no controller data, identical for every visitor. It is what the worker
+        | serves when a navigation cannot reach the network, and the client runtime
+        | takes over routing from there.
+        |
+        | Precaching real application URLs instead would store one authenticated user's
+        | HTML on disk under a URL another user of the same device would then be served.
+        | The shell has nothing in it to leak, which is what makes precaching it safe.
+        */
+        'shell' => [
+            'enabled' => true,
+            'path' => '/__pwax__/shell',
+        ],
+
+        /*
+        | Precache Vue, Vue Router, Pinia, the client runtime and the web manifest.
+        | Without this the framework is only cached after it has been fetched online at
+        | least once, so a first visit followed by going offline shows nothing at all.
+        */
+        'assets' => true,
+
+        /*
+        | Which components to precache.
+        |
+        |     'all'                        every component Pwax can find (default)
+        |     false                        none; they are cached lazily as they load
+        |     ['components.*', 'ui.*']     only views matching these patterns
+        |
+        | Components are discovered by scanning the view paths for Blade files that
+        | contain a `<template>` block or a `<script>` block with an `export`. Run
+        | `php artisan pwax:precache` to see exactly what this resolves to.
+        */
+        'components' => 'all',
+
+        // View-name patterns never precached, whatever `components` says.
+        'exclude' => ['vendor.pwax.*'],
+
+        // Extra directories to scan, beyond the ones registered with the view finder.
+        'paths' => [],
+
+        /*
+        | Additional URLs to precache.
+        |
+        | `files` are static files under `public/` — a logo, a font, a stylesheet — and
+        | are hashed from disk, so changing one busts only that entry.
+        |
+        | `precache` are application routes. Use it only for pages that render the same
+        | for everyone: the worker refuses to store any response the server marked
+        | `no-store`, which is every page Pwax renders through `pwax_component()`.
+        */
+        'files' => [],
+
+        'precache' => [],
     ],
 
     /*

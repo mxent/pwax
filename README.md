@@ -546,25 +546,44 @@ the application is made of with a content hash:
 
 ```json
 {
+  "configVersion": 2,
   "hash": "9c41f0be2a7d5581",
   "version": "v1",
   "shellUrl": "/__pwax__/shell",
+  "navigationStrategy": "network-first",
+  "pageHeaders": {
+    "Accept": "application/json",
+    "X-Requested-With": "XMLHttpRequest",
+    "X-Pwax-Component": "true"
+  },
   "assetGroups": [
-    { "name": "app", "installMode": "prefetch", "urls": [
+    { "name": "app", "installMode": "prefetch", "kind": "asset", "urls": [
         "/vendor/pwax/vue.global.prod.js?v=3.5.41",
         "/vendor/pwax/vue-router.global.prod.js?v=5.2.0",
         "/__pwax__/pwax.js",
         "/manifest.json",
+        "/favicon.ico",
         "/__pwax__/shell"
     ]},
-    { "name": "components", "installMode": "prefetch", "urls": [
+    { "name": "components", "installMode": "prefetch", "kind": "asset", "urls": [
         "/__pwax__/c/Y29tcG9uZW50cy5tb2RhbA3f9a1c0d.js"
-    ]}
+    ]},
+    { "name": "assets", "installMode": "lazy", "kind": "asset",
+      "urls": ["/images/logo.svg"], "patterns": ["^\\/images\\/.*$"] },
+    { "name": "pages", "installMode": "prefetch", "kind": "page",
+      "strategy": "freshness", "credentials": "omit", "urls": ["/", "/about"] }
   ],
+  "dataGroups": [],
   "hashTable": { "/__pwax__/c/Y29tcG9uZW50cy5tb2RhbA3f9a1c0d.js": "a41c9b02f7de5163" },
-  "critical": ["/__pwax__/pwax.js", "/__pwax__/shell"]
+  "critical": ["/__pwax__/pwax.js", "/__pwax__/shell"],
+  "warnings": []
 }
 ```
+
+`pageHeaders` is the one entry worth understanding. Page responses vary on those three
+headers, so the worker both fetches with them and keys its cache on them — when the two
+sides disagreed, every page lookup missed silently, which is the defect this release
+exists to fix.
 
 `sw.js` fetches that on install and caches the lot in one pass. **Nothing has
 to be visited first to be available**: a visitor who loaded one page can go offline and

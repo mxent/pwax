@@ -142,8 +142,8 @@ class AssetManifest
             'assetPrefixes' => $this->assetPrefixes(),
             'assetGroups' => $groups,
             'hashTable' => $hashes,
-            'crossOrigin' => array_values($crossOrigin),
-            'critical' => array_values($critical),
+            'crossOrigin' => $crossOrigin,
+            'critical' => $critical,
         ];
 
         // Computed last, over everything above, so any change anywhere renames the cache.
@@ -445,10 +445,23 @@ class AssetManifest
      */
     private function assetPrefixes(): array
     {
-        return array_values(array_unique(array_filter([
-            '/' . trim((string) $this->config->get('pwax.route_prefix', '__pwax__'), '/') . '/',
-            '/' . trim((string) $this->config->get('pwax.assets.local_path', '/vendor/pwax'), '/') . '/',
-        ])));
+        $prefixes = [];
+
+        foreach ([
+            (string) $this->config->get('pwax.route_prefix', '__pwax__'),
+            (string) $this->config->get('pwax.assets.local_path', '/vendor/pwax'),
+        ] as $prefix) {
+            $prefix = trim($prefix, '/');
+
+            // Skipped rather than emitted as "/". A prefix of "/" would claim every path
+            // on the origin as a Pwax asset and route the whole site through the
+            // stale-while-revalidate branch.
+            if ($prefix !== '') {
+                $prefixes[] = '/' . $prefix . '/';
+            }
+        }
+
+        return array_values(array_unique($prefixes));
     }
 
     private function isCrossOrigin(string $url): bool
@@ -458,10 +471,8 @@ class AssetManifest
 
     private function publicPath(string $path): string
     {
-        $base = method_exists($this->app, 'publicPath')
-            ? (string) $this->app->publicPath()
-            : $this->app->basePath('public');
-
-        return rtrim($base, '/\\') . DIRECTORY_SEPARATOR . ltrim($path, '/\\');
+        return rtrim((string) $this->app->publicPath(), '/\\')
+            . DIRECTORY_SEPARATOR
+            . ltrim($path, '/\\');
     }
 }

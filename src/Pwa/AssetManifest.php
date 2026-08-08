@@ -342,6 +342,31 @@ class AssetManifest
     }
 
     /**
+     * Views that some route renders as a page, as a lookup.
+     *
+     * Empty when `pages.as_components` is on, which is how an application that also
+     * imports a page view into another component keeps its module precached.
+     *
+     * @return array<string, true>
+     */
+    private function pageViews(): array
+    {
+        if ($this->config->get('pwax.service_worker.pages.as_components', false)) {
+            return [];
+        }
+
+        $views = [];
+
+        foreach ($this->pages->all() as $page) {
+            foreach ($page['views'] as $view) {
+                $views[$view] = true;
+            }
+        }
+
+        return $views;
+    }
+
+    /**
      * Wrap a list of URLs as a plain prefetched asset group.
      *
      * @param  list<string>  $urls
@@ -562,8 +587,21 @@ class AssetManifest
     private function componentGroup(array &$hashes): array
     {
         $urls = [];
+        $pageViews = $this->pageViews();
 
         foreach ($this->registry->precachable() as $component) {
+            // A view rendered as a page is precached as a page, not as a module. The page
+            // payload carries its script inline — `payload(addressable: false)`, which the
+            // runtime resolves through `importInlineModule` — so the module URL is never
+            // fetched to render that page, and precaching it is dead weight.
+            //
+            // Worse than dead weight when the view needs controller data: compiled on its
+            // own it throws, the install reports an asset it could not fetch, and the
+            // error points at a URL nothing would ever have asked for.
+            if (isset($pageViews[$component['view']])) {
+                continue;
+            }
+
             try {
                 $url = $this->pwax->url($component['view']);
             } catch (Throwable) {

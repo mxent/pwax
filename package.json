@@ -1,6 +1,6 @@
 {
     "name": "@mxent/pwax",
-    "version": "2.1.4",
+    "version": "3.0.0",
     "private": true,
     "description": "Client runtime for the mxent/pwax Laravel package. Built to dist/pwax.js and shipped inside the Composer package — npm install is only needed to contribute.",
     "license": "MIT",

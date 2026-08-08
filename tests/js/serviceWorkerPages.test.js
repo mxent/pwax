@@ -192,26 +192,6 @@ describe('page payloads offline', () => {
         await expect(pages.match(asRuntime(ABOUT))).resolves.toBeDefined();
     });
 
-    it('reports a page the route did not mark cacheable, and stores nothing', async () => {
-        const current = manifest();
-        const caches = new FakeCaches();
-
-        const worker = await boot(current, { caches, cacheable: [] });
-
-        expect(worker.failed()).toBe(false);
-
-        const skipped = worker.log.find(
-            (entry) => Array.isArray(entry) && entry[0] === 'info' && String(entry[1]).includes('excluded')
-        );
-
-        expect(skipped).toBeDefined();
-        expect(skipped[2]).toContain(ABOUT);
-
-        const pages = await caches.open('pwax-pages-v1-h1-anon');
-
-        await expect(pages.match(asRuntime(ABOUT))).resolves.toBeUndefined();
-    });
-
     it('refuses to store a page that answered with HTML', async () => {
         const current = manifest();
         const caches = new FakeCaches();
@@ -313,6 +293,92 @@ describe('page payloads offline', () => {
         expect(await caches.has('pwax-pages-v1-h1-alice')).toBe(false);
         expect(await caches.has('pwax-pages-v1-h1-bob')).toBe(true);
         expect(await caches.has('pwax-precache-v1-h1')).toBe(true);
+    });
+
+    /**
+     * The case that shipped broken.
+     *
+     * A page payload is `no-store, private` unless the route calls `->cacheable()`, which
+     * is the default for every route in a normal application. Runtime page caching gated
+     * its writes on the same rule assets use, so it stored nothing at all: the pages cache
+     * stayed empty, and offline gave a shell that could render nothing. The earlier test
+     * for this passed only because its fixture opted in.
+     */
+    it('caches a page the route never marked cacheable, which is the default', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        // `cacheable: []` — every page answers `no-store, private`, exactly as
+        // ComponentResponse does when a route says nothing.
+        const worker = await boot(current, { caches, cacheable: [] });
+
+        await visit(worker, DASHBOARD);
+
+        const body = await visit(offline(current, caches), DASHBOARD);
+
+        expect(body.status).toBe(200);
+        await expect(body.json()).resolves.toEqual({ template: '<p>/dashboard</p>' });
+    });
+
+    it('precaches a no-store page too, since it is fetched without cookies', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        await boot(current, { caches, cacheable: [] });
+
+        const pages = await caches.open('pwax-pages-v1-h1-anon');
+
+        await expect(pages.match(asRuntime(ABOUT), { ignoreVary: true })).resolves.toBeDefined();
+    });
+
+    /**
+     * A CDN-hosted framework could be precached in full and still not start offline: the
+     * fetch handler returned early for any other origin, before it looked in the cache it
+     * had just filled.
+     */
+    it('serves a precached third-party asset offline', async () => {
+        const cdn = 'https://cdn.example/vue.js';
+        const current = manifest({
+            assetGroups: [{ name: 'app', installMode: 'prefetch', urls: [RUNTIME, SHELL, cdn] }],
+            crossOrigin: [cdn],
+            critical: [RUNTIME, SHELL],
+        });
+        const caches = new FakeCaches();
+
+        const worker = createWorker({
+            manifest: current,
+            caches,
+            routes: (path) =>
+                path === '/sw.json'
+                    ? Response.json(current)
+                    : new Response('cdn-body', { headers: { 'Cache-Control': 'public' } }),
+        });
+
+        await worker.dispatch('install');
+        await worker.dispatch('activate');
+
+        const later = offline(current, caches);
+        const response = await later.dispatch('fetch', {
+            request: new Request(cdn),
+            preloadResponse: Promise.resolve(null),
+        });
+
+        await expect((await response).text()).resolves.toBe('cdn-body');
+    });
+
+    it('leaves third-party requests it did not precache entirely alone', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        const worker = await boot(current, { caches });
+
+        const response = await worker.dispatch('fetch', {
+            request: new Request('https://analytics.example/t.gif'),
+            preloadResponse: Promise.resolve(null),
+        });
+
+        // Not intercepted at all — no `respondWith`, so the browser handles it.
+        expect(response).toBeUndefined();
     });
 
     it('never stores a page the server marked X-Pwax-Cache: none', async () => {

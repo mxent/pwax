@@ -114,15 +114,9 @@ asks for a component payload, so the server answered with the HTML shell; that s
   ],
 ```
 
-Each listed route must call `->cacheable()`, which is the assertion that it renders the
-same for everyone:
-
-```php
-Route::get('/about', fn () => pwaxRender('pages.about')->cacheable());
-```
-
-Routes that have not opted in are now reported by `php artisan pwax:precache --verify`
-rather than skipped in silence.
+No per-route opt-in is needed. Listed routes are fetched without cookies, so what is
+stored is the guest rendering; a route behind `auth` answers with a login screen instead
+of a payload and is refused, which `php artisan pwax:precache --verify` reports.
 
 **`runtime` is new, defaults to true, and is worth a decision.** With it on, every page a
 visitor opens is cached so that everywhere they have been works offline. Those pages are
@@ -181,7 +175,7 @@ every relative URL in the document resolves, and routing does not need it.
 - [ ] `pwax_route(` → `pwaxRoute(`
 - [ ] `@pwax(` → `@pwaxImport(`
 - [ ] `vue()` / `router()` replaced; `pwax.helpers.global` removed from config
-- [ ] `service_worker.precache` → `service_worker.pages.urls`, each route `->cacheable()`
+- [ ] `service_worker.precache` → `service_worker.pages.urls`
 - [ ] `service_worker.files` → `service_worker.asset_groups`
 - [ ] Decided on `service_worker.pages.runtime`
 - [ ] Proxy/CDN rules updated for `/sw.js` and `/manifest.json`

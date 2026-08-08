@@ -27,9 +27,12 @@
         'strategy' => (string) ($manifest['strategy'] ?? 'network-first'),
         'maxEntries' => (int) ($manifest['maxEntries'] ?? 60),
         'navigationPreload' => (bool) ($manifest['navigationPreload'] ?? true),
+        'navigationStrategy' => (string) ($manifest['navigationStrategy'] ?? 'network-first'),
+        'navigationUrls' => array_values((array) ($manifest['navigationUrls'] ?? [])),
         'shellUrl' => $manifest['shellUrl'] ?? null,
         'offlineUrl' => $manifest['offlineUrl'] ?? null,
         'assetPrefixes' => array_values((array) ($manifest['assetPrefixes'] ?? [])),
+        'pageHeaders' => (array) ($manifest['pageHeaders'] ?? []),
     ];
 @endphp
 /*!
@@ -84,6 +87,51 @@ const OFFLINE_HTML =
     '<h1>You are offline</h1><p>This page has not been stored for offline use.</p>' +
     '</body></html>';
 
+/**
+ * The label a request carries for whoever is signed in, or `anon`.
+ *
+ * Page payloads and API responses are one person's data, and the Cache API is scoped to
+ * the origin rather than to a user. Putting this in the *cache name* — rather than
+ * clearing caches when a sign-in is noticed — is what makes a cross-user read impossible
+ * rather than merely unlikely: there is no window between one user arriving and the
+ * previous user's entries becoming unreachable, because they were never reachable under
+ * this name to begin with.
+ *
+ * The value is an opaque HMAC minted by the server (`Shell::identity()`); the worker only
+ * ever compares it, never interprets it.
+ */
+function identityOf(request) {
+    return (request && request.headers && request.headers.get('X-Pwax-Identity')) || 'anon';
+}
+
+/**
+ * The request the client runtime would make for a page — and therefore the cache key.
+ *
+ * Page responses carry `Vary: X-Pwax-Component, X-Requested-With, Accept`, so an entry
+ * stored under a bare URL can never be matched by the runtime's request. Storing it under
+ * this Request is what makes ordinary Vary matching succeed, rather than relying on
+ * `ignoreVary` to paper over a key that never agreed.
+ */
+function pageKey(url) {
+    return new Request(url, { headers: CONFIG.pageHeaders || {} });
+}
+
+/**
+ * The same request, aimed at the network.
+ *
+ * `credentials: 'omit'` by default, and that matters. A page is only precacheable because
+ * it renders the same for everyone — that is what `->cacheable()` asserts — so the
+ * anonymous rendering is the correct one to store. Fetching with cookies would precache
+ * whichever user happened to trigger the install, on a device they may share.
+ */
+function pageRequest(url, credentials) {
+    return new Request(url, {
+        headers: CONFIG.pageHeaders || {},
+        credentials: credentials || 'omit',
+        cache: 'reload',
+    });
+}
+
 /** Set by `install`, so `activate` does not have to rediscover what it just built. */
 let installed = null;
 
@@ -115,6 +163,19 @@ self.addEventListener('message', (event) => {
 
     if (type === 'PWAX_CLEAR_CACHES') {
         event.waitUntil(clearCaches().then(() => reply(event, { type: 'PWAX_CACHES_CLEARED' })));
+        return;
+    }
+
+    // Sign-out. Drops one person's pages, runtime entries and API responses while leaving
+    // the precache — the framework, the components, the shell — in place, so the next
+    // person to use the device gets an application that still works offline rather than
+    // one that has to download itself again.
+    if (type === 'PWAX_FORGET_IDENTITY') {
+        event.waitUntil(
+            state()
+                .then((manifest) => forget(manifest, event.data.identity))
+                .then(() => reply(event, { type: 'PWAX_IDENTITY_FORGOTTEN' }))
+        );
     }
 });
 
@@ -151,9 +212,15 @@ async function install() {
     const previous = await previousPrecaches(cacheName);
     const inherited = await inheritedHashes(previous);
 
-    const entries = prefetchUrls(manifest);
+    const entries = prefetchEntries(manifest);
+    const urls = entries.map((entry) => entry.url);
     const critical = new Set(manifest.critical || []);
     const crossOrigin = new Set(manifest.crossOrigin || []);
+
+    // Pages go to their own cache, under the anonymous identity: what is fetched at
+    // install time is the guest rendering, and that is the only identity it may be served
+    // to. A signed-in visitor populates their own pages cache as they browse.
+    const pages = await caches.open(pagesName(manifest, 'anon'));
 
     // Individually, not with `cache.addAll`. `addAll` is atomic: one 404 anywhere in the
     // list rejects the whole thing, and the usual `.catch(console.warn)` around it then
@@ -163,28 +230,30 @@ async function install() {
     // produces a hundred requests, and `php artisan serve` handles one at a time — so an
     // install would queue behind itself until connections started being refused, which
     // looks exactly like the app being broken.
-    const results = await settleWithLimit(entries, CONCURRENCY, (url) =>
-        store(cache, url, {
-            hash: (manifest.hashTable || {})[url],
+    const results = await settleWithLimit(entries, CONCURRENCY, (entry) =>
+        store(entry.kind === 'page' ? pages : cache, entry.url, {
+            hash: (manifest.hashTable || {})[entry.url],
             inherited,
             previous,
-            crossOrigin: crossOrigin.has(url),
+            crossOrigin: crossOrigin.has(entry.url),
+            kind: entry.kind,
+            credentials: entry.credentials,
         })
     );
 
-    const failures = entries.filter((_, i) => results[i].status === 'rejected');
+    const failures = urls.filter((_, i) => results[i].status === 'rejected');
 
     // Kept apart from failures. A response the server marked `no-store` was not lost, it
     // was refused — every page rendered by `pwax_component()` says exactly that, on
     // purpose, so that one visitor's HTML is never written to another's disk. Reporting
     // that as "could not be precached" reads like a broken install and sends people
     // looking for a network problem that is not there.
-    const skipped = entries.filter((_, i) => results[i].status === 'fulfilled' && results[i].value === false);
+    const skipped = urls.filter((_, i) => results[i].status === 'fulfilled' && results[i].value === false);
     const fatal = [...failures, ...skipped].filter((url) => critical.has(url));
 
     if (failures.length) {
         console.warn(
-            `pwax sw: ${failures.length} of ${entries.length} assets could not be fetched. ` +
+            `pwax sw: ${failures.length} of ${urls.length} assets could not be fetched. ` +
                 'Run `php artisan pwax:precache --verify` to find views that cannot render ' +
                 'without controller data.',
             failures
@@ -194,8 +263,10 @@ async function install() {
     if (skipped.length) {
         console.info(
             `pwax sw: ${skipped.length} URL(s) are excluded from offline caching because the ` +
-                'server sent `Cache-Control: no-store`. Pages rendered by pwax_component() do ' +
-                'that unless the route calls ->cacheable().',
+                'server sent `Cache-Control: no-store`, or answered a page request with ' +
+                'something other than JSON. Pages rendered by pwaxRender() are `no-store` ' +
+                'unless the route calls ->cacheable(); a page that redirects to a login ' +
+                'screen answers with HTML. Run `php artisan pwax:precache --verify`.',
             skipped
         );
     }
@@ -224,7 +295,7 @@ async function install() {
 
 async function activate() {
     const manifest = installed || (await readManifest(PENDING_KEY)) || (await readManifest(STATE_KEY)) || CONFIG;
-    const keep = new Set([precacheName(manifest), runtimeName(manifest), STATE_CACHE]);
+    const keep = new Set([precacheName(manifest), STATE_CACHE]);
 
     // Promoted before the sweep, so a worker terminated midway through cannot come back
     // and mistake the cache it is activating for a stale one.
@@ -234,9 +305,19 @@ async function activate() {
     // Only our own caches. Another worker, or another library, may own caches on this
     // origin and deleting those would be someone else's outage.
     const keys = await caches.keys();
-    await Promise.all(
-        keys.filter((key) => key.startsWith(`${PREFIX}-`) && !keep.has(key)).map((key) => caches.delete(key))
+
+    // The per-identity caches cannot be named exhaustively — there is one set per signed-in
+    // visitor — so they are matched by prefix instead. Pages and runtime entries belong to
+    // this build and go when it does; data groups are answers from an API rather than part
+    // of the build, and survive a deploy so that an application that was working offline
+    // still is the moment a new version installs.
+    const live = [pagesPrefix(manifest), runtimePrefix(manifest), `${PREFIX}-data-`];
+    const stale = keys.filter(
+        (key) => key.startsWith(`${PREFIX}-`) && !keep.has(key) && !live.some((prefix) => key.startsWith(prefix))
     );
+
+    await Promise.all(stale.map((key) => caches.delete(key)));
+    await trimIdentities(manifest);
 
     await deleteManifest(PENDING_KEY);
 
@@ -255,7 +336,9 @@ async function activate() {
  * re-downloaded — the difference between a few kilobytes and the whole application on
  * every deploy, over whatever connection the visitor happens to have.
  */
-async function store(cache, url, { hash, inherited, previous, crossOrigin }) {
+async function store(cache, url, { hash, inherited, previous, crossOrigin, kind, credentials }) {
+    const page = kind === 'page';
+
     if (hash && inherited.get(url) === hash) {
         for (const old of previous) {
             const copy = await old.match(url);
@@ -267,9 +350,15 @@ async function store(cache, url, { hash, inherited, previous, crossOrigin }) {
         }
     }
 
-    const request = crossOrigin
-        ? new Request(url, { cache: 'reload', mode: 'cors', credentials: 'omit' })
-        : new Request(url, { cache: 'reload' });
+    let request;
+
+    if (page) {
+        request = pageRequest(url, credentials);
+    } else if (crossOrigin) {
+        request = new Request(url, { cache: 'reload', mode: 'cors', credentials: 'omit' });
+    } else {
+        request = new Request(url, { cache: 'reload' });
+    }
 
     const response = await fetch(request);
 
@@ -280,13 +369,26 @@ async function store(cache, url, { hash, inherited, previous, crossOrigin }) {
         throw new Error(`pwax sw: ${url} responded ${response.status}`);
     }
 
+    // A page must actually be a payload. `fetch` follows redirects silently, so a route
+    // behind `auth` answers 200 with the login page's HTML — perfectly `ok`, and useless
+    // as a cached page. Storing it would serve the login screen for that route forever.
+    if (page && !isJson(response)) {
+        return false;
+    }
+
     if (!cacheable(response)) {
         return false;
     }
 
-    await cache.put(url, response);
+    // Pages are keyed by the request the runtime will make, not by the bare URL, so the
+    // response's `Vary` can be satisfied on lookup.
+    await cache.put(page ? pageKey(url) : url, response);
 
     return true;
+}
+
+function isJson(response) {
+    return (response.headers.get('Content-Type') || '').includes('json');
 }
 
 /**
@@ -319,9 +421,16 @@ async function settleWithLimit(items, limit, fn) {
     return results;
 }
 
-/** Every URL in a prefetch asset group, deduplicated and in manifest order. */
-function prefetchUrls(manifest) {
-    const urls = [];
+/**
+ * Every entry in a prefetch asset group, deduplicated and in manifest order.
+ *
+ * Each carries the group it came from, because how a URL is fetched and where it is
+ * stored depend on it: an asset is fetched plainly and lives in the shared precache, a
+ * page is fetched the way the runtime would and lives in the per-identity pages cache.
+ */
+function prefetchEntries(manifest) {
+    const entries = [];
+    const seen = new Set();
 
     for (const group of manifest.assetGroups || []) {
         if (group.installMode === 'lazy') {
@@ -329,13 +438,16 @@ function prefetchUrls(manifest) {
         }
 
         for (const url of group.urls || []) {
-            if (!urls.includes(url)) {
-                urls.push(url);
+            if (seen.has(url)) {
+                continue;
             }
+
+            seen.add(url);
+            entries.push({ url, kind: group.kind === 'page' ? 'page' : 'asset', credentials: group.credentials });
         }
     }
 
-    return urls;
+    return entries;
 }
 
 async function fetchManifest() {
@@ -392,32 +504,307 @@ async function serve(event) {
     const request = event.request;
     const manifest = await state();
 
+    // First, and before any cache is consulted. A navigation is a request for a document,
+    // and the only document it may be answered with is the shell — never a page payload,
+    // whatever else happens to be stored under the same URL.
     if (request.mode === 'navigate') {
         return navigate(event, manifest);
+    }
+
+    const url = new URL(request.url);
+    const key = url.pathname + url.search;
+    const identity = identityOf(request);
+
+    // Before the precache, because a page URL may also sit under an asset prefix, and the
+    // page path is the more specific answer. The header test means only the runtime's own
+    // request takes this branch.
+    const group = pageGroupFor(manifest, key, request);
+
+    if (group) {
+        return page(request, manifest, group, identity);
     }
 
     const precache = await precacheFor(manifest);
 
     // Precached entries are content-addressed by the manifest hash, so a hit is by
     // definition the right version and there is nothing to revalidate.
+    //
+    // `ignoreVary` is safe here and nowhere it is not used: every entry was put here by
+    // `install()`, one per URL, so there is only ever one representation to choose from.
+    // A Vary check could only turn the correct hit into a spurious miss.
     if (precache) {
-        const hit = await precache.match(request);
+        const hit = await precache.match(request, { ignoreVary: true });
 
         if (hit) {
             return hit;
         }
     }
 
-    const url = new URL(request.url);
+    const lazy = lazyGroupFor(manifest, key);
+
+    if (lazy) {
+        return lazyAsset(request, manifest, lazy);
+    }
+
+    const data = dataGroupFor(manifest, key);
+
+    if (data) {
+        return dataResponse(request, manifest, data, identity);
+    }
+
     const ours = (manifest.assetPrefixes || []).some((prefix) => url.pathname.startsWith(prefix));
 
     if (ours) {
-        return staleWhileRevalidate(request, manifest);
+        return staleWhileRevalidate(request, manifest, identity);
     }
 
     return manifest.strategy === 'stale-while-revalidate'
-        ? staleWhileRevalidate(request, manifest)
-        : networkFirst(request, manifest);
+        ? staleWhileRevalidate(request, manifest, identity)
+        : networkFirst(request, manifest, identity);
+}
+
+/**
+ * The page group a request belongs to, if it is a page request at all.
+ *
+ * The header is what distinguishes "the runtime asking for /about's payload" from "a
+ * link to /about". Without it a hit in the pages cache could answer a document request
+ * with JSON, and the browser would download it.
+ */
+function pageGroupFor(manifest, key, request) {
+    if (request.headers.get('X-Pwax-Component') !== 'true') {
+        return null;
+    }
+
+    for (const group of manifest.assetGroups || []) {
+        if (group.kind !== 'page') {
+            continue;
+        }
+
+        if ((group.urls || []).includes(key) || matchesAny(group.patterns, key)) {
+            return group;
+        }
+    }
+
+    // A page the runtime asked for that no group claims is still a page, and caching it as
+    // one is what makes "everywhere you have been works offline" true rather than
+    // "everywhere you listed in config". `runtime: false` turns this off.
+    return manifest.pageRuntime === false ? null : manifest.pageDefaults || { strategy: 'freshness' };
+}
+
+/**
+ * A page payload: from the network when there is one, from this identity's cache when
+ * there is not.
+ *
+ * This is the request that used to fail. The runtime fetches the page it is navigating to
+ * with `mode: 'cors'` rather than `'navigate'`, so it never reached the shell fallback —
+ * it fell through to the generic network-first path, missed, and surfaced as "This page
+ * needs an internet connection to load" on a device that had the whole application
+ * installed.
+ */
+async function page(request, manifest, group, identity) {
+    const cache = await caches.open(pagesName(manifest, identity));
+
+    if (group.strategy === 'performance') {
+        const hit = await cache.match(request, { ignoreVary: true });
+
+        if (hit) {
+            return hit;
+        }
+    }
+
+    try {
+        const response = await withTimeout(fetch(request), group.timeout);
+
+        // Not a payload — a login screen, a maintenance page, a captive portal. Hand it
+        // back so the runtime can act on it, but do not remember it as this page.
+        if (response.ok && isJson(response) && cacheable(response)) {
+            await cache.put(pageKey(new URL(request.url).pathname + new URL(request.url).search), response.clone());
+            await trim(cache, group.maxEntries || manifest.maxEntries);
+        }
+
+        return response;
+    } catch (error) {
+        const hit = await cache.match(request, { ignoreVary: true });
+
+        if (hit) {
+            return hit;
+        }
+
+        throw error;
+    }
+}
+
+/** Reject a promise that takes too long, so a dead connection is not an indefinite wait. */
+function withTimeout(promise, ms) {
+    if (!ms || ms <= 0) {
+        return promise;
+    }
+
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('pwax sw: timed out')), ms);
+
+        promise.then(
+            (value) => {
+                clearTimeout(timer);
+                resolve(value);
+            },
+            (error) => {
+                clearTimeout(timer);
+                reject(error);
+            }
+        );
+    });
+}
+
+function matchesAny(patterns, key) {
+    return (patterns || []).some((pattern) => new RegExp(pattern).test(key));
+}
+
+/** A lazy asset group claiming this path, if any. */
+function lazyGroupFor(manifest, key) {
+    for (const group of manifest.assetGroups || []) {
+        if (group.installMode !== 'lazy' || group.kind === 'page') {
+            continue;
+        }
+
+        if ((group.urls || []).includes(key) || matchesAny(group.patterns, key)) {
+            return group;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * A lazy group member: fetched on first use, then kept in the precache.
+ *
+ * The precache rather than the runtime cache, deliberately. A lazy asset is still part of
+ * the application — it was declared in the manifest — so once it has been obtained it
+ * should not be evicted by ordinary browsing, which is exactly what the runtime cache's
+ * entry cap would eventually do to it.
+ */
+async function lazyAsset(request, manifest, group) {
+    const cache = await caches.open(precacheName(manifest));
+    const hit = await cache.match(request, { ignoreVary: true });
+
+    if (hit) {
+        return hit;
+    }
+
+    const response = await fetch(request);
+
+    if (cacheable(response)) {
+        await cache.put(request, response.clone());
+    }
+
+    return response;
+}
+
+/** The first data group claiming this path, if any. */
+function dataGroupFor(manifest, key) {
+    for (const group of manifest.dataGroups || []) {
+        if (matchesAny(group.patterns, key)) {
+            return group;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * An API response, cached under Angular's data-group rules.
+ *
+ * `freshness` goes to the network with a deadline and falls back to what is stored;
+ * `performance` serves what is stored while it is young enough, and only then asks the
+ * network. Age is tracked in a sidecar entry rather than by rewriting the response,
+ * because rebuilding a response to add a header would mean reading its body first, which
+ * forfeits streaming for every request that goes through here.
+ */
+async function dataResponse(request, manifest, group, identity) {
+    const config = group.cacheConfig || {};
+    const cache = await caches.open(dataName(manifest, group, identity));
+    const key = new URL(request.url).pathname + new URL(request.url).search;
+
+    const fresh = async () => {
+        const response = await withTimeout(fetch(request), config.timeout);
+
+        if (cacheable(response)) {
+            await cache.put(request, response.clone());
+            await stamp(cache, key);
+            await trimData(cache, config.maxSize);
+        }
+
+        return response;
+    };
+
+    if (config.strategy === 'performance') {
+        const hit = await cache.match(request);
+
+        if (hit && (await isYoungEnough(cache, key, config.maxAge))) {
+            return hit;
+        }
+    }
+
+    try {
+        return await fresh();
+    } catch (error) {
+        const hit = await cache.match(request);
+
+        if (hit && (await isYoungEnough(cache, key, config.maxAge))) {
+            return hit;
+        }
+
+        throw error;
+    }
+}
+
+/** Sidecar entries record when a data response was stored. */
+function stampKey(key) {
+    return `/__pwax__/sw-age/${encodeURIComponent(key)}`;
+}
+
+async function stamp(cache, key) {
+    await cache.put(stampKey(key), new Response(JSON.stringify({ t: Date.now() })));
+}
+
+async function isYoungEnough(cache, key, maxAge) {
+    if (!maxAge) {
+        return true;
+    }
+
+    try {
+        const stored = await cache.match(stampKey(key));
+
+        if (!stored) {
+            return false;
+        }
+
+        const { t } = await stored.json();
+
+        return Date.now() - t < maxAge * 1000;
+    } catch {
+        return false;
+    }
+}
+
+/** Bound a data cache, counting only real entries and dropping their stamps with them. */
+async function trimData(cache, maxSize) {
+    if (!maxSize || maxSize <= 0) {
+        return;
+    }
+
+    const keys = (await cache.keys()).filter((key) => !new URL(key.url).pathname.startsWith('/__pwax__/sw-age/'));
+
+    if (keys.length <= maxSize) {
+        return;
+    }
+
+    for (const key of keys.slice(0, keys.length - maxSize)) {
+        const path = new URL(key.url).pathname + new URL(key.url).search;
+
+        await cache.delete(key);
+        await cache.delete(stampKey(path));
+    }
 }
 
 /**
@@ -431,6 +818,24 @@ async function serve(event) {
  * no session and no page data, and the runtime routes from it as normal.
  */
 async function navigate(event, manifest) {
+    const path = new URL(event.request.url).pathname;
+
+    // A path the application does not own goes straight to the network, untouched. This
+    // is the escape hatch that keeps Horizon, Telescope, Nova, a Filament panel or a PDF
+    // under /storage working on an origin where the app-shell strategy is switched on —
+    // without it, every one of them would be answered with the SPA shell.
+    if (!matchesNavigationUrls(manifest, path)) {
+        return fetch(event.request);
+    }
+
+    if (manifest.navigationStrategy === 'app-shell') {
+        const shell = await shellDocument(manifest);
+
+        if (shell) {
+            return shell;
+        }
+    }
+
     try {
         const preloaded = manifest.navigationPreload !== false ? await event.preloadResponse : null;
 
@@ -440,20 +845,64 @@ async function navigate(event, manifest) {
 
         return await fetch(event.request);
     } catch {
-        for (const url of [manifest.offlineUrl, manifest.shellUrl]) {
-            if (!url) {
-                continue;
-            }
+        return (await shellDocument(manifest)) || offlineDocument();
+    }
+}
 
-            const hit = await caches.match(url);
-
-            if (hit) {
-                return hit;
-            }
+/**
+ * The precached document a navigation falls back to.
+ *
+ * Looked up by URL, never by matching the request — a navigation must never be answered
+ * from the pages cache, whose entries are JSON.
+ */
+async function shellDocument(manifest) {
+    for (const url of [manifest.offlineUrl, manifest.shellUrl]) {
+        if (!url) {
+            continue;
         }
 
-        return offlineDocument();
+        const hit = await caches.match(url, { ignoreVary: true });
+
+        if (hit) {
+            return hit;
+        }
     }
+
+    return null;
+}
+
+/**
+ * Angular's `navigationUrls`, with the same semantics.
+ *
+ * A list of globs, already compiled to regexes by the server. A leading `!` excludes.
+ * With no list configured every navigation is ours, which is the behaviour that existed
+ * before this was configurable.
+ */
+function matchesNavigationUrls(manifest, path) {
+    const rules = manifest.navigationUrls || [];
+
+    if (!rules.length) {
+        return true;
+    }
+
+    let included = false;
+
+    for (const rule of rules) {
+        const negated = rule.startsWith('!');
+        const pattern = negated ? rule.slice(1) : rule;
+
+        if (!new RegExp(pattern).test(path)) {
+            continue;
+        }
+
+        if (negated) {
+            return false;
+        }
+
+        included = true;
+    }
+
+    return included;
 }
 
 function offlineDocument() {
@@ -463,10 +912,10 @@ function offlineDocument() {
     });
 }
 
-async function networkFirst(request, manifest) {
+async function networkFirst(request, manifest, identity) {
     try {
         const response = await fetch(request);
-        await put(request, response.clone(), manifest);
+        await put(request, response.clone(), manifest, identity);
 
         return response;
     } catch (error) {
@@ -480,12 +929,12 @@ async function networkFirst(request, manifest) {
     }
 }
 
-async function staleWhileRevalidate(request, manifest) {
+async function staleWhileRevalidate(request, manifest, identity) {
     const cached = await caches.match(request);
 
     const network = fetch(request)
         .then(async (response) => {
-            await put(request, response.clone(), manifest);
+            await put(request, response.clone(), manifest, identity);
             return response;
         })
         // `?? Response.error()` matters: with nothing cached and the network down this
@@ -499,14 +948,14 @@ async function staleWhileRevalidate(request, manifest) {
 
 /* ----------------------------------------------------------------- cache writes ----- */
 
-async function put(request, response, manifest) {
+async function put(request, response, manifest, identity) {
     if (!cacheable(response)) {
         return;
     }
 
-    const cache = await caches.open(runtimeName(manifest));
+    const cache = await caches.open(runtimeName(manifest, identity));
     await cache.put(request, response);
-    await trim(cache, manifest);
+    await trim(cache, manifest.maxEntries);
 }
 
 /**
@@ -517,6 +966,13 @@ async function put(request, response, manifest) {
  * `no-store` is the server saying, in the only way it has, that this body belongs to one
  * person and one moment — component modules and page payloads carrying user data say
  * exactly that, and honouring it is what keeps them off disk.
+ *
+ * This is the first of the three things standing between a page payload and someone
+ * else's disk. The second is that the worker fetches pages without cookies at install
+ * time, so what it precaches is the guest rendering. The third is that anything cached
+ * per visit lives in a cache named after the signed-in identity, so it is unreachable
+ * from any other. A page reaches disk only when a developer wrote `->cacheable()`, which
+ * is the assertion that it renders the same for everyone.
  */
 function cacheable(response) {
     if (!response || !response.ok || response.status === 206 || response.type === 'opaque') {
@@ -533,8 +989,8 @@ function cacheable(response) {
  * trimmed, so ordinary browsing can no longer evict the app shell or the framework and
  * quietly take the application offline-capability away.
  */
-async function trim(cache, manifest) {
-    const max = manifest.maxEntries || 0;
+async function trim(cache, maxEntries) {
+    const max = maxEntries || 0;
 
     if (max <= 0) {
         return;
@@ -563,8 +1019,67 @@ function precacheName(manifest) {
     return `${PREFIX}-precache-${manifest.version || 'v1'}-${manifest.hash}`;
 }
 
-function runtimeName(manifest) {
-    return `${PREFIX}-runtime-${manifest.version || 'v1'}`;
+function pagesPrefix(manifest) {
+    return `${PREFIX}-pages-${manifest.version || 'v1'}-${manifest.hash}-`;
+}
+
+/**
+ * Where page payloads for one signed-in identity live.
+ *
+ * Keyed by the build as well as the identity. A page payload embeds the compiled
+ * component, so one stored before a deploy holds the previous build's markup; keeping it
+ * would serve last week's page to someone offline on this week's shell. They are
+ * re-precached at install and re-cached as the visitor browses.
+ */
+function pagesName(manifest, identity) {
+    return pagesPrefix(manifest) + identity;
+}
+
+function runtimePrefix(manifest) {
+    return `${PREFIX}-runtime-${manifest.version || 'v1'}-`;
+}
+
+function runtimeName(manifest, identity) {
+    return runtimePrefix(manifest) + (identity || 'anon');
+}
+
+function dataName(manifest, group, identity) {
+    return `${PREFIX}-data-${group.name}-${group.version || 1}-${identity || 'anon'}`;
+}
+
+/**
+ * Keep the number of distinct identities bounded.
+ *
+ * Every person who signs in on this device leaves a set of caches behind. On a shared
+ * machine — a library, a clinic, a shop floor — that grows without limit and eventually
+ * the browser evicts storage of its own accord, which takes the application's offline
+ * capability with it. Oldest-first is approximated by cache-key order, which is
+ * insertion order.
+ */
+async function trimIdentities(manifest) {
+    const limit = manifest.identityCacheLimit || 2;
+    const prefix = pagesPrefix(manifest);
+    const keys = (await caches.keys()).filter((key) => key.startsWith(prefix));
+
+    if (keys.length <= limit) {
+        return;
+    }
+
+    const doomed = keys.slice(0, keys.length - limit).map((key) => key.slice(prefix.length));
+
+    await Promise.all(doomed.filter((identity) => identity !== 'anon').map((identity) => forget(manifest, identity)));
+}
+
+/** Drop everything held for one identity, leaving every other identity untouched. */
+async function forget(manifest, identity) {
+    const keys = await caches.keys();
+    const suffix = `-${identity}`;
+
+    await Promise.all(
+        keys
+            .filter((key) => key.startsWith(`${PREFIX}-`) && key.endsWith(suffix) && !key.endsWith('-anon'))
+            .map((key) => caches.delete(key))
+    );
 }
 
 async function precacheFor(manifest) {

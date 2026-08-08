@@ -46,6 +46,7 @@ class Shell
                 : null,
             'serviceWorkerScope' => (string) $this->config->get('pwax.service_worker.scope', '/'),
             'csrf' => $this->csrfToken(),
+            'identity' => $this->identity(),
             'home' => $this->pwax->homeUrl(),
             'plugins' => $this->extensions('pwax.plugins'),
             'directives' => $this->extensions('pwax.directives'),
@@ -248,6 +249,74 @@ class Shell
             // ordinary case here, not an error.
             return null;
         }
+    }
+
+    /**
+     * An opaque, stable label for whoever is signed in — or null for a guest.
+     *
+     * The service worker stores page payloads and API responses, and the Cache API is
+     * scoped to the origin, not to a user. On a shared device that would let one person's
+     * cached page be served to the next. This value is what the worker names those caches
+     * after, so a request from one identity cannot reach another's entries at all — the
+     * separation is structural rather than a matter of clearing things in time.
+     *
+     * It is an HMAC rather than the user id itself. The id would be published in a JSON
+     * island on every page for no benefit, and it is the same id in every other system
+     * that knows this user. This is meaningless anywhere but here, and cannot be reversed.
+     */
+    public function identity(): ?string
+    {
+        $id = $this->userId();
+
+        if ($id === null) {
+            return null;
+        }
+
+        $key = (string) $this->config->get('app.key');
+
+        return substr(hash_hmac('sha256', 'pwax:identity:v1|' . $id, $key), 0, 16);
+    }
+
+    /**
+     * The authenticated user's identifier, if this request has one.
+     *
+     * Every step here can throw or be absent — there may be no request, no session, no
+     * auth binding at all. That is the ordinary case for the offline shell and for the
+     * manifest builder, not an error.
+     */
+    private function userId(): ?string
+    {
+        try {
+            if ($this->request === null) {
+                return null;
+            }
+
+            $user = $this->request->user();
+
+            if ($user === null) {
+                return null;
+            }
+
+            $id = $user->getAuthIdentifier();
+
+            return is_scalar($id) ? (string) $id : null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * A copy of this shell with no request behind it.
+     *
+     * Used when rendering the shell for something other than serving it to a visitor —
+     * hashing it for the asset manifest, above all. Rendered against the ambient request
+     * it would pick up that visitor's CSRF token and identity, and a manifest containing
+     * either is a manifest that differs per person: every visitor would get their own
+     * cache name and re-download the whole application.
+     */
+    public function withoutRequest(): self
+    {
+        return new self($this->config, $this->pwax, $this->views, null);
     }
 
     /**

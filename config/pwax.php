@@ -581,9 +581,11 @@ return [
         |
         | Application routes to make available offline.
         |
-        | The worker fetches each one the way the client runtime does — with
-        | `Accept: application/json` and `X-Pwax-Component` — and stores the JSON
-        | payload, not the HTML.
+        | Each one is stored twice: the JSON payload the runtime asks for when routing
+        | client-side, and the rendered HTML a navigation gets — the document with the
+        | component already inlined in its `pwax-initial` island. That second copy is
+        | why an offline navigation paints the page immediately instead of showing the
+        | shell's spinner while the runtime fetches a payload it already has.
         |
         | They are fetched without cookies, so what is stored is the guest rendering.
         | A route behind auth answers that request with a login screen rather than a

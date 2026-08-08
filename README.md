@@ -696,6 +696,11 @@ install, so the whole application works offline before any of it has been visite
 Route::get('/settings', fn () => pwaxRender('pages.settings'));   // found
 ```
 
+Each precached page is stored twice: the JSON payload for client-side routing, and the
+rendered HTML for a direct navigation — the document with the component already inlined in
+its `pwax-initial` island, so an offline navigation paints at once rather than showing a
+spinner while the runtime fetches something it already has.
+
 Discovery reads the route's action for a literal view name given to `pwaxRender()`,
 `Pwax::render()` or `pwax()`. That view name is the point — `service_worker.components`
 scopes pages the same way it scopes components, so `'all'` takes every page and

@@ -21,6 +21,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   setting governs pages and components alike. `service_worker.pages.discover`.
 - **Runtime page caching**, which covers what discovery cannot — a parameterised route
   someone actually opened. `service_worker.pages.runtime`.
+- Precached pages store their rendered **document** as well as their payload, so an offline
+  navigation paints immediately from the inlined `pwax-initial` island instead of showing
+  the shell's spinner while the runtime fetches a payload it already has.
 - **Per-identity cache partitioning.** Pages, runtime entries and API responses are stored
   in caches named after an opaque HMAC of the signed-in user. One person's cached page is
   not merely cleared when another signs in — it was never reachable under their name.

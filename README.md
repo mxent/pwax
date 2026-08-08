@@ -1016,6 +1016,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `service_worker.pages.runtime` | `true` | Cache pages as they are visited |
 | `service_worker.pages.strategy`, `.timeout` | `freshness`, `2000` | How a page payload is fetched |
 | `service_worker.pages.credentials` | `'omit'` | Precache the guest rendering, not one visitor's |
+| `service_worker.pages.as_components` | `false` | Also precache page views as importable modules |
 | `service_worker.data_groups` | `[]` | API response caching |
 | `service_worker.navigation_strategy` | `network-first` | Or `app-shell` for zero-round-trip navigation |
 | `service_worker.navigation_urls` | see config | Which navigations the worker claims |

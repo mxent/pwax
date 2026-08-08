@@ -28,6 +28,7 @@ use Mxent\Pwax\Minification\MatthiasMullieMinifier;
 use Mxent\Pwax\Minification\NullMinifier;
 use Mxent\Pwax\Pwa\AssetManifest;
 use Mxent\Pwax\Pwa\ComponentRegistry;
+use Mxent\Pwax\Pwa\PublicAssets;
 use Mxent\Pwax\Pwa\WebManifest;
 use Mxent\Pwax\Support\ComponentId;
 use Mxent\Pwax\Support\Shell;
@@ -177,6 +178,15 @@ class PwaxServiceProvider extends ServiceProvider
             $app->make(Filesystem::class),
         ));
 
+        // Bound per resolution, not shared: it walks `public/` and remembers what it
+        // found, which is right for one manifest build and wrong for a long-lived
+        // process that should notice a deploy.
+        $this->app->bind(PublicAssets::class, fn ($app): PublicAssets => new PublicAssets(
+            $app,
+            $app->make(Config::class),
+            $app->make(Filesystem::class),
+        ));
+
         $this->app->bind(AssetManifest::class, function ($app): AssetManifest {
             /** @var Config $config */
             $config = $app->make(Config::class);
@@ -188,6 +198,8 @@ class PwaxServiceProvider extends ServiceProvider
                 $app->make(WebManifest::class),
                 $app->make(ComponentRegistry::class),
                 $app,
+                $app->make(ViewFactory::class),
+                $app->make(PublicAssets::class),
                 $this->cacheStore($app, (string) $config->get('pwax.cache.store', '') ?: null),
             );
         });

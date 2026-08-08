@@ -105,6 +105,61 @@ class WebManifest
     }
 
     /**
+     * The icon for `<link rel="icon">` — the browser tab, bookmarks, history.
+     *
+     * A manifest icon is used in preference to `favicon.ico` when one is declared, since
+     * it is the artwork the application actually chose; the smallest square at or above
+     * 32px, because a tab favicon is drawn at 16 or 32 and downscaling a 512px PNG for it
+     * is wasted bytes on every page load.
+     *
+     * `null` rather than a guess when there is nothing: emitting a link to a file that is
+     * not there costs a 404 on every navigation.
+     */
+    public function favicon(): ?string
+    {
+        $configured = $this->config->get('pwax.head.icon');
+
+        if (is_string($configured) && $configured !== '') {
+            return $configured;
+        }
+
+        $best = null;
+        $bestSize = PHP_INT_MAX;
+
+        foreach ($this->icons() as $icon) {
+            $src = $icon['src'] ?? null;
+
+            if (! is_string($src) || $src === '') {
+                continue;
+            }
+
+            $purpose = strtolower((string) ($icon['purpose'] ?? 'any'));
+
+            if ($purpose !== '' && ! str_contains($purpose, 'any')) {
+                continue;
+            }
+
+            $size = $this->largestSquare((string) ($icon['sizes'] ?? ''));
+
+            if ($size === null || $size < 32 || $size >= $bestSize) {
+                continue;
+            }
+
+            $best = $src;
+            $bestSize = $size;
+        }
+
+        return $best ?? ($this->hasFaviconFile() ? '/favicon.ico' : null);
+    }
+
+    private function hasFaviconFile(): bool
+    {
+        $root = rtrim((string) $this->app->publicPath(), '/\\');
+
+        return $root !== '' && is_file($root . DIRECTORY_SEPARATOR . 'favicon.ico');
+    }
+
+    /**
      * Icon entries, normalised to arrays.
      *
      * @return list<array<string, mixed>>

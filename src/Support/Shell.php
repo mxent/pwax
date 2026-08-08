@@ -42,9 +42,13 @@ class Shell
             'nonce' => $this->nonce(),
             'pinia' => (bool) $this->config->get('pwax.assets.pinia', true),
             'serviceWorker' => $this->config->get('pwax.service_worker.enabled', false)
-                ? (string) $this->config->get('pwax.service_worker.path', '/service-worker.js')
+                ? (string) $this->config->get('pwax.service_worker.path', '/sw.js')
                 : null,
             'serviceWorkerScope' => (string) $this->config->get('pwax.service_worker.scope', '/'),
+            'serviceWorkerLegacyPaths' => array_values(array_filter(
+                (array) $this->config->get('pwax.service_worker.legacy_paths', []),
+                'is_string'
+            )),
             'csrf' => $this->csrfToken(),
             'identity' => $this->identity(),
             'home' => $this->pwax->homeUrl(),

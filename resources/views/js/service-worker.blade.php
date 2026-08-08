@@ -17,6 +17,20 @@
     $manifest ??= [];
     $prefix = (string) ($manifest['cachePrefix'] ?? config('pwax.service_worker.cache_name', 'pwax'));
     $manifestUrl = '/' . ltrim((string) config('pwax.service_worker.asset_manifest.path', '/sw.json'), '/');
+
+    // Assembled here rather than inline below, because `@json` splits its argument on
+    // commas — it reads them as (value, flags, depth) — so an array literal written in
+    // the directive is shredded into a syntax error.
+    $swConfig = [
+        'hash' => (string) ($manifest['hash'] ?? ''),
+        'version' => (string) ($manifest['version'] ?? 'v1'),
+        'strategy' => (string) ($manifest['strategy'] ?? 'network-first'),
+        'maxEntries' => (int) ($manifest['maxEntries'] ?? 60),
+        'navigationPreload' => (bool) ($manifest['navigationPreload'] ?? true),
+        'shellUrl' => $manifest['shellUrl'] ?? null,
+        'offlineUrl' => $manifest['offlineUrl'] ?? null,
+        'assetPrefixes' => array_values((array) ($manifest['assetPrefixes'] ?? [])),
+    ];
 @endphp
 /*!
  * pwax service worker
@@ -52,16 +66,7 @@ const PENDING_KEY = '/__pwax__/sw-pending';
  * serve when a navigation fails — so that a worker the browser revived after terminating
  * it can respond immediately without a network round trip.
  */
-const CONFIG = @json([
-    'hash' => (string) ($manifest['hash'] ?? ''),
-    'version' => (string) ($manifest['version'] ?? 'v1'),
-    'strategy' => (string) ($manifest['strategy'] ?? 'network-first'),
-    'maxEntries' => (int) ($manifest['maxEntries'] ?? 60),
-    'navigationPreload' => (bool) ($manifest['navigationPreload'] ?? true),
-    'shellUrl' => $manifest['shellUrl'] ?? null,
-    'offlineUrl' => $manifest['offlineUrl'] ?? null,
-    'assetPrefixes' => array_values((array) ($manifest['assetPrefixes'] ?? [])),
-], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+const CONFIG = @json($swConfig, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
 const OFFLINE_HTML =
     '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +

@@ -111,6 +111,27 @@ export class FakeCaches {
 }
 
 /**
+ * Reject a `@json()` argument that Blade cannot actually compile.
+ *
+ * Blade's `@json` is naive: it does `explode(',', $expression)` and reads the parts as
+ * (value, flags, depth). An array literal written inside the directive is therefore torn
+ * apart at its commas and emitted as a PHP syntax error — which the view only reveals
+ * when it is rendered, and which this harness would otherwise paper over by substituting
+ * the expression wholesale.
+ */
+function assertBladeCanCompile(expression) {
+    const parts = expression.split(',');
+
+    if (parts.length > 3) {
+        throw new Error(
+            `pwax test: @json(${expression.trim().slice(0, 40)}…) has ${parts.length} ` +
+                'comma-separated parts. Blade reads them as (value, flags, depth), so this ' +
+                'compiles to invalid PHP. Build the value in the @php block and pass one variable.'
+        );
+    }
+}
+
+/**
  * Render the Blade worker the way `PwaxController::serviceWorker()` does.
  */
 export function render(manifest) {
@@ -162,6 +183,8 @@ export function render(manifest) {
                 break;
             }
         }
+
+        assertBladeCanCompile(source.slice(start + 6, end));
 
         out += JSON.stringify(values[index++]);
         cursor = end + 1;

@@ -66,7 +66,7 @@ class PageRegistry
     {
         $pages = [];
 
-        foreach ($this->router->getRoutes() as $route) {
+        foreach ($this->router->getRoutes()->getRoutes() as $route) {
             $url = $this->urlFor($route);
 
             if ($url === null) {
@@ -259,6 +259,6 @@ class PageRegistry
 
         $lines = @file($file, FILE_IGNORE_NEW_LINES);
 
-        return $this->sources[$file] = $lines === false ? null : array_values($lines);
+        return $this->sources[$file] = $lines === false ? null : $lines;
     }
 }

@@ -186,6 +186,65 @@ class OfflineManifestTest extends TestCase
         $this->assertNotContains('pwax::layouts.shell', $views);
     }
 
+    /**
+     * Every package that calls `loadViewsFrom()` registers a view namespace — Laravel's
+     * own exception page renderer among them. Those are not components an application
+     * imports, and precaching them both fills the manifest with URLs that cannot render
+     * offline and mints a signed, publicly addressable URL for each one.
+     */
+    public function test_package_view_namespaces_are_not_scanned_by_default(): void
+    {
+        $this->registerNamespacedView('acme-ui');
+
+        $views = array_column($this->app->make(ComponentRegistry::class)->all(), 'view');
+
+        $this->assertNotContains('acme-ui::components.widget', $views);
+        // The application's own views are still found.
+        $this->assertContains('components.modal', $views);
+    }
+
+    public function test_a_namespace_can_be_opted_into(): void
+    {
+        $this->registerNamespacedView('acme-ui');
+
+        config()->set('pwax.service_worker.namespaces', ['acme-ui']);
+
+        $this->assertContains(
+            'acme-ui::components.widget',
+            array_column($this->app->make(ComponentRegistry::class)->all(), 'view')
+        );
+    }
+
+    public function test_the_packages_own_namespace_is_never_scanned(): void
+    {
+        // Even asked for explicitly: these are shell fragments and the worker source.
+        config()->set('pwax.service_worker.namespaces', ['pwax']);
+
+        $views = array_column($this->app->make(ComponentRegistry::class)->all(), 'view');
+
+        $this->assertSame([], array_filter($views, static fn (string $v): bool => str_starts_with($v, 'pwax::')));
+    }
+
+    /**
+     * Register a throwaway package view namespace containing one component.
+     */
+    private function registerNamespacedView(string $namespace): void
+    {
+        $path = sys_get_temp_dir() . '/pwax-' . $namespace . '-' . getmypid();
+
+        @mkdir($path . '/components', 0o777, true);
+        file_put_contents($path . '/components/widget.blade.php', "<template>\n    <b>widget</b>\n</template>\n");
+
+        $this->app->make(\Illuminate\Contracts\View\Factory::class)
+            ->addNamespace($namespace, $path);
+
+        $this->beforeApplicationDestroyed(function () use ($path): void {
+            @unlink($path . '/components/widget.blade.php');
+            @rmdir($path . '/components');
+            @rmdir($path);
+        });
+    }
+
     public function test_the_registry_finds_script_only_components(): void
     {
         $path = __DIR__ . '/../fixtures/views/middleware';

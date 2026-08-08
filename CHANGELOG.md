@@ -87,6 +87,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Precaching ran every request in parallel. An application with a hundred components
   produced a hundred simultaneous requests, which `php artisan serve` — single-threaded —
   answers by queueing until connections are refused. At most six now run at once.
+- Component discovery scanned every registered view namespace, so a real installation
+  found `laravel-exceptions-renderer::components.query` — part of Laravel's debug error
+  page — and put it in the offline manifest. Every package that calls `loadViewsFrom()`
+  registered one, and none of those views are components an application imports:
+  precaching them fills the manifest with URLs that cannot render offline and mints a
+  signed, publicly addressable URL for each. Only the application's own view paths are
+  scanned now; namespaces are opt-in through `service_worker.namespaces`.
+- A precache entry the server refused with `Cache-Control: no-store` was counted and
+  reported as a failed asset, so an install behaving exactly as designed logged
+  "3 of 10 assets could not be precached" and sent people looking for a network fault.
+  Refusals are now reported separately, and say what to do about them.
 
 ### Changed
 

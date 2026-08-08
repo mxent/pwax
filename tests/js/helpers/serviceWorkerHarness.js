@@ -241,10 +241,13 @@ export function createWorker({ manifest, caches = new FakeCaches(), routes }) {
         Response,
         Headers,
         URL,
+        // Every level is recorded: the worker distinguishes a failure (warn) from a
+        // deliberate skip (info), and a harness that dropped one of them could not tell
+        // an alarming install from a correct one.
         console: {
             warn: (...args) => log.push(['warn', ...args]),
-            info: () => {},
-            error: () => {},
+            info: (...args) => log.push(['info', ...args]),
+            error: (...args) => log.push(['error', ...args]),
         },
     };
 

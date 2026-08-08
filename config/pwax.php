@@ -445,6 +445,17 @@ return [
         'paths' => [],
 
         /*
+        | Package view namespaces to scan as well, e.g. ['ui'] for `@pwax('ui::button')`.
+        |
+        | Empty by default, and deliberately so. Every package that calls
+        | `loadViewsFrom()` registers a namespace — Laravel's own exception page renderer
+        | among them — and none of those views are components your application imports.
+        | Scanning them fills the manifest with URLs that cannot render offline, and mints
+        | a signed, publicly addressable URL for each one.
+        */
+        'namespaces' => [],
+
+        /*
         | Additional URLs to precache.
         |
         | `files` are static files under `public/` — a logo, a font, a stylesheet — and

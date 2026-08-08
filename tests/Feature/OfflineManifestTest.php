@@ -2,6 +2,7 @@
 
 namespace Mxent\Pwax\Tests\Feature;
 
+use Illuminate\Contracts\View\Factory as ViewFactory;
 use Mxent\Pwax\Pwa\AssetManifest;
 use Mxent\Pwax\Pwa\ComponentRegistry;
 use Mxent\Pwax\Tests\TestCase;
@@ -235,8 +236,7 @@ class OfflineManifestTest extends TestCase
         @mkdir($path . '/components', 0o777, true);
         file_put_contents($path . '/components/widget.blade.php', "<template>\n    <b>widget</b>\n</template>\n");
 
-        $this->app->make(\Illuminate\Contracts\View\Factory::class)
-            ->addNamespace($namespace, $path);
+        $this->app->make(ViewFactory::class)->addNamespace($namespace, $path);
 
         $this->beforeApplicationDestroyed(function () use ($path): void {
             @unlink($path . '/components/widget.blade.php');

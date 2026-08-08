@@ -583,21 +583,24 @@ return [
         |
         | The worker fetches each one the way the client runtime does — with
         | `Accept: application/json` and `X-Pwax-Component` — and stores the JSON
-        | payload, not the HTML. Asking for the HTML is what the worker used to do, and
-        | why this feature never worked: the HTML shell is `no-store`, so every entry
-        | was silently refused.
+        | payload, not the HTML.
         |
-        | A route listed here must call ->cacheable(). A page payload is `no-store` by
-        | default because it can embed the signed-in user's data, and the worker honours
-        | that. Pages that have not opted in are reported rather than dropped in silence.
+        | They are fetched without cookies, so what is stored is the guest rendering.
+        | A route behind auth answers that request with a login screen rather than a
+        | payload, which is refused and reported — so listing one is harmless, it just
+        | will not be there before sign-in.
         |
-        |     Route::get('/about', fn () => pwaxRender('pages.about')->cacheable());
+        | `runtime` caches pages as they are visited, which is what makes everywhere
+        | you have been work offline rather than only the routes you listed. Those go
+        | in a cache named for the signed-in identity, so one visitor's pages are
+        | unreachable from another's session on the same device; see
+        | `identity_cache_limit` below.
         |
-        | `runtime` caches pages as they are visited, which is what makes everywhere you
-        | have been work offline rather than only the routes you remembered to list.
-        | Those are stored per signed-in identity and dropped when it changes; see
-        | `identity_cache_limit` below. Turn it off if no page on this application may
-        | reach disk.
+        | Between them these decide whether page content reaches disk at all. Turn
+        | `runtime` off if none of it may; for a single page, ->offline(false) refuses
+        | outright:
+        |
+        |     Route::get('/codes', fn () => pwaxRender('pages.codes')->offline(false));
         */
         'pages' => [
             'urls' => [],

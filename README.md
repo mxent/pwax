@@ -689,22 +689,26 @@ The page *content* for a route is a separate question, and it is the one that de
 whether the application is genuinely usable offline or merely renders a shell. Two
 mechanisms cover it.
 
-**Precached pages.** A page that renders the same for everyone can say so, and is then
-fetched at install time and available before it has ever been visited:
-
-```php
-Route::get('/about', fn () => pwaxRender('pages.about')->cacheable());
-Route::get('/docs/{page}', fn ($page) => pwaxRender('pages.docs', [...])
-    ->cacheable(86400, shared: true));
-```
+**Precached pages.** Routes fetched at install time, so they work offline before they have
+ever been visited:
 
 ```php
 'service_worker' => ['pages' => ['urls' => ['/', '/about']]],
 ```
 
-Only the JSON payload becomes cacheable — the HTML shell stays `no-store` because it
-carries the CSRF token. The worker fetches these anonymously, so what it stores is the
-guest rendering, which is what "renders the same for everyone" means.
+The worker asks for these without cookies, so what it stores is the guest rendering. A
+route behind `auth` answers that request with a login screen rather than a payload, which
+is refused and reported — listing one is harmless, it just will not be there before
+sign-in.
+
+`->cacheable()` is a separate matter: it relaxes the *HTTP* caching headers on a page
+payload, letting the browser and any shared proxy hold it too. It is not needed for
+offline.
+
+```php
+Route::get('/docs/{page}', fn ($page) => pwaxRender('pages.docs', [...])
+    ->cacheable(86400, shared: true));
+```
 
 **Visited pages.** On by default, and what makes an authenticated application work
 offline rather than only its public routes: every page a visitor opens is cached as they
@@ -821,7 +825,7 @@ building another one.
 | Response | Caching |
 | --- | --- |
 | Page HTML | `no-store, private` — carries the CSRF token |
-| Page JSON | `no-store, private`, unless the route calls `->cacheable()` |
+| Page JSON | `no-store, private`, unless the route calls `->cacheable()` (an HTTP-cache hint; the service worker stores it either way unless `->offline(false)`) |
 | Component module (`/__pwax__/c/{id}.js`) | `private, max-age`, with an `ETag` → `304` |
 | `pwax.js` | `public, max-age=31536000, immutable` |
 | Web manifest | `public, max-age=86400`, with an `ETag` |
@@ -895,22 +899,28 @@ Supply the nonce for Pwax's inline `<style>` and JSON blocks:
 
 ### What the service worker will and will not store
 
-The Cache Storage API ignores HTTP cache directives, so a service worker that stores
-whatever it fetches writes signed-in users' rendered pages to disk — where the next person
-to use that device is served them offline. Pwax's worker refuses to store any response
-carrying `Cache-Control: no-store`, which is every page Pwax renders, and navigations are
-never cached at all. What is precached instead is the session-free offline shell.
+The Cache Storage API ignores HTTP cache directives, so a worker that stores whatever it
+fetches writes signed-in users' rendered pages to disk — where the next person to use that
+device is served them offline. Assets carrying `Cache-Control: no-store` are refused
+outright, and a navigation's HTML is never stored on any path: what is served offline is
+the session-free shell.
 
-Two things are worth knowing:
+Page payloads are the deliberate exception, because a shell with nothing to render in it
+is not an offline app. Three things make storing them safe, and they are worth knowing:
 
-- **`->cacheable()` is a promise you are making.** It says this page renders the same for
-  every visitor. Nothing can check that for you.
-- **A component can still vary by user** — an admin-only branch, a localised string — and
-  precached components are stored per browser profile, not per user. On a shared device,
-  call `pwax.sw.clearCaches()` when someone signs out.
-- **Visited pages are cached by default** (`service_worker.pages.runtime`). They are
-  partitioned by signed-in identity and `->offline(false)` exempts a page entirely, but
-  the trade is real: turn it off if no page in this application may reach disk.
+- **They are partitioned by identity.** A visited page goes in a cache named after an
+  opaque HMAC of the signed-in user, so another session on the same device cannot reach
+  it — it is not cleared later, it was never addressable. Call
+  `pwax.sw.forgetIdentity(window.pwax.config.identity)` on sign-out to drop it at once.
+- **Precached pages are fetched without cookies**, so what installs is the guest
+  rendering. A route behind `auth` answers with a login screen and is refused.
+- **`->offline(false)` refuses outright**, for a page that must not reach disk under any
+  circumstances — a one-time code, a recovery key. `service_worker.pages.runtime => false`
+  turns the whole behaviour off.
+
+One thing this does not cover: **a component can still vary by user** — an admin-only
+branch, a localised string — and precached components are stored per browser profile, not
+per identity. On a shared device, call `pwax.sw.clearCaches()` when someone signs out.
 
 ### Your responsibilities
 
@@ -980,7 +990,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `service_worker.max_files`, `.max_bytes` | `2000`, `64 MB` | Ceilings on what a glob may pull in |
 | `service_worker.source_maps` | `false` | Precache `.map` files |
 | `service_worker.exclude_files` | `[]` | Globs never precached |
-| `service_worker.pages.urls` | `[]` | Routes precached as payloads; each needs `->cacheable()` |
+| `service_worker.pages.urls` | `[]` | Routes precached as payloads, fetched without cookies |
 | `service_worker.pages.runtime` | `true` | Cache pages as they are visited |
 | `service_worker.pages.strategy`, `.timeout` | `freshness`, `2000` | How a page payload is fetched |
 | `service_worker.pages.credentials` | `'omit'` | Precache the guest rendering, not one visitor's |

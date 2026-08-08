@@ -33,6 +33,7 @@
         'offlineUrl' => $manifest['offlineUrl'] ?? null,
         'assetPrefixes' => array_values((array) ($manifest['assetPrefixes'] ?? [])),
         'pageHeaders' => (array) ($manifest['pageHeaders'] ?? []),
+        'crossOrigin' => array_values((array) ($manifest['crossOrigin'] ?? [])),
     ];
 @endphp
 /*!
@@ -79,6 +80,9 @@ const CONCURRENCY = 6;
  * it can respond immediately without a network round trip.
  */
 const CONFIG = @json($swConfig, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+/** Third-party URLs this build precached, and the only ones we answer off-origin. */
+const CROSS_ORIGIN = new Set(CONFIG.crossOrigin || []);
 
 const OFFLINE_HTML =
     '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
@@ -189,11 +193,38 @@ self.addEventListener('fetch', (event) => {
     }
 
     if (new URL(request.url).origin !== self.location.origin) {
+        // Third-party requests are none of our business — with one exception. An asset the
+        // manifest deliberately precached from another origin, a CDN copy of Vue under
+        // `assets.strategy = 'cdn'` or anything in `pwax.scripts` pointing off-site, was
+        // being fetched at install and then never served from that cache: the handler
+        // returned here before looking. A CDN-hosted framework could not start offline at
+        // all, however completely it had been precached.
+        //
+        // Matched against a list inlined into this file rather than read from the stored
+        // manifest, because `respondWith` has to be called synchronously and everything
+        // not on the list must be left entirely alone.
+        if (CROSS_ORIGIN.has(request.url)) {
+            event.respondWith(crossOriginAsset(event));
+        }
+
         return;
     }
 
     event.respondWith(route(event));
 });
+
+/** A precached third-party asset, falling back to the network. */
+async function crossOriginAsset(event) {
+    try {
+        const manifest = await state();
+        const precache = await precacheFor(manifest);
+        const hit = precache && (await precache.match(event.request, { ignoreVary: true }));
+
+        return hit || (await fetch(event.request));
+    } catch {
+        return fetch(event.request);
+    }
+}
 
 /* ---------------------------------------------------------------- installation ----- */
 
@@ -262,11 +293,11 @@ async function install() {
 
     if (skipped.length) {
         console.info(
-            `pwax sw: ${skipped.length} URL(s) are excluded from offline caching because the ` +
-                'server sent `Cache-Control: no-store`, or answered a page request with ' +
-                'something other than JSON. Pages rendered by pwaxRender() are `no-store` ' +
-                'unless the route calls ->cacheable(); a page that redirects to a login ' +
-                'screen answers with HTML. Run `php artisan pwax:precache --verify`.',
+            `pwax sw: ${skipped.length} URL(s) were not stored. An asset the server marked ` +
+                '`Cache-Control: no-store`, a page marked ->offline(false), or a page that ' +
+                'answered with something other than JSON — a route behind auth redirects to ' +
+                'a login screen when asked for without cookies, which is refused on purpose. ' +
+                'Run `php artisan pwax:precache --verify`.',
             skipped
         );
     }
@@ -372,11 +403,13 @@ async function store(cache, url, { hash, inherited, previous, crossOrigin, kind,
     // A page must actually be a payload. `fetch` follows redirects silently, so a route
     // behind `auth` answers 200 with the login page's HTML — perfectly `ok`, and useless
     // as a cached page. Storing it would serve the login screen for that route forever.
+    // This is also what keeps an authenticated route out of the anonymous precache: asked
+    // for without cookies, it answers with the login screen and is refused here.
     if (page && !isJson(response)) {
         return false;
     }
 
-    if (!cacheable(response)) {
+    if (!(page ? storablePage(response) : cacheable(response))) {
         return false;
     }
 
@@ -617,7 +650,7 @@ async function page(request, manifest, group, identity) {
 
         // Not a payload — a login screen, a maintenance page, a captive portal. Hand it
         // back so the runtime can act on it, but do not remember it as this page.
-        if (response.ok && isJson(response) && cacheable(response)) {
+        if (isJson(response) && storablePage(response)) {
             await cache.put(pageKey(new URL(request.url).pathname + new URL(request.url).search), response.clone());
             await trim(cache, group.maxEntries || manifest.maxEntries);
         }
@@ -988,6 +1021,30 @@ function cacheable(response) {
     }
 
     return !/(^|,)\s*no-store\s*(,|$)/i.test(response.headers.get('Cache-Control') || '');
+}
+
+/**
+ * May this page payload be stored?
+ *
+ * Deliberately *not* `cacheable()`, and the difference is the whole of offline page
+ * support. A page payload is `no-store, private` by default — correctly, because it can
+ * embed the signed-in user's data and must never reach a shared HTTP cache. Applying that
+ * rule here too would mean the page cache only ever held routes that had called
+ * `->cacheable()`, which is what "runtime page caching" quietly was until this existed:
+ * an empty cache and an offline app that could render its shell and nothing else.
+ *
+ * What makes storing it safe is not the header, it is where it goes. The cache is named
+ * after the signed-in identity, so another identity cannot reach these entries at all;
+ * install-time copies are fetched without cookies, so what they hold is the guest
+ * rendering; and `->offline(false)` refuses outright, for a page that must not touch disk
+ * under any circumstances. `service_worker.pages.runtime` turns the whole thing off.
+ */
+function storablePage(response) {
+    if (!response || !response.ok || response.status === 206 || response.type === 'opaque') {
+        return false;
+    }
+
+    return response.headers.get('X-Pwax-Cache') !== 'none';
 }
 
 /**

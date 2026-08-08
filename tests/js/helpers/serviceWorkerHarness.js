@@ -238,6 +238,7 @@ export function render(manifest) {
             offlineUrl: manifest.offlineUrl,
             assetPrefixes: manifest.assetPrefixes,
             pageHeaders: manifest.pageHeaders || PAGE_HEADERS,
+            crossOrigin: manifest.crossOrigin,
         },
     ];
 

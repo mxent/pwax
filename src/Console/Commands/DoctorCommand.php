@@ -75,7 +75,7 @@ class DoctorCommand extends Command
     private function checkRemovedConfig(Config $config): void
     {
         $replacements = [
-            'pwax.service_worker.precache' => 'service_worker.pages.urls (and each route needs ->cacheable())',
+            'pwax.service_worker.precache' => 'service_worker.pages.urls, though most routes are now discovered automatically',
             'pwax.service_worker.files' => 'service_worker.asset_groups, which takes globs',
             'pwax.helpers.global' => 'nothing — vue() and router() were removed in 3.0',
         ];
@@ -317,6 +317,26 @@ class DoctorCommand extends Command
 
         foreach ($warnings as $warning) {
             $this->warn_($warning);
+        }
+
+        // The symptom that sends people looking: everything caches, `pwax-pages` is empty,
+        // and offline shows a connection error. Usually it means no route was discoverable
+        // and none was listed, so nothing was ever precached as a page.
+        $pages = 0;
+
+        foreach ($groups as $group) {
+            if (($group['kind'] ?? null) === 'page') {
+                $pages = count($group['urls']);
+            }
+        }
+
+        if ($pages === 0) {
+            $this->warn_(
+                'No pages will be precached, so a route works offline only after it has '
+                . 'been visited. Discovery reads each GET route for a literal view name '
+                . 'given to pwaxRender(); a computed name or a parameterised route cannot '
+                . 'be read and belongs in service_worker.pages.urls.'
+            );
         }
 
         if ((bool) $config->get('pwax.service_worker.pages.runtime', true)) {

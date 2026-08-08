@@ -28,6 +28,7 @@ use Mxent\Pwax\Minification\MatthiasMullieMinifier;
 use Mxent\Pwax\Minification\NullMinifier;
 use Mxent\Pwax\Pwa\AssetManifest;
 use Mxent\Pwax\Pwa\ComponentRegistry;
+use Mxent\Pwax\Pwa\PageRegistry;
 use Mxent\Pwax\Pwa\PublicAssets;
 use Mxent\Pwax\Pwa\WebManifest;
 use Mxent\Pwax\Support\ComponentId;
@@ -163,6 +164,12 @@ class PwaxServiceProvider extends ServiceProvider
             $app->make(Filesystem::class),
         ));
 
+        $this->app->bind(PageRegistry::class, fn ($app): PageRegistry => new PageRegistry(
+            $app->make(Router::class),
+            $app->make(Config::class),
+            $app->make(ComponentRegistry::class),
+        ));
+
         // Bound per resolution, not shared: it walks `public/` and remembers what it
         // found, which is right for one manifest build and wrong for a long-lived
         // process that should notice a deploy.
@@ -182,6 +189,7 @@ class PwaxServiceProvider extends ServiceProvider
                 $app->make(Shell::class),
                 $app->make(WebManifest::class),
                 $app->make(ComponentRegistry::class),
+                $app->make(PageRegistry::class),
                 $app,
                 $app->make(ViewFactory::class),
                 $app->make(PublicAssets::class),

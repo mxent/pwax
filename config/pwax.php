@@ -581,20 +581,32 @@ return [
         |
         | Application routes to make available offline.
         |
-        | The worker fetches each one the way the client runtime does — with
-        | `Accept: application/json` and `X-Pwax-Component` — and stores the JSON
-        | payload, not the HTML.
+        | Each one is stored twice: the JSON payload the runtime asks for when routing
+        | client-side, and the rendered HTML a navigation gets — the document with the
+        | component already inlined in its `pwax-initial` island. That second copy is
+        | why an offline navigation paints the page immediately instead of showing the
+        | shell's spinner while the runtime fetches a payload it already has.
         |
         | They are fetched without cookies, so what is stored is the guest rendering.
         | A route behind auth answers that request with a login screen rather than a
         | payload, which is refused and reported — so listing one is harmless, it just
         | will not be there before sign-in.
         |
-        | `runtime` caches pages as they are visited, which is what makes everywhere
-        | you have been work offline rather than only the routes you listed. Those go
-        | in a cache named for the signed-in identity, so one visitor's pages are
-        | unreachable from another's session on the same device; see
-        | `identity_cache_limit` below.
+        | `discover` finds them for you. Every GET route whose action hands a literal
+        | view name to pwaxRender() is precached, so installing from the home page and
+        | then opening Settings offline works without either page having been visited.
+        | Scoped by `components` above: 'all' takes every page, ['pages.*'] takes only
+        | the ones whose view matches — one setting governs pages and components alike.
+        |
+        | A route that computes its view name, or renders through a service, cannot be
+        | read statically and belongs in `urls`. So does a parameterised route, which
+        | is a template rather than a page. `php artisan pwax:precache` lists exactly
+        | what was found.
+        |
+        | `runtime` caches pages as they are visited, which covers what discovery
+        | cannot — a `/posts/{post}` someone actually opened. Those go in a cache named
+        | for the signed-in identity, so one visitor's pages are unreachable from
+        | another's session on the same device; see `identity_cache_limit` below.
         |
         | Between them these decide whether page content reaches disk at all. Turn
         | `runtime` off if none of it may; for a single page, ->offline(false) refuses
@@ -604,6 +616,7 @@ return [
         */
         'pages' => [
             'urls' => [],
+            'discover' => true,
             'runtime' => true,
             'strategy' => 'freshness',   // 'freshness' | 'performance'
             'timeout' => 2000,

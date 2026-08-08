@@ -84,9 +84,16 @@ function server(current, { cacheable = [ABOUT], down = new Set() } = {}) {
             const wants = request && request.headers.get('X-Pwax-Component') === 'true';
 
             if (!wants) {
-                return new Response('<html>page</html>', {
-                    headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-store, private' },
-                });
+                // What ComponentResponse::shell() renders: the SPA shell with the
+                // component inlined in a `pwax-initial` island. `no-store` because it
+                // would carry a CSRF token for a session — there is none here, since the
+                // worker asks without cookies.
+                return new Response(
+                    `<html><div id="pwax"></div><script id="pwax-initial">{"url":"${path}"}</script></html>`,
+                    {
+                        headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-store, private' },
+                    }
+                );
             }
 
             return new Response(JSON.stringify({ template: `<p>${path}</p>` }), {
@@ -238,6 +245,86 @@ describe('page payloads offline', () => {
         await expect((await response).json()).resolves.toEqual({ template: '<p>/dashboard</p>' });
     });
 
+    /**
+     * The payload alone is enough to work offline, but it means a spinner and a second
+     * round trip on a device that already has everything. The document has the component
+     * inlined in `pwax-initial`, so the page paints at once.
+     */
+    it('answers an offline navigation with the page\'s own document', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        await boot(current, { caches });
+
+        const response = await offline(current, caches).navigate(ABOUT);
+
+        await expect((await response).text()).resolves.toContain('pwax-initial');
+    });
+
+    it('fetches the document without cookies, like the payload', async () => {
+        const worker = await boot();
+
+        const documents = worker.requests.filter(
+            (r) => new URL(r.url).pathname === ABOUT && r.headers.get('X-Pwax-Component') !== 'true'
+        );
+
+        expect(documents).toHaveLength(1);
+        expect(documents[0].credentials).toBe('omit');
+    });
+
+    /**
+     * Ordering that carries weight: a route behind auth answers an anonymous request with
+     * a login screen. As JSON that is detectable and refused; as HTML it is
+     * indistinguishable from a real page. Requiring the payload to succeed first is what
+     * stops a login screen being cached as somebody's Settings page.
+     */
+    it('does not store a document when the payload was refused', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        const worker = createWorker({
+            manifest: current,
+            caches,
+            routes: (path, request) => {
+                if (path === '/sw.json') {
+                    return Response.json(current);
+                }
+
+                if (path === ABOUT) {
+                    // A login screen, whichever way it is asked for.
+                    return new Response('<html>login</html>', {
+                        headers: { 'Content-Type': 'text/html', 'Cache-Control': 'public' },
+                    });
+                }
+
+                return new Response('<html>shell</html>', {
+                    headers: { 'Content-Type': 'text/html', 'Cache-Control': 'public' },
+                });
+            },
+        });
+
+        await worker.dispatch('install');
+        await worker.dispatch('activate');
+
+        const precache = await caches.open('pwax-precache-v1-h1');
+
+        await expect(precache.match(ABOUT)).resolves.toBeUndefined();
+    });
+
+    it('falls back to the shell for a page it has no document for', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
+
+        // Visited, so its payload is cached — but no document was ever precached for it.
+        await visit(worker, DASHBOARD);
+
+        const response = await offline(current, caches).navigate(DASHBOARD);
+
+        await expect((await response).text()).resolves.toBe('<html>shell</html>');
+    });
+
     it('never answers a navigation with a page payload', async () => {
         const current = manifest();
         const caches = new FakeCaches();
@@ -247,9 +334,12 @@ describe('page payloads offline', () => {
         const worker = offline(current, caches);
         const response = await worker.navigate(ABOUT);
 
-        // The shell, not the JSON that is also stored under this URL. A document request
-        // answered with JSON is a download prompt.
-        await expect((await response).text()).resolves.toBe('<html>shell</html>');
+        // HTML, never the JSON payload that is also stored for this URL. A document
+        // request answered with JSON is a download prompt.
+        const body = await (await response).text();
+
+        expect(body).toContain('<html');
+        expect(body).not.toContain('template');
     });
 
     it('does not serve one identity a page cached for another', async () => {

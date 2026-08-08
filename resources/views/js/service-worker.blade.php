@@ -269,6 +269,7 @@ async function install() {
             crossOrigin: crossOrigin.has(entry.url),
             kind: entry.kind,
             credentials: entry.credentials,
+            documents: entry.kind === 'page' ? cache : null,
         })
     );
 
@@ -367,7 +368,7 @@ async function activate() {
  * re-downloaded — the difference between a few kilobytes and the whole application on
  * every deploy, over whatever connection the visitor happens to have.
  */
-async function store(cache, url, { hash, inherited, previous, crossOrigin, kind, credentials }) {
+async function store(cache, url, { hash, inherited, previous, crossOrigin, kind, credentials, documents }) {
     const page = kind === 'page';
 
     if (hash && inherited.get(url) === hash) {
@@ -417,7 +418,47 @@ async function store(cache, url, { hash, inherited, previous, crossOrigin, kind,
     // response's `Vary` can be satisfied on lookup.
     await cache.put(page ? pageKey(url) : url, response);
 
+    if (page && documents) {
+        await storeDocument(documents, url, credentials);
+    }
+
     return true;
+}
+
+/**
+ * Store the page's rendered HTML, so an offline navigation gets the real document.
+ *
+ * The payload alone is enough to *work* offline — the shell boots and the runtime renders
+ * from it — but it means a spinner and a second round trip on a device that already has
+ * everything. The document has the component inlined in its `pwax-initial` island, so an
+ * offline navigation paints the page immediately, exactly as an online one does.
+ *
+ * Deliberately in the precache rather than beside the payload. Both are the same URL, and
+ * page responses vary on `Accept` among other things — a document stored next to the JSON
+ * would need a key carrying the exact `Accept` string the browser sends on a navigation,
+ * which differs between browsers and is not knowable here. Separate caches make each
+ * lookup unambiguous. The precache is also simply where it belongs: fetched without
+ * cookies, identical for every visitor, versioned and swept with the build, exactly like
+ * the offline shell.
+ *
+ * Only ever called after the payload fetch succeeded, and that ordering is load-bearing.
+ * A route behind `auth` answers an anonymous request with a login screen; as JSON that is
+ * detectable and refused, as HTML it is indistinguishable from a real page. Requiring the
+ * payload first is what stops a login screen being cached as somebody's Settings page.
+ */
+async function storeDocument(cache, url, credentials) {
+    try {
+        const response = await fetch(
+            new Request(url, { cache: 'reload', credentials: credentials || 'omit' })
+        );
+
+        if (response.ok && response.status !== 206 && storablePage(response)) {
+            await cache.put(url, response);
+        }
+    } catch {
+        // The payload is already stored and is what offline correctness depends on. A
+        // document that could not be fetched costs a spinner, not a broken page.
+    }
 }
 
 function isJson(response) {
@@ -862,10 +903,10 @@ async function navigate(event, manifest) {
     }
 
     if (manifest.navigationStrategy === 'app-shell') {
-        const shell = await shellDocument(manifest);
+        const cached = (await pageDocument(manifest, path)) || (await shellDocument(manifest));
 
-        if (shell) {
-            return shell;
+        if (cached) {
+            return cached;
         }
     }
 
@@ -878,7 +919,29 @@ async function navigate(event, manifest) {
 
         return await fetch(event.request);
     } catch {
-        return (await shellDocument(manifest)) || offlineDocument();
+        // This page's own HTML first, and the shell only if there is none. The shell is a
+        // correct answer but a worse one: it paints a spinner and waits for the runtime to
+        // fetch a payload, where the document already has the component inlined.
+        return (
+            (await pageDocument(manifest, path)) || (await shellDocument(manifest)) || offlineDocument()
+        );
+    }
+}
+
+/**
+ * The precached HTML for a specific path, if this build stored one.
+ *
+ * Looked up in the precache by exact URL. A page whose document was never precached — one
+ * cached at runtime as it was visited, or a route discovery could not read — simply has
+ * none, and the shell answers instead.
+ */
+async function pageDocument(manifest, path) {
+    try {
+        const precache = await precacheFor(manifest);
+
+        return precache ? (await precache.match(path, { ignoreVary: true })) || null : null;
+    } catch {
+        return null;
     }
 }
 

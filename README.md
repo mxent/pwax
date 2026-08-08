@@ -689,12 +689,33 @@ The page *content* for a route is a separate question, and it is the one that de
 whether the application is genuinely usable offline or merely renders a shell. Two
 mechanisms cover it.
 
-**Precached pages.** Routes fetched at install time, so they work offline before they have
-ever been visited:
+**Precached pages.** Every route that renders a page is found automatically and fetched at
+install, so the whole application works offline before any of it has been visited:
 
 ```php
-'service_worker' => ['pages' => ['urls' => ['/', '/about']]],
+Route::get('/settings', fn () => pwaxRender('pages.settings'));   // found
 ```
+
+Each precached page is stored twice: the JSON payload for client-side routing, and the
+rendered HTML for a direct navigation — the document with the component already inlined in
+its `pwax-initial` island, so an offline navigation paints at once rather than showing a
+spinner while the runtime fetches something it already has.
+
+Discovery reads the route's action for a literal view name given to `pwaxRender()`,
+`Pwax::render()` or `pwax()`. That view name is the point — `service_worker.components`
+scopes pages the same way it scopes components, so `'all'` takes every page and
+`['pages.*']` takes only the ones whose view matches. One setting, both halves.
+
+What it cannot read statically — a computed view name, a render behind a service, or a
+parameterised route like `/posts/{post}`, which is a template rather than a page — goes in
+the list by hand:
+
+```php
+'service_worker' => ['pages' => ['urls' => ['/posts/hello-world']]],
+```
+
+`php artisan pwax:precache` prints exactly what was found. Turn discovery off with
+`pages.discover => false`.
 
 The worker asks for these without cookies, so what it stores is the guest rendering. A
 route behind `auth` answers that request with a login screen rather than a payload, which
@@ -990,7 +1011,8 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `service_worker.max_files`, `.max_bytes` | `2000`, `64 MB` | Ceilings on what a glob may pull in |
 | `service_worker.source_maps` | `false` | Precache `.map` files |
 | `service_worker.exclude_files` | `[]` | Globs never precached |
-| `service_worker.pages.urls` | `[]` | Routes precached as payloads, fetched without cookies |
+| `service_worker.pages.urls` | `[]` | Extra routes to precache, beyond the discovered ones |
+| `service_worker.pages.discover` | `true` | Find every route that renders a page, scoped by `components` |
 | `service_worker.pages.runtime` | `true` | Cache pages as they are visited |
 | `service_worker.pages.strategy`, `.timeout` | `freshness`, `2000` | How a page payload is fetched |
 | `service_worker.pages.credentials` | `'omit'` | Precache the guest rendering, not one visitor's |

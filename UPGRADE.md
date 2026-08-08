@@ -153,13 +153,41 @@ see the authenticated user.
 | `middleware` (client middleware) | `middleware_js` — `middleware` is now the **server** middleware stack |
 | `service_worker.cache_name` (versioned) | `service_worker.cache_name` + `service_worker.version` |
 | `service_worker.network_first` (bool) | `service_worker.strategy` (`'network-first'` \| `'stale-while-revalidate'`) |
+| `service_worker.precache => ['/']` | `[]` — the offline shell replaces it, see below |
 | — | `shell`, `components.*`, `assets.*`, `minify.*`, `csp.nonce`, `routes.*` |
+| — | `service_worker.components`, `.exclude`, `.files`, `.shell.*`, `.asset_manifest.*` |
+| — | `manifest.id`, `.lang`, `.display_override`, `.screenshots`, `.shortcuts`, and the rest of the spec |
 
 Republishing the config is easiest:
 
 ```bash
 php artisan vendor:publish --tag=pwax-config --force
 ```
+
+**If you published the service worker, republish it.** The worker is now driven by the
+asset manifest at `/sw.json` rather than by a list of URLs baked into its source:
+
+```bash
+php artisan vendor:publish --tag=pwax-service-worker --force
+```
+
+Keeping a 1.x-era worker is not fatal — it will carry on caching lazily as before — but
+none of the offline behaviour applies to it, and it still calls `skipWaiting()` during
+install, which reloads every open tab on each deploy.
+
+Then check what you actually get offline:
+
+```bash
+php artisan pwax:precache
+php artisan pwax:doctor
+```
+
+**`precache => ['/']` should be removed.** Precaching your home page stored one signed-in
+user's HTML for the next user of that device to be served, and only covered that one
+route. The offline shell at `/__pwax__/shell` replaces it: it is precached automatically,
+covers every route, and has nothing in it to leak. If you keep application routes in
+`precache`, note that a response the server marked `no-store` is no longer stored — which
+is every page rendered by `pwax_component()` unless the route calls `->cacheable()`.
 
 **Plugin, directive and middleware values are no longer evaluated as JavaScript.** Each
 is now either a component reference or a dotted path looked up on `window`:

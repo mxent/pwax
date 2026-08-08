@@ -99,6 +99,58 @@ class ShellTest extends TestCase
         $this->assertContains('https://example.test/b.js', $sources);
     }
 
+    /**
+     * The service worker needs the framework separated from the application's own extra
+     * scripts: the framework failing to install means the app will not start, an
+     * analytics tag failing means nothing at all.
+     */
+    public function test_framework_scripts_exclude_configured_extras_and_the_runtime(): void
+    {
+        config()->set('pwax.scripts', ['https://example.test/analytics.js']);
+
+        $sources = array_column($this->shell()->frameworkScripts(), 'src');
+
+        $this->assertCount(3, $sources);
+        $this->assertNotContains('https://example.test/analytics.js', $sources);
+        $this->assertStringNotContainsString('pwax.js', implode(' ', $sources));
+    }
+
+    public function test_vendor_scripts_are_preloaded(): void
+    {
+        $preloads = $this->shell()->vendorPreloads();
+
+        // `<link rel="preload">` takes href, not src.
+        $this->assertSame(
+            array_column($this->shell()->vendorScripts(), 'src'),
+            array_column($preloads, 'href')
+        );
+        $this->assertArrayNotHasKey('src', $preloads[0]);
+    }
+
+    /**
+     * A preload whose credentials mode differs from the eventual script fetch is not
+     * reused, and the browser downloads the file twice.
+     */
+    public function test_preloads_carry_integrity_and_crossorigin(): void
+    {
+        config()->set('pwax.assets.strategy', 'cdn');
+
+        $vue = $this->shell()->vendorPreloads()[0];
+
+        $this->assertStringStartsWith('sha384-', $vue['integrity']);
+        $this->assertSame('anonymous', $vue['crossorigin']);
+    }
+
+    /**
+     * The offline shell is rendered outside the `web` group precisely so that what gets
+     * precached has no session-bound token in it.
+     */
+    public function test_the_csrf_token_is_absent_without_a_session(): void
+    {
+        $this->assertNull($this->shell()->csrfToken());
+        $this->assertNull($this->shell()->runtimeConfig()['csrf']);
+    }
+
     public function test_attributes_are_escaped(): void
     {
         $html = (string) $this->shell()->attributes(['src' => '/a.js?a=1&b="x"', 'defer' => true]);

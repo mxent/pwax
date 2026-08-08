@@ -99,6 +99,64 @@ class CommandsTest extends TestCase
         $this->artisan('pwax:doctor')->assertFailed();
     }
 
+    public function test_the_doctor_command_flags_an_app_that_cannot_start_offline(): void
+    {
+        config()->set('pwax.service_worker.enabled', true);
+        config()->set('pwax.service_worker.assets', false);
+        config()->set('pwax.service_worker.shell.enabled', false);
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('offline')
+            ->assertFailed();
+    }
+
+    public function test_the_precache_command_lists_what_is_cached(): void
+    {
+        config()->set('pwax.service_worker.enabled', true);
+
+        $this->artisan('pwax:precache')
+            ->expectsOutputToContain('/__pwax__/pwax.js')
+            ->expectsOutputToContain('available offline')
+            ->assertSuccessful();
+    }
+
+    public function test_the_precache_command_can_emit_the_manifest(): void
+    {
+        config()->set('pwax.service_worker.enabled', true);
+
+        $this->artisan('pwax:precache', ['--json' => true])
+            ->expectsOutputToContain('"hashTable"')
+            ->assertSuccessful();
+    }
+
+    public function test_the_precache_command_reports_excluded_components(): void
+    {
+        config()->set('pwax.service_worker.enabled', true);
+        config()->set('pwax.service_worker.components', ['components.*']);
+
+        $this->artisan('pwax:precache')
+            ->expectsOutputToContain('excluded')
+            ->assertSuccessful();
+    }
+
+    public function test_the_precache_command_verifies_components_render(): void
+    {
+        config()->set('pwax.service_worker.enabled', true);
+        // `pages.needs-model` cannot be rendered from its view name alone, so it cannot
+        // be precached — which is exactly what --verify exists to surface.
+        config()->set('pwax.service_worker.components', ['pages.needs-model']);
+
+        $this->artisan('pwax:precache', ['--verify' => true])->assertFailed();
+    }
+
+    public function test_the_precache_command_passes_when_every_component_renders(): void
+    {
+        config()->set('pwax.service_worker.enabled', true);
+        config()->set('pwax.service_worker.components', ['components.*']);
+
+        $this->artisan('pwax:precache', ['--verify' => true])->assertSuccessful();
+    }
+
     public function test_the_install_command_publishes_the_config(): void
     {
         $this->artisan('pwax:install', ['--no-assets' => true, '--force' => true])->assertSuccessful();

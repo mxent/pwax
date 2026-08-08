@@ -5,23 +5,64 @@
 --}}
 @props(['shell', 'component' => null])
 @php
+    /** @var \Mxent\Pwax\Pwa\WebManifest $pwaxManifest */
+    $pwaxManifest = app(\Mxent\Pwax\Pwa\WebManifest::class);
+
     $nonce = $shell->nonce();
     $nonceAttr = $nonce ? ' nonce="' . e($nonce) . '"' : '';
     $manifestPath = config('pwax.manifest_path', '/manifest.webmanifest');
     $themeColor = config('pwax.manifest.theme_color');
+    $appName = config('pwax.manifest.short_name') ?: config('pwax.manifest.name');
+    $appleIcon = $pwaxManifest->appleTouchIcon();
+    $csrf = $shell->csrfToken();
     $background = config('pwax.customization.init_background', '#ffffff');
     $spinnerBg = config('pwax.customization.init_spinner_bg', '#f3f3f3');
     $spinnerColor = config('pwax.customization.init_spinner_color', '#0c83ff');
 @endphp
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="csrf-token" content="{{ csrf_token() }}">
+
+{{--
+    Absent on the offline shell, which is rendered with no session on purpose so that
+    nothing user-specific is precached. The runtime treats a missing token as "send no
+    CSRF header", and a 419 on the first write reloads the page to pick up a real one.
+--}}
+@if ($csrf)
+    <meta name="csrf-token" content="{{ $csrf }}">
+@endif
 
 @if ($themeColor)
     <meta name="theme-color" content="{{ $themeColor }}">
 @endif
 
 <link rel="manifest" href="{{ $manifestPath }}">
+
+{{--
+    iOS reads none of the manifest for the home screen. Without these three tags an
+    iPhone installs the app with a screenshot of the page as its icon, opens it in a
+    Safari chrome rather than standalone, and labels it with the <title>.
+--}}
+@if ($appleIcon)
+    <link rel="apple-touch-icon" href="{{ $appleIcon }}">
+@endif
+
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+
+@if ($appName)
+    <meta name="apple-mobile-web-app-title" content="{{ $appName }}">
+    <meta name="application-name" content="{{ $appName }}">
+@endif
+
+{{--
+    The framework is render-blocking by necessity — Vue Router and Pinia read the global
+    `Vue` when they evaluate — so tell the browser to start fetching all of it while the
+    head is still being parsed rather than discovering each one in turn.
+--}}
+@foreach ($shell->vendorPreloads() as $pwaxPreload)
+    <link rel="preload" as="script" {{ $shell->attributes($pwaxPreload) }}>
+@endforeach
 
 <style{!! $nonceAttr !!}>
     .pwax-preloader {

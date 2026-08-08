@@ -4,8 +4,10 @@ namespace Mxent\Pwax\Support;
 
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\View\Factory as ViewFactory;
+use Illuminate\Http\Request;
 use Illuminate\Support\HtmlString;
 use Mxent\Pwax\Pwax;
+use Throwable;
 
 /**
  * Assembles everything the SPA shell needs: vendor asset tags, the runtime
@@ -22,6 +24,7 @@ class Shell
         private readonly Config $config,
         private readonly Pwax $pwax,
         private readonly ViewFactory $views,
+        private readonly ?Request $request = null,
     ) {}
 
     /**
@@ -41,6 +44,8 @@ class Shell
             'serviceWorker' => $this->config->get('pwax.service_worker.enabled', false)
                 ? (string) $this->config->get('pwax.service_worker.path', '/service-worker.js')
                 : null,
+            'serviceWorkerScope' => (string) $this->config->get('pwax.service_worker.scope', '/'),
+            'csrf' => $this->csrfToken(),
             'home' => $this->pwax->homeUrl(),
             'plugins' => $this->extensions('pwax.plugins'),
             'directives' => $this->extensions('pwax.directives'),
@@ -74,6 +79,29 @@ class Shell
      */
     public function vendorScripts(): array
     {
+        $tags = $this->frameworkScripts();
+
+        foreach ((array) $this->config->get('pwax.scripts', []) as $script) {
+            $tags[] = is_array($script) ? $script : ['src' => (string) $script];
+        }
+
+        $tags[] = ['src' => $this->runtimeUrl()];
+
+        return $tags;
+    }
+
+    /**
+     * Vue, Vue Router and Pinia alone — without the application's own extra scripts.
+     *
+     * The distinction matters to the service worker. These three and the runtime are the
+     * application: an install that could not fetch them has produced something that will
+     * not start, and should fail rather than pretend. An analytics tag someone added to
+     * `pwax.scripts` is not in that category and must never be able to fail an install.
+     *
+     * @return list<array<string, string|bool>>
+     */
+    public function frameworkScripts(): array
+    {
         $strategy = (string) $this->config->get('pwax.assets.strategy', 'local');
         /** @var array<string, string> $versions */
         $versions = $this->config->get('pwax.assets.versions', []);
@@ -97,13 +125,53 @@ class Shell
                 : ['src' => $this->localAsset($file, $versions[$package] ?? null)];
         }
 
-        foreach ((array) $this->config->get('pwax.scripts', []) as $script) {
-            $tags[] = is_array($script) ? $script : ['src' => (string) $script];
+        return $tags;
+    }
+
+    /**
+     * The URL the client runtime bundle is served from.
+     */
+    public function runtimeUrl(): string
+    {
+        return $this->pwax->route('pwax.runtime');
+    }
+
+    /**
+     * `<link rel="preload">` attributes for the vendor scripts.
+     *
+     * The scripts themselves have to stay render-blocking and in order — Vue Router and
+     * Pinia read the global `Vue` as they evaluate — but the browser has no reason to
+     * discover them one at a time. Preloading starts all of them from the head.
+     *
+     * `integrity` and `crossorigin` are carried across deliberately: a preload whose
+     * credentials mode differs from the eventual script fetch is not reused, and the
+     * browser downloads the file twice.
+     *
+     * @return list<array<string, string|bool>>
+     */
+    public function vendorPreloads(): array
+    {
+        $preloads = [];
+
+        foreach ($this->vendorScripts() as $script) {
+            $src = $script['src'] ?? null;
+
+            if (! is_string($src) || $src === '') {
+                continue;
+            }
+
+            $attributes = ['href' => $src];
+
+            foreach (['integrity', 'crossorigin'] as $name) {
+                if (isset($script[$name])) {
+                    $attributes[$name] = $script[$name];
+                }
+            }
+
+            $preloads[] = $attributes;
         }
 
-        $tags[] = ['src' => $this->pwax->route('pwax.runtime')];
-
-        return $tags;
+        return $preloads;
     }
 
     /**
@@ -151,6 +219,35 @@ class Shell
         }
 
         return new HtmlString(implode(' ', $parts));
+    }
+
+    /**
+     * The CSRF token for this request, or null when there is no session.
+     *
+     * The offline shell is rendered outside the `web` group precisely so that what gets
+     * precached has no session-bound token in it — a token cached on disk and replayed
+     * days later is worthless at best. `csrf_token()` throws in that situation, so the
+     * absence has to be a supported answer rather than an error.
+     *
+     * A shell served without a token still works: the runtime simply sends no CSRF
+     * header, and the first write it attempts comes back 419, which it already handles by
+     * reloading the page to pick up a fresh one.
+     */
+    public function csrfToken(): ?string
+    {
+        try {
+            if ($this->request === null || ! $this->request->hasSession()) {
+                return null;
+            }
+
+            $session = $this->request->session();
+
+            return $session->isStarted() ? $session->token() : null;
+        } catch (Throwable) {
+            // A request with no session store raises rather than answering. That is the
+            // ordinary case here, not an error.
+            return null;
+        }
     }
 
     /**

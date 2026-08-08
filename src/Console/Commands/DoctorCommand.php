@@ -4,6 +4,9 @@ namespace Mxent\Pwax\Console\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as Config;
+use Mxent\Pwax\Pwa\AssetManifest;
+use Mxent\Pwax\Pwa\ComponentRegistry;
+use Mxent\Pwax\Pwa\WebManifest;
 
 /**
  * Checks the things that are easy to get wrong and hard to notice: a missing
@@ -20,6 +23,14 @@ class DoctorCommand extends Command
 
     private int $warnings = 0;
 
+    public function __construct(
+        private readonly WebManifest $manifest,
+        private readonly AssetManifest $assets,
+        private readonly ComponentRegistry $registry,
+    ) {
+        parent::__construct();
+    }
+
     public function handle(Config $config): int
     {
         $this->components->info('Checking your Pwax installation');
@@ -30,6 +41,7 @@ class DoctorCommand extends Command
         $this->checkRuntimeBundle();
         $this->checkManifest($config);
         $this->checkServiceWorker($config);
+        $this->checkPrecache($config);
         $this->checkRouting($config);
 
         $this->newLine();
@@ -121,16 +133,54 @@ class DoctorCommand extends Command
             );
         }
 
-        /** @var list<array{sizes?: string}> $icons */
-        $icons = $manifest['icons'] ?? [];
-        $sizes = array_map(static fn (array $i): string => (string) ($i['sizes'] ?? ''), $icons);
+        $sizes = $this->manifest->declaredSizes();
 
         // Chromium requires both to offer an install prompt.
-        foreach (['192x192', '512x512'] as $required) {
+        foreach ([192, 512] as $required) {
             $this->assert(
                 in_array($required, $sizes, true),
-                sprintf('Manifest has a %s icon', $required),
-                sprintf('pwax.manifest.icons has no %s entry; browsers will not offer to install the app.', $required)
+                sprintf('Manifest has a %dx%d icon', $required, $required),
+                sprintf(
+                    'pwax.manifest.icons has no %dx%d entry; browsers will not offer to install the app.',
+                    $required,
+                    $required
+                )
+            );
+        }
+
+        if (! $this->manifest->hasMaskableIcon()) {
+            $this->warn_(
+                'No icon declares purpose "maskable". Android will draw the icon inside a white '
+                . 'rounded square instead of filling the launcher shape.'
+            );
+        }
+
+        if (empty($manifest['id'])) {
+            $this->warn_(
+                'pwax.manifest.id is not set, so the installed app is identified by start_url. '
+                . 'Changing start_url later would orphan every existing install; set id now and '
+                . 'never change it.'
+            );
+        }
+
+        $scope = (string) ($manifest['scope'] ?? '/');
+        $start = (string) ($manifest['start_url'] ?? '/');
+
+        $this->assert(
+            str_starts_with($this->pathOf($start), $this->pathOf($scope)),
+            'Manifest start_url is inside scope',
+            sprintf(
+                'pwax.manifest.start_url (%s) is outside pwax.manifest.scope (%s). The manifest '
+                . 'is invalid and the app will not install.',
+                $start,
+                $scope
+            )
+        );
+
+        if (($manifest['screenshots'] ?? []) === []) {
+            $this->warn_(
+                'pwax.manifest.screenshots is empty. Chromium falls back to a minimal install '
+                . 'prompt without at least one wide and one narrow screenshot.'
             );
         }
     }
@@ -154,6 +204,112 @@ class DoctorCommand extends Command
                 $path
             )
         );
+
+        $this->assert(
+            (bool) $config->get('pwax.service_worker.shell.enabled', true),
+            'Offline app shell is enabled',
+            'pwax.service_worker.shell.enabled is false, so a navigation made offline has nothing '
+            . 'to fall back to and the browser shows its own error page.'
+        );
+
+        $this->assert(
+            (bool) $config->get('pwax.service_worker.assets', true),
+            'Framework and runtime are precached',
+            'pwax.service_worker.assets is false, so Vue and the client runtime are only cached '
+            . 'after they have been fetched online. A first visit followed by going offline will '
+            . 'show nothing at all.'
+        );
+
+        if ($config->get('pwax.service_worker.components', 'all') === false) {
+            $this->warn_(
+                'pwax.service_worker.components is false, so components are only cached after they '
+                . 'have been loaded online. Pages the visitor has not opened will not work offline.'
+            );
+        }
+
+        $precache = (array) $config->get('pwax.service_worker.precache', []);
+
+        if ($precache !== []) {
+            $this->warn_(sprintf(
+                'pwax.service_worker.precache lists %d application route(s). Pages rendered by '
+                . 'pwax_component() are sent as "no-store" and the worker refuses to store them, '
+                . 'so these entries do nothing unless the routes are genuinely public and static.',
+                count($precache)
+            ));
+        }
+    }
+
+    /**
+     * Report how much of the application is actually reachable offline.
+     */
+    private function checkPrecache(Config $config): void
+    {
+        if (! $config->get('pwax.service_worker.enabled', false)) {
+            return;
+        }
+
+        try {
+            $manifest = $this->assets->build();
+        } catch (\Throwable $e) {
+            $this->problems++;
+            $this->components->twoColumnDetail(
+                'The asset manifest could not be built: ' . $e->getMessage(),
+                '<fg=red>FAIL</>'
+            );
+
+            return;
+        }
+
+        /** @var list<array{name: string, urls: list<string>}> $groups */
+        $groups = $manifest['assetGroups'] ?? [];
+
+        $counts = [];
+        $total = 0;
+
+        foreach ($groups as $group) {
+            $counts[] = sprintf('%d %s', count($group['urls']), $group['name']);
+            $total += count($group['urls']);
+        }
+
+        $this->assert(
+            $total > 0,
+            sprintf('Asset manifest lists %s', $counts === [] ? 'nothing' : implode(', ', $counts)),
+            'The asset manifest is empty, so the service worker has nothing to install.'
+        );
+
+        $components = count($this->registry->all());
+        $selected = count($this->registry->precachable());
+
+        if ($components > 0 && $selected < $components) {
+            $this->warn_(sprintf(
+                '%d of %d components are excluded from precaching. Run `php artisan pwax:precache` '
+                . 'to see which.',
+                $components - $selected,
+                $components
+            ));
+        }
+
+        /** @var list<string> $crossOrigin */
+        $crossOrigin = $manifest['crossOrigin'] ?? [];
+
+        if ($crossOrigin !== []) {
+            $this->warn_(sprintf(
+                '%d asset(s) are cross-origin. They are precached on a best-effort basis and an '
+                . 'install will not fail if the CDN is unreachable — but the app may not start '
+                . 'offline until it is.',
+                count($crossOrigin)
+            ));
+        }
+    }
+
+    /**
+     * The path component of a manifest URL, which may be absolute or relative.
+     */
+    private function pathOf(string $url): string
+    {
+        $path = parse_url($url, PHP_URL_PATH);
+
+        return is_string($path) && $path !== '' ? $path : '/';
     }
 
     private function checkRouting(Config $config): void

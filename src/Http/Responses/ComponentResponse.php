@@ -25,6 +25,10 @@ class ComponentResponse implements Responsable
 {
     private bool $forceJson = false;
 
+    private ?int $payloadTtl = null;
+
+    private bool $sharedCache = false;
+
     private int $status = 200;
 
     /** @var array<string, string> */
@@ -45,6 +49,33 @@ class ComponentResponse implements Responsable
     public function asJson(bool $force = true): self
     {
         $this->forceJson = $force;
+
+        return $this;
+    }
+
+    /**
+     * Let this page's payload be stored, so the route works offline.
+     *
+     * Page payloads are `no-store` by default and the service worker honours that, which
+     * is why a signed-in user's rendered page never reaches disk. The cost is that such a
+     * page is not available offline — correctly, since its content is not knowable
+     * without the server.
+     *
+     * A page that renders the same for everyone has no such problem, and this is how you
+     * say so. Only the JSON payload becomes cacheable; the HTML shell stays `no-store`
+     * because it carries the CSRF token, and a cached token is worthless at best.
+     *
+     *     Route::get('/about', fn () => pwax_component('pages.about')->cacheable());
+     *
+     * Do not call this on a page whose output depends on the visitor. There is no way for
+     * the package to tell the difference, and a cache is not a place to find out.
+     *
+     * @param  bool  $shared  Allow proxies and CDNs to cache it too, not just the browser.
+     */
+    public function cacheable(int $seconds = 3600, bool $shared = false): self
+    {
+        $this->payloadTtl = max(0, $seconds);
+        $this->sharedCache = $shared;
 
         return $this;
     }
@@ -96,10 +127,15 @@ class ComponentResponse implements Responsable
             $this->headers
         );
 
-        // A page payload is request-specific: it can embed the authenticated user's
-        // data. It must never land in a shared cache. (Reusable components served from
-        // the /__pwax__ endpoints are cached separately, with an ETag.)
-        $response->headers->set('Cache-Control', 'no-store, private');
+        // A page payload is request-specific by default: it can embed the authenticated
+        // user's data, so it must never land in a shared cache and the service worker
+        // must not store it. `cacheable()` is how a page that renders the same for
+        // everyone opts out of that. (Reusable components served from the /__pwax__
+        // endpoints are cached separately, with an ETag.)
+        $response->headers->set('Cache-Control', $this->payloadTtl === null
+            ? 'no-store, private'
+            : sprintf('%s, max-age=%d', $this->sharedCache ? 'public' : 'private', $this->payloadTtl));
+
         $response->headers->set('Vary', Pwax::VARY);
 
         return $response;

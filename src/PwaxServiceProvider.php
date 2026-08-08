@@ -7,6 +7,7 @@ use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\Http\Kernel as HttpKernelContract;
 use Illuminate\Contracts\View\Factory as ViewFactory;
+use Illuminate\Filesystem\Filesystem;
 use Illuminate\Foundation\Http\Kernel as HttpKernel;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Blade;
@@ -19,11 +20,15 @@ use Mxent\Pwax\Console\Commands\ClearCommand;
 use Mxent\Pwax\Console\Commands\ComponentMakeCommand;
 use Mxent\Pwax\Console\Commands\DoctorCommand;
 use Mxent\Pwax\Console\Commands\InstallCommand;
+use Mxent\Pwax\Console\Commands\PrecacheCommand;
 use Mxent\Pwax\Contracts\Minifier;
 use Mxent\Pwax\Http\Middleware\HandlePwaxRequests;
 use Mxent\Pwax\Minification\CachedMinifier;
 use Mxent\Pwax\Minification\MatthiasMullieMinifier;
 use Mxent\Pwax\Minification\NullMinifier;
+use Mxent\Pwax\Pwa\AssetManifest;
+use Mxent\Pwax\Pwa\ComponentRegistry;
+use Mxent\Pwax\Pwa\WebManifest;
 use Mxent\Pwax\Support\ComponentId;
 use Mxent\Pwax\Support\Shell;
 
@@ -42,6 +47,7 @@ class PwaxServiceProvider extends ServiceProvider
                 ClearCommand::class,
                 ComponentMakeCommand::class,
                 DoctorCommand::class,
+                PrecacheCommand::class,
             ]);
         }
     }
@@ -142,11 +148,49 @@ class PwaxServiceProvider extends ServiceProvider
 
         $this->app->alias(Pwax::class, 'pwax');
 
-        $this->app->singleton(Shell::class, fn ($app): Shell => new Shell(
+        // Bound rather than shared: it reads the current request for the CSRF token, and
+        // a singleton would hold the first request it ever saw for the life of the
+        // process — which is every request under Octane or FrankenPHP.
+        $this->app->bind(Shell::class, fn ($app): Shell => new Shell(
             $app->make(Config::class),
             $app->make(Pwax::class),
             $app->make(ViewFactory::class),
+            $app->bound('request') ? $app->make('request') : null,
         ));
+
+        $this->registerPwa();
+    }
+
+    /**
+     * The progressive-web-app services: component discovery and the two manifests.
+     */
+    protected function registerPwa(): void
+    {
+        $this->app->singleton(WebManifest::class, fn ($app): WebManifest => new WebManifest(
+            $app->make(Config::class),
+            $app,
+        ));
+
+        $this->app->singleton(ComponentRegistry::class, fn ($app): ComponentRegistry => new ComponentRegistry(
+            $app->make(ViewFactory::class),
+            $app->make(Config::class),
+            $app->make(Filesystem::class),
+        ));
+
+        $this->app->bind(AssetManifest::class, function ($app): AssetManifest {
+            /** @var Config $config */
+            $config = $app->make(Config::class);
+
+            return new AssetManifest(
+                $config,
+                $app->make(Pwax::class),
+                $app->make(Shell::class),
+                $app->make(WebManifest::class),
+                $app->make(ComponentRegistry::class),
+                $app,
+                $this->cacheStore($app, (string) $config->get('pwax.cache.store', '') ?: null),
+            );
+        });
     }
 
     /**

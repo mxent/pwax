@@ -503,6 +503,10 @@ a 192×192 and a 512×512 icon before offering to install:
 
 ```php
 'manifest' => [
+    // Set this once and never change it. Without it a browser identifies the installed
+    // app by start_url, so changing start_url later orphans every existing install.
+    'id' => '/',
+
     'name' => 'My Application',
     'short_name' => 'MyApp',
     'theme_color' => '#0c83ff',
@@ -512,29 +516,126 @@ a 192×192 and a 512×512 icon before offering to install:
         ['src' => '/images/maskable.png', 'sizes' => '512x512', 'type' => 'image/png',
          'purpose' => 'maskable'],
     ],
+    'screenshots' => [
+        ['src' => '/images/wide.png', 'sizes' => '1280x720', 'type' => 'image/png',
+         'form_factor' => 'wide'],
+    ],
 ],
 ```
 
-### Service worker
+Every member of the [Web App Manifest specification](https://www.w3.org/TR/appmanifest/)
+is passed through, so `display_override`, `shortcuts`, `launch_handler`, `share_target`,
+`protocol_handlers` and the rest work by adding them to the array. Empty values are
+dropped — `false` and `0` are not, so `prefer_related_applications => false` survives.
 
-Off by default. Turn it on and pick a strategy:
+Pwax also emits the tags iOS needs, which are not in the manifest at all:
+`apple-touch-icon` (chosen from your non-maskable icons), `apple-mobile-web-app-capable`,
+`apple-mobile-web-app-title` and `application-name`.
+
+### Offline
+
+Off by default. Turn it on:
+
+```php
+'service_worker' => ['enabled' => true],
+```
+
+That is the whole configuration for a fully offline-capable app. Pwax generates an asset
+manifest at **`/sw.json`** — the same idea as Angular's `ngsw.json` — listing every URL
+the application is made of with a content hash:
+
+```json
+{
+  "hash": "9c41f0be2a7d5581",
+  "version": "v1",
+  "shellUrl": "/__pwax__/shell",
+  "assetGroups": [
+    { "name": "app", "installMode": "prefetch", "urls": [
+        "/vendor/pwax/vue.global.prod.js?v=3.5.41",
+        "/vendor/pwax/vue-router.global.prod.js?v=5.2.0",
+        "/__pwax__/pwax.js",
+        "/manifest.webmanifest",
+        "/__pwax__/shell"
+    ]},
+    { "name": "components", "installMode": "prefetch", "urls": [
+        "/__pwax__/c/Y29tcG9uZW50cy5tb2RhbA3f9a1c0d.js"
+    ]}
+  ],
+  "hashTable": { "/__pwax__/c/Y29tcG9uZW50cy5tb2RhbA3f9a1c0d.js": "a41c9b02f7de5163" },
+  "critical": ["/__pwax__/pwax.js", "/__pwax__/shell"]
+}
+```
+
+`service-worker.js` fetches that on install and caches the lot in one pass. **Nothing has
+to be visited first to be available**: a visitor who loaded one page can go offline and
+still reach every route and every component in the application.
+
+Components are discovered by scanning your view paths for Blade files with a `<template>`
+block, or a `<script>` block that exports — which also picks up the script-only views used
+for plugins, directives and client middleware. Include all of them, or pick:
 
 ```php
 'service_worker' => [
     'enabled' => true,
-    'version' => 'v1',              // bump to invalidate every client's cache
-    'precache' => ['/', '/offline'],
-    'strategy' => 'network-first',  // or 'stale-while-revalidate'
-    'offline_url' => '/offline',
+    'components' => 'all',                    // every component (default)
+    'components' => ['components.*', 'ui.*'], // only these
+    'components' => false,                    // none; cached lazily as they load
+    'exclude' => ['vendor.pwax.*', 'admin.*'],
+    'files' => ['/css/app.css', '/fonts/inter.woff2'],
 ],
 ```
 
-Navigations are always network-first — serving a stale HTML shell would pin visitors to
-an old build. Component and vendor assets use stale-while-revalidate. The cache is
-bounded by `max_entries`, only Pwax's own caches are ever deleted, and opaque
-cross-origin and partial (`206`) responses are never stored.
+See exactly what that resolves to:
 
-Publish the worker to customise it:
+```bash
+php artisan pwax:precache            # what will be available offline
+php artisan pwax:precache --verify   # …and which components actually render
+php artisan pwax:precache --json     # the manifest itself
+```
+
+### Cache busting
+
+Each entry is content-addressed and the digest of the whole table names the cache, so
+**shipping a change is just deploying it**. A release that changed one component
+re-downloads that one file and copies the rest from the previous cache; a client can never
+end up with a mix of two builds. `version` is still there, but only for when you want to
+discard everything deliberately:
+
+```php
+'service_worker' => ['version' => 'v2'],
+```
+
+The manifest hash is embedded in `service-worker.js` itself. That is what makes a deploy
+reach an existing install: a browser only treats a worker as new if its bytes differ, so a
+worker whose source never changed would leave clients on the build they first installed.
+
+### The offline shell
+
+Navigations always go to the network, and their responses are **never stored**. The Cache
+API ignores HTTP cache directives, so a worker that cached what it fetched would persist
+to disk exactly the documents the server marked `no-store, private` — a signed-in user's
+rendered page, which the next person to use that device would be served offline.
+
+Instead Pwax precaches `/__pwax__/shell`: the same SPA shell rendered with no session, no
+CSRF token and no page component, identical for every visitor. When a navigation cannot
+reach the network the worker serves that, the runtime boots, and client-side routing
+carries on as normal.
+
+The page *content* for a route is still fetched from the server, and is `no-store` for the
+same reason. A page that renders the same for everyone can say so, and then works offline
+too:
+
+```php
+Route::get('/about', fn () => pwax_component('pages.about')->cacheable());
+Route::get('/docs/{page}', fn ($page) => pwax_component('pages.docs', [...])
+    ->cacheable(86400, shared: true));
+```
+
+Only the JSON payload becomes cacheable — the HTML shell stays `no-store` because it
+carries the CSRF token.
+
+Point `offline_url` at your own page to replace the fallback, publish the worker to change
+its behaviour:
 
 ```bash
 php artisan vendor:publish --tag=pwax-service-worker
@@ -551,6 +652,29 @@ document.addEventListener('pwax:update-available', (event) => {
         event.detail.activate(); // page reloads once the new worker takes over
     }
 });
+```
+
+The page reloads **only** when it asked for the update. A worker that activated for any
+other reason will not restart your users' tabs and discard what they were typing.
+
+An open tab re-checks for a new build hourly and when it regains focus. `pwax.sw.update()`
+checks on demand.
+
+### Going offline and back
+
+```js
+document.addEventListener('pwax:offline', () => banner.hidden = false);
+document.addEventListener('pwax:online', () => banner.hidden = true);
+```
+
+### On sign-out
+
+The worker refuses to store anything the server marked `no-store`, so pages never reach
+disk. Components can still render differently for an administrator, so on a shared device
+it is worth clearing them:
+
+```js
+await window.pwax.sw.clearCaches();
 ```
 
 ## Frontend assets
@@ -601,10 +725,13 @@ building another one.
 
 | Response | Caching |
 | --- | --- |
-| Page HTML / JSON | `no-store, private` — may contain user data |
+| Page HTML | `no-store, private` — carries the CSRF token |
+| Page JSON | `no-store, private`, unless the route calls `->cacheable()` |
 | Component module (`/__pwax__/c/{id}.js`) | `private, max-age`, with an `ETag` → `304` |
 | `pwax.js` | `public, max-age=31536000, immutable` |
-| Manifest | `public, max-age=86400`, with an `ETag` |
+| Web manifest | `public, max-age=86400`, with an `ETag` |
+| Offline shell (`/__pwax__/shell`) | `public, must-revalidate`, with an `ETag` |
+| Asset manifest (`/sw.json`) | `no-cache, must-revalidate` — how updates are discovered |
 
 **Compilation is memoised** on a digest of the rendered output, so a component that has
 not changed is not re-parsed, re-scoped or re-minified. Because the key is the output
@@ -671,6 +798,22 @@ Supply the nonce for Pwax's inline `<style>` and JSON blocks:
 'csp' => ['nonce' => fn () => request()->attributes->get('csp-nonce')],
 ```
 
+### What the service worker will and will not store
+
+The Cache Storage API ignores HTTP cache directives, so a service worker that stores
+whatever it fetches writes signed-in users' rendered pages to disk — where the next person
+to use that device is served them offline. Pwax's worker refuses to store any response
+carrying `Cache-Control: no-store`, which is every page Pwax renders, and navigations are
+never cached at all. What is precached instead is the session-free offline shell.
+
+Two things are worth knowing:
+
+- **`->cacheable()` is a promise you are making.** It says this page renders the same for
+  every visitor. Nothing can check that for you.
+- **A component can still vary by user** — an admin-only branch, a localised string — and
+  precached components are stored per browser profile, not per user. On a shared device,
+  call `pwax.sw.clearCaches()` when someone signs out.
+
 ### Your responsibilities
 
 - **Never put user input in `plugins`, `directives` or `middleware_js`.** They describe
@@ -713,9 +856,29 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `cache.components` | `true` | Memoise compiled components |
 | `csp.nonce` | `null` | Nonce (or callable) for inline blocks |
 | `customization.*` | see config | Preloader colours |
-| `manifest_path`, `manifest` | see config | Web App Manifest |
-| `service_worker.*` | disabled | Service worker behaviour |
+| `manifest_path`, `manifest` | see config | Web App Manifest (all spec members) |
 | `helpers.global` | `false` | Define 1.x `vue()` / `router()` |
+
+### Service worker
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `service_worker.enabled` | `false` | Register and serve the worker |
+| `service_worker.path`, `.scope` | `/service-worker.js`, `/` | Where it lives and what it controls |
+| `service_worker.version` | `'v1'` | Mixed into the manifest hash; bump to discard everything |
+| `service_worker.strategy` | `network-first` | For requests not in the manifest |
+| `service_worker.max_entries` | `60` | Cap on the **runtime** cache; precached entries are never evicted |
+| `service_worker.asset_manifest.path` | `/sw.json` | Where the asset manifest is served |
+| `service_worker.asset_manifest.ttl` | `60` | Seconds the built manifest is memoised |
+| `service_worker.shell.enabled`, `.path` | `true`, `/__pwax__/shell` | The session-free offline shell |
+| `service_worker.assets` | `true` | Precache Vue, the runtime and the web manifest |
+| `service_worker.components` | `'all'` | `'all'`, `false`, or a list of view patterns |
+| `service_worker.exclude` | `['vendor.pwax.*']` | Never precached, whatever `components` says |
+| `service_worker.paths` | `[]` | Extra directories to scan for components |
+| `service_worker.files` | `[]` | Extra static files under `public/` to precache |
+| `service_worker.precache` | `[]` | Extra application routes to precache |
+| `service_worker.offline_url` | `null` | Page shown offline; defaults to the shell |
+| `service_worker.navigation_preload` | `true` | Start the network request before the worker boots |
 
 ## Artisan commands
 
@@ -723,8 +886,9 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | --- | --- |
 | `pwax:install` | Publish config and frontend assets (`--views`, `--force`, `--no-assets`) |
 | `pwax:component <name>` | Scaffold a component view (`--plain`, `--force`) |
+| `pwax:precache` | List everything available offline (`--verify`, `--json`) |
 | `pwax:doctor` | Check for common misconfigurations |
-| `pwax:clear` | Flush compiled and minified caches |
+| `pwax:clear` | Flush compiled caches and the offline manifest |
 
 ## JavaScript API
 
@@ -736,6 +900,9 @@ The runtime publishes `window.pwax`:
 | `pwax.load(url, export?)` | Promise of the component's options |
 | `pwax.http.json(url, options?)` | Fetch JSON with Pwax's headers and CSRF token |
 | `pwax.styles` | The reference-counted style manager |
+| `pwax.sw.update()` | Check for a new build now |
+| `pwax.sw.clearCaches()` | Delete every Pwax cache — worth calling on sign-out |
+| `pwax.sw.unregister()` | Remove the service worker entirely |
 | `pwax.app`, `pwax.router` | The Vue app and router instances |
 | `pwax.config`, `pwax.version` | Runtime configuration and package version |
 
@@ -748,6 +915,7 @@ Events on `document`:
 | `pwax:navigated` | A page component has mounted |
 | `pwax:error` | A page failed to load |
 | `pwax:update-available` | A new service worker is waiting |
+| `pwax:online`, `pwax:offline` | The connection came back or went away |
 
 ## Upgrading from 1.x
 

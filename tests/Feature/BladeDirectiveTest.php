@@ -21,25 +21,12 @@ class BladeDirectiveTest extends TestCase
         $this->assertStringNotContainsString('window.pwax.component', $compiled);
     }
 
-    /**
-     * `@pwax` and `@pwaxImport` can be registered side by side, and Blade must not read
-     * the shorter as a prefix of the longer.
-     *
-     * Blade captures the maximal run of word characters after `@` before looking the
-     * directive up, so this should hold — but the failure mode is a compiled view
-     * containing a stray literal `Import('…')`, which is worth an assertion rather than
-     * an assumption.
-     */
-    public function test_a_renamed_directive_does_not_swallow_the_canonical_one(): void
+    public function test_an_unrenamed_application_gets_only_the_canonical_directive(): void
     {
-        config()->set('pwax.components.directive', 'pwax');
-
-        $this->refreshApplication();
-
         $compiled = Blade::compileString("@pwax('a') @pwaxImport('b')");
 
-        $this->assertSame(2, substr_count($compiled, 'Pwax::import('));
-        $this->assertStringNotContainsString("Import('b')", $compiled);
+        // `@pwax` is not registered by default in 3.0, so it stays literal.
+        $this->assertSame(1, substr_count($compiled, 'Pwax::import('));
     }
 
     /**

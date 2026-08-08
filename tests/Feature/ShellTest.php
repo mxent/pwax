@@ -189,9 +189,29 @@ class ShellTest extends TestCase
         $this->assertSame('Backdrop', $this->shell()->runtimeConfig()['plugins']['backdrop']['export']);
     }
 
-    public function test_the_one_x_import_spelling_is_still_understood(): void
+    /**
+     * The 1.x `@import(...)` spelling is no longer recognised in config values.
+     *
+     * It was deprecated in 2.0 alongside the directive rename and is removed in 3.0. The
+     * failure is quiet by construction — an unrecognised value becomes a global lookup
+     * rather than an error — so this asserts the new behaviour deliberately, and
+     * `pwax:doctor` is where a stale value gets reported.
+     */
+    public function test_the_one_x_import_spelling_is_no_longer_understood(): void
     {
         config()->set('pwax.directives', ['focus' => "@import('components.modal')"]);
+
+        $this->assertSame('global', $this->shell()->runtimeConfig()['directives']['focus']['type']);
+    }
+
+    /**
+     * A renamed directive still resolves in config values, so an application that kept
+     * `@pwax` does not have to rewrite its plugin and directive lists as well as its views.
+     */
+    public function test_a_renamed_directive_is_understood_in_config_values(): void
+    {
+        config()->set('pwax.components.directive', 'pwax');
+        config()->set('pwax.directives', ['focus' => "@pwax('components.modal')"]);
 
         $this->assertSame('module', $this->shell()->runtimeConfig()['directives']['focus']['type']);
     }

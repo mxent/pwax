@@ -117,7 +117,7 @@ class Glob
      * configuration, and refusing to build the whole manifest over one is a poor trade
      * against matching one file fewer than intended.
      *
-     * @return array{string, int}|null  The compiled group and the index of the closer.
+     * @return array{string, int}|null The compiled group and the index of the closer.
      */
     private static function alternation(string $segment, int $start, string $closer): ?array
     {
@@ -129,10 +129,17 @@ class Glob
 
         $inner = substr($segment, $start + 1, $end - $start - 1);
 
-        $parts = array_map(
-            static fn (string $part): string => self::segment($part),
-            preg_split('/[,|]/', $inner) ?: []
-        );
+        $split = preg_split('/[,|]/', $inner);
+
+        if ($split === false) {
+            return null;
+        }
+
+        $parts = [];
+
+        foreach ($split as $part) {
+            $parts[] = self::segment($part);
+        }
 
         return ['(?:' . implode('|', $parts) . ')', $end];
     }
@@ -188,10 +195,14 @@ class Glob
      */
     public static function compile(array $rules): array
     {
-        return array_values(array_map(static function (string $rule): string {
-            return str_starts_with($rule, '!')
+        $compiled = [];
+
+        foreach ($rules as $rule) {
+            $compiled[] = str_starts_with($rule, '!')
                 ? '!' . self::toRegex(substr($rule, 1))
                 : self::toRegex($rule);
-        }, $rules));
+        }
+
+        return $compiled;
     }
 }

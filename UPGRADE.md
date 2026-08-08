@@ -71,6 +71,11 @@ If you would rather not touch every view at once, set `pwax.components.directive
 `Pwax::importExpression()` is now `Pwax::import()`. You are unlikely to have called it
 directly — it is what the directive compiles to.
 
+The 1.x `@import('…')` spelling is no longer recognised inside `plugins`, `directives` or
+`middleware_js` config values either. It fails quietly — the value falls back to a global
+lookup rather than erroring — so check those three keys, and `php artisan pwax:doctor`
+will tell you if one is stale.
+
 ### 4. The 1.x `vue()` and `router()` helpers are gone
 
 `pwax.helpers.global` has been removed with them. They were deprecated in 2.0.

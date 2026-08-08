@@ -35,7 +35,7 @@ class InstallCommand extends Command
         $this->line('  <options=bold>Next steps</>');
         $this->line('  1. Review <info>config/pwax.php</info>.');
         $this->line('  2. Return a component from a route:');
-        $this->line('     <fg=gray>Route::get(\'/\', fn () => pwax_component(\'pages.home\'))->name(\'index\');</>');
+        $this->line('     <fg=gray>Route::get(\'/\', fn () => pwaxRender(\'pages.home\'))->name(\'index\');</>');
         $this->line('  3. Create your first component:');
         $this->line('     <fg=gray>php artisan pwax:component pages.home</>');
         $this->line('  4. Check your setup at any time with <info>php artisan pwax:doctor</info>.');

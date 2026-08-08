@@ -22,6 +22,17 @@ export const ORIGIN = 'https://app.test';
 
 export const WORKER_VIEW = resolve(HERE, '../../../resources/views/js/service-worker.blade.php');
 
+/**
+ * The headers the client runtime sends for a page payload — and therefore the ones the
+ * worker must both send and key its cache on. Kept in step with `Pwax::VARY` on the
+ * server and `createHttp()` in the runtime; a PHP test asserts the server half agrees.
+ */
+export const PAGE_HEADERS = {
+    Accept: 'application/json',
+    'X-Requested-With': 'XMLHttpRequest',
+    'X-Pwax-Component': 'true',
+};
+
 const urlOf = (r) => (typeof r === 'string' ? new URL(r, ORIGIN).href : new URL(r.url).href);
 
 /** A service worker resolves relative URLs against its own scope; undici will not. */
@@ -43,9 +54,51 @@ export function navigation(path) {
     };
 }
 
+/** Whatever a Cache method was handed, as the Request the Cache API would key on. */
+const toRequest = (input) => (typeof input === 'string' ? new SWRequest(input) : input);
+
+const headersOf = (request) => (request && request.headers) || new Headers();
+
+/**
+ * Does a stored entry answer this request, per the stored response's `Vary`?
+ *
+ * This is the whole reason the harness exists in the shape it does. A cache keyed on the
+ * URL alone cannot tell a correct implementation from a broken one: page payloads carry
+ * `Vary: X-Pwax-Component, X-Requested-With, Accept`, so an entry stored under a bare
+ * `cache.put(urlString, …)` can never be matched by the runtime's request, which sends all
+ * three. Modelling it here is what lets a test assert the *mechanism* rather than the
+ * symptom.
+ */
+function answersRequest(entry, request, ignoreVary) {
+    if (ignoreVary) {
+        return true;
+    }
+
+    const vary = entry.response.headers.get('Vary');
+
+    if (!vary) {
+        return true;
+    }
+
+    // `Vary: *` means no stored response ever matches.
+    if (vary.trim() === '*') {
+        return false;
+    }
+
+    const stored = headersOf(entry.key);
+    const incoming = headersOf(request);
+
+    return vary
+        .split(',')
+        .map((field) => field.trim())
+        .filter(Boolean)
+        .every((field) => stored.get(field) === incoming.get(field));
+}
+
 class FakeCache {
     constructor(name) {
         this.name = name;
+        /** @type {Map<string, Array<{key: Request, response: Response}>>} */
         this.map = new Map();
     }
 
@@ -54,21 +107,46 @@ class FakeCache {
             throw new TypeError('pwax test: response body already used');
         }
 
-        this.map.set(urlOf(request), response.clone());
+        const key = toRequest(request);
+        const url = urlOf(key);
+        const entry = { key, response: response.clone() };
+
+        // Replacement follows the same Vary rule as lookup: a put overwrites only the
+        // representation it would itself have matched, so two representations of one URL
+        // can coexist exactly as they do in a browser.
+        const kept = (this.map.get(url) || []).filter((held) => !answersRequest(held, key, false));
+
+        kept.push(entry);
+        this.map.set(url, kept);
     }
 
-    async match(request) {
-        const hit = this.map.get(urlOf(request));
+    async match(request, options = {}) {
+        const entries = this.map.get(urlOf(request)) || [];
+        const hit = entries.find((entry) => answersRequest(entry, toRequest(request), options.ignoreVary));
 
-        return hit ? hit.clone() : undefined;
+        return hit ? hit.response.clone() : undefined;
     }
 
     async keys() {
-        return [...this.map.keys()].map((url) => new SWRequest(url));
+        return [...this.map.values()].flatMap((entries) => entries.map((entry) => entry.key));
     }
 
-    async delete(request) {
-        return this.map.delete(urlOf(request));
+    async delete(request, options = {}) {
+        const url = urlOf(request);
+        const entries = this.map.get(url) || [];
+        const kept = entries.filter((entry) => !answersRequest(entry, toRequest(request), options.ignoreVary));
+
+        if (kept.length === entries.length) {
+            return false;
+        }
+
+        if (kept.length === 0) {
+            this.map.delete(url);
+        } else {
+            this.map.set(url, kept);
+        }
+
+        return true;
     }
 }
 
@@ -97,9 +175,9 @@ export class FakeCaches {
         return this.store.delete(name);
     }
 
-    async match(request) {
+    async match(request, options = {}) {
         for (const cache of this.store.values()) {
-            const hit = await cache.match(request);
+            const hit = await cache.match(request, options);
 
             if (hit) {
                 return hit;
@@ -154,9 +232,12 @@ export function render(manifest) {
             strategy: manifest.strategy,
             maxEntries: manifest.maxEntries,
             navigationPreload: manifest.navigationPreload,
+            navigationStrategy: manifest.navigationStrategy,
+            navigationUrls: manifest.navigationUrls,
             shellUrl: manifest.shellUrl,
             offlineUrl: manifest.offlineUrl,
             assetPrefixes: manifest.assetPrefixes,
+            pageHeaders: manifest.pageHeaders || PAGE_HEADERS,
         },
     ];
 
@@ -208,6 +289,7 @@ export function render(manifest) {
 export function createWorker({ manifest, caches = new FakeCaches(), routes }) {
     const listeners = {};
     const fetches = [];
+    const requests = [];
     const log = [];
 
     const self = {
@@ -222,14 +304,21 @@ export function createWorker({ manifest, caches = new FakeCaches(), routes }) {
         self,
         caches,
         fetch: async (input) => {
-            const url = urlOf(input);
+            const request = toRequest(input);
+            const url = urlOf(request);
+
             fetches.push(url);
+            // The whole Request too, so a test can assert what the worker actually asked
+            // for — which headers it sent and whether it sent cookies. Those are the
+            // difference between fetching a page's JSON payload and its HTML shell, and
+            // between precaching the guest rendering and one user's private one.
+            requests.push(request);
 
             const parsed = new URL(url);
 
             // Awaited, so a route handler may be async — which is how a test observes
             // how many requests the worker has in flight at once.
-            const response = await routes(parsed.pathname + parsed.search);
+            const response = await routes(parsed.pathname + parsed.search, request);
 
             if (!response) {
                 throw new TypeError('Failed to fetch');
@@ -291,5 +380,9 @@ export function createWorker({ manifest, caches = new FakeCaches(), routes }) {
     /** Did a `waitUntil` promise reject — i.e. did install or activate fail? */
     const failed = () => log.some((entry) => Array.isArray(entry) && entry[0] === 'rejected');
 
-    return { dispatch, request, navigate, caches, fetches, log, failed };
+    /** The Request the worker sent for a URL, for asserting headers and credentials. */
+    const sentRequest = (path) =>
+        requests.find((sent) => new URL(sent.url).pathname + new URL(sent.url).search === path);
+
+    return { dispatch, request, navigate, caches, fetches, requests, sentRequest, log, failed };
 }

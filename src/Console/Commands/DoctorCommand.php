@@ -36,6 +36,7 @@ class DoctorCommand extends Command
         $this->components->info('Checking your Pwax installation');
 
         $this->checkAppKey($config);
+        $this->checkRemovedConfig($config);
         $this->checkDirective($config);
         $this->checkAssets($config);
         $this->checkRuntimeBundle();
@@ -63,6 +64,38 @@ class DoctorCommand extends Command
         return self::SUCCESS;
     }
 
+    /**
+     * Config keys 3.0 removed, and what replaced them.
+     *
+     * A published `config/pwax.php` is the application's file, so an upgrade cannot
+     * rewrite it. Left unattended these keys do nothing at all — the most confusing
+     * possible outcome, since the file still reads as though the feature is configured.
+     * Naming the replacement here is what turns a clean break into a guided one.
+     */
+    private function checkRemovedConfig(Config $config): void
+    {
+        $replacements = [
+            'pwax.service_worker.precache' => 'service_worker.pages.urls (and each route needs ->cacheable())',
+            'pwax.service_worker.files' => 'service_worker.asset_groups, which takes globs',
+            'pwax.helpers.global' => 'nothing — vue() and router() were removed in 3.0',
+        ];
+
+        foreach ($replacements as $key => $replacement) {
+            if ($config->get($key) === null) {
+                continue;
+            }
+
+            $this->warn_(sprintf('%s no longer does anything. Use %s.', $key, $replacement));
+        }
+
+        if ($config->get('pwax.components.directive') === 'pwax') {
+            $this->warn_(
+                'pwax.components.directive is set to "pwax". @pwaxImport is the canonical '
+                . 'name in 3.0 and is always registered; keeping this only means both work.'
+            );
+        }
+    }
+
     private function checkAppKey(Config $config): void
     {
         $this->assert(
@@ -74,13 +107,13 @@ class DoctorCommand extends Command
 
     private function checkDirective(Config $config): void
     {
-        $directive = (string) $config->get('pwax.components.directive', 'pwax');
+        $directive = (string) $config->get('pwax.components.directive', 'pwaxImport');
 
         $this->assert(
             $directive !== 'import',
             sprintf('Import directive is @%s', $directive),
             'pwax.components.directive is "import", which also matches the CSS at-rule @import '
-            . 'inside <style> blocks and rewrites it as JavaScript. Change it to "pwax".'
+            . 'inside <style> blocks and rewrites it as JavaScript. Change it to "pwaxImport".'
         );
     }
 
@@ -193,7 +226,7 @@ class DoctorCommand extends Command
             return;
         }
 
-        $path = (string) $config->get('pwax.service_worker.path', '/service-worker.js');
+        $path = (string) $config->get('pwax.service_worker.path', '/sw.js');
 
         $this->assert(
             substr_count(trim($path, '/'), '/') === 0,
@@ -232,7 +265,7 @@ class DoctorCommand extends Command
         if ($precache !== []) {
             $this->warn_(sprintf(
                 'pwax.service_worker.precache lists %d application route(s). Pages rendered by '
-                . 'pwax_component() are sent as "no-store" and the worker refuses to store them, '
+                . 'pwaxRender() are sent as "no-store" and the worker refuses to store them, '
                 . 'so these entries do nothing unless the routes are genuinely public and static.',
                 count($precache)
             ));
@@ -276,6 +309,24 @@ class DoctorCommand extends Command
             sprintf('Asset manifest lists %s', $counts === [] ? 'nothing' : implode(', ', $counts)),
             'The asset manifest is empty, so the service worker has nothing to install.'
         );
+
+        // Truncated globs are reported rather than fatal, which is right and easy to
+        // miss. Surface them where someone is already looking for problems.
+        /** @var list<string> $warnings */
+        $warnings = $manifest['warnings'] ?? [];
+
+        foreach ($warnings as $warning) {
+            $this->warn_($warning);
+        }
+
+        if ((bool) $config->get('pwax.service_worker.pages.runtime', true)) {
+            $this->warn_(
+                'Pages are cached as they are visited (service_worker.pages.runtime). They are '
+                . 'stored per signed-in identity and ->offline(false) exempts a page, but a '
+                . 'shared device will hold each visitor\'s pages until they sign out. '
+                . 'Call pwax.sw.forgetIdentity() on logout.'
+            );
+        }
 
         $components = count($this->registry->all());
         $selected = count($this->registry->precachable());

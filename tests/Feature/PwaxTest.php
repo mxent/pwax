@@ -127,24 +127,33 @@ class PwaxTest extends TestCase
 
     public function test_the_helper_functions_are_available(): void
     {
-        $this->assertSame('/about', pwax_route('pwax.test.about'));
+        $this->assertSame('/about', pwaxRoute('pwax.test.about'));
         $this->assertInstanceOf(\Mxent\Pwax\Pwax::class, pwax());
         $this->assertInstanceOf(
             ComponentResponse::class,
-            pwax_component('pages.home')
+            pwaxRender('pages.home')
         );
     }
 
     /**
-     * `vue()` and `router()` are generic enough to collide with application code, so
-     * they are opt-in in 2.0.
+     * The old spellings are gone in 3.0, not deprecated.
      *
-     * Asserted on the config default rather than with `function_exists()`: PHP function
-     * definitions are process-global, so once any test in the run enables them they stay
-     * defined for every later test.
+     * Worth asserting rather than assuming: `pwax_component()` and `pwax_route()` were
+     * autoloaded through composer's `files`, so they would have been defined for every
+     * application on earth whether or not anything referenced them. A leftover
+     * definition would let a half-migrated codebase appear to work until the one call
+     * site nobody updated ran in production.
      */
-    public function test_the_one_x_globals_are_opt_in(): void
+    public function test_the_two_x_helper_names_are_gone(): void
     {
-        $this->assertFalse(config('pwax.helpers.global'));
+        $this->assertFalse(function_exists('pwax_component'));
+        $this->assertFalse(function_exists('pwax_route'));
+        $this->assertFalse(function_exists('vue'));
+        $this->assertFalse(function_exists('router'));
+    }
+
+    public function test_the_import_helper_compiles_a_component_reference(): void
+    {
+        $this->assertStringContainsString('window.pwax.component(', pwaxImport('components.modal'));
     }
 }

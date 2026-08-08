@@ -172,7 +172,7 @@ class ShellTest extends TestCase
      */
     public function test_a_module_reference_resolves_to_a_component_url(): void
     {
-        config()->set('pwax.plugins', ['toast' => "@pwax('components.modal')"]);
+        config()->set('pwax.plugins', ['toast' => "@pwaxImport('components.modal')"]);
 
         $entry = $this->shell()->runtimeConfig()['plugins']['toast'];
 
@@ -184,14 +184,32 @@ class ShellTest extends TestCase
 
     public function test_a_module_reference_supports_a_named_export(): void
     {
-        config()->set('pwax.plugins', ['backdrop' => "@pwax('Backdrop from components.modal')"]);
+        config()->set('pwax.plugins', ['backdrop' => "@pwaxImport('Backdrop from components.modal')"]);
 
         $this->assertSame('Backdrop', $this->shell()->runtimeConfig()['plugins']['backdrop']['export']);
     }
 
-    public function test_the_one_x_import_spelling_is_still_understood(): void
+    /**
+     * A directive spelling this application does not use is not special-cased.
+     *
+     * The failure is quiet by construction — an unrecognised value becomes a global
+     * lookup rather than an error — so it is worth asserting deliberately.
+     */
+    public function test_an_unrecognised_spelling_is_not_treated_as_a_module(): void
     {
         config()->set('pwax.directives', ['focus' => "@import('components.modal')"]);
+
+        $this->assertSame('global', $this->shell()->runtimeConfig()['directives']['focus']['type']);
+    }
+
+    /**
+     * Config values follow the configured directive name, so they read the same way as
+     * the views in the same application do.
+     */
+    public function test_config_values_follow_the_configured_directive_name(): void
+    {
+        config()->set('pwax.components.directive', 'component');
+        config()->set('pwax.directives', ['focus' => "@component('components.modal')"]);
 
         $this->assertSame('module', $this->shell()->runtimeConfig()['directives']['focus']['type']);
     }
@@ -236,7 +254,7 @@ class ShellTest extends TestCase
     {
         config()->set('pwax.service_worker.enabled', true);
 
-        $this->assertSame('/service-worker.js', $this->shell()->runtimeConfig()['serviceWorker']);
+        $this->assertSame('/sw.js', $this->shell()->runtimeConfig()['serviceWorker']);
     }
 
     public function test_the_error_template_escapes_rather_than_renders_response_text(): void

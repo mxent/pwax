@@ -8,7 +8,7 @@ class PwaEndpointsTest extends TestCase
 {
     public function test_serves_the_web_app_manifest(): void
     {
-        $response = $this->get('/manifest.webmanifest');
+        $response = $this->get('/manifest.json');
 
         $response->assertOk();
         $response->assertHeader('Content-Type', 'application/manifest+json');
@@ -18,16 +18,16 @@ class PwaEndpointsTest extends TestCase
     public function test_the_manifest_omits_empty_fields(): void
     {
         // A manifest with `"description": null` is invalid; leaving the key out is not.
-        $this->assertArrayNotHasKey('description', $this->get('/manifest.webmanifest')->json());
+        $this->assertArrayNotHasKey('description', $this->get('/manifest.json')->json());
     }
 
     public function test_the_manifest_is_cacheable_and_conditional(): void
     {
-        $response = $this->get('/manifest.webmanifest');
+        $response = $this->get('/manifest.json');
 
         $this->assertStringContainsString('max-age', (string) $response->headers->get('Cache-Control'));
 
-        $this->get('/manifest.webmanifest', ['If-None-Match' => $response->headers->get('ETag')])
+        $this->get('/manifest.json', ['If-None-Match' => $response->headers->get('ETag')])
             ->assertStatus(304);
     }
 
@@ -35,19 +35,19 @@ class PwaEndpointsTest extends TestCase
     {
         config()->set('pwax.manifest.name', 'Configured App');
 
-        $this->assertSame('Configured App', $this->get('/manifest.webmanifest')->json('name'));
+        $this->assertSame('Configured App', $this->get('/manifest.json')->json('name'));
     }
 
     public function test_the_service_worker_is_off_by_default(): void
     {
-        $this->get('/service-worker.js')->assertStatus(404);
+        $this->get('/sw.js')->assertStatus(404);
     }
 
     public function test_serves_the_service_worker_when_enabled(): void
     {
         config()->set('pwax.service_worker.enabled', true);
 
-        $response = $this->get('/service-worker.js');
+        $response = $this->get('/sw.js');
 
         $response->assertOk();
         $response->assertHeader('Content-Type', 'application/javascript; charset=utf-8');
@@ -62,7 +62,7 @@ class PwaEndpointsTest extends TestCase
         config()->set('pwax.service_worker.version', 'v9');
         config()->set('pwax.service_worker.offline_url', '/offline');
 
-        $body = (string) $this->get('/service-worker.js')->getContent();
+        $body = (string) $this->get('/sw.js')->getContent();
 
         $this->assertStringContainsString('"v9"', $body);
         $this->assertStringContainsString('"/offline"', $body);
@@ -72,7 +72,7 @@ class PwaEndpointsTest extends TestCase
     {
         config()->set('pwax.service_worker.enabled', true);
 
-        $body = (string) $this->get('/service-worker.js')->getContent();
+        $body = (string) $this->get('/sw.js')->getContent();
         $hash = (string) $this->get('/sw.json')->json('hash');
 
         // A browser only installs a worker whose bytes differ from the one it has. Without
@@ -86,7 +86,7 @@ class PwaEndpointsTest extends TestCase
     {
         config()->set('pwax.service_worker.enabled', true);
 
-        $body = (string) $this->get('/service-worker.js')->getContent();
+        $body = (string) $this->get('/sw.js')->getContent();
 
         // `skipWaiting()` during install activates the new worker immediately, which
         // reloads every open tab mid-session and makes the update prompt unobservable.
@@ -99,7 +99,7 @@ class PwaEndpointsTest extends TestCase
     {
         config()->set('pwax.service_worker.enabled', true);
 
-        $body = (string) $this->get('/service-worker.js')->getContent();
+        $body = (string) $this->get('/sw.js')->getContent();
 
         $this->assertStringContainsString('PWAX_SKIP_WAITING', $body);
         $this->assertStringContainsString('maxEntries', $body);
@@ -111,7 +111,7 @@ class PwaEndpointsTest extends TestCase
     {
         config()->set('pwax.service_worker.enabled', true);
 
-        $body = (string) $this->get('/service-worker.js')->getContent();
+        $body = (string) $this->get('/sw.js')->getContent();
 
         // The Cache API ignores HTTP cache directives, so a worker that caches whatever it
         // fetches persists signed-in users' pages to disk for the next person to use the
@@ -123,9 +123,9 @@ class PwaEndpointsTest extends TestCase
     {
         config()->set('pwax.service_worker.enabled', true);
 
-        $response = $this->get('/service-worker.js');
+        $response = $this->get('/sw.js');
 
-        $this->get('/service-worker.js', ['If-None-Match' => $response->headers->get('ETag')])
+        $this->get('/sw.js', ['If-None-Match' => $response->headers->get('ETag')])
             ->assertStatus(304);
     }
 
@@ -133,7 +133,7 @@ class PwaEndpointsTest extends TestCase
     {
         // 1.x put the manifest behind the `web` group, which set a session cookie on
         // every fetch of a file that is identical for every visitor.
-        $response = $this->get('/manifest.webmanifest');
+        $response = $this->get('/manifest.json');
 
         $this->assertEmpty(
             array_filter(

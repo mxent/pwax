@@ -8,16 +8,28 @@
     Available to this view:
         $pwaxInitial   JSON string: the current URL and its compiled component
         $pwaxComponent the Mxent\Pwax\Data\Component itself
+        $pwaxShell     the Mxent\Pwax\Support\Shell assembling the runtime
 --}}
 @php
-    /** @var \Mxent\Pwax\Support\Shell $pwaxShell */
-    $pwaxShell = app(\Mxent\Pwax\Support\Shell::class);
+    /**
+     * Resolved from the container only when the caller did not supply one.
+     *
+     * Two callers do supply one, and both need it honoured: the offline shell endpoint,
+     * and the manifest builder, which renders this view with a deliberately request-free
+     * Shell so that no per-session value — the CSRF token above all — can reach the
+     * content hash. Overwriting it here would put a different token in every visitor's
+     * manifest, giving each of them a private cache name and a full re-download of the
+     * application.
+     *
+     * @var \Mxent\Pwax\Support\Shell $pwaxShell
+     */
+    $pwaxShell ??= app(\Mxent\Pwax\Support\Shell::class);
 @endphp
 <!DOCTYPE html>
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
 
 <head>
-    <x-pwax::includes.head :shell="$pwaxShell" :component="$pwaxComponent ?? null" />
+    <x-pwax::includes.head :shell="$pwaxShell" :component="$pwaxComponent ?? null" :title="$pwaxTitle ?? null" />
     @stack('pwax-head')
 </head>
 

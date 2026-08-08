@@ -63,7 +63,7 @@ export function importModule(url) {
  *
  * The module exposes the author's own exports plus the template, style and scope that
  * the server attached. A named export can be selected with `exportName`, which is how
- * `@pwax('Modal from components.modal')` reaches a specific export.
+ * `@pwaxImport('Modal from components.modal')` reaches a specific export.
  *
  * @param {any} module
  * @param {string} exportName

@@ -12,8 +12,8 @@ class ContentNegotiationTest extends TestCase
         parent::defineRoutes($router);
 
         $router->middleware('web')->group(function ($router): void {
-            $router->get('/home', fn () => pwax_component('pages.home'))->name('pwax.test.page');
-            $router->get('/greet', fn () => pwax_component('pages.with-data', ['name' => 'Ada']));
+            $router->get('/home', fn () => pwaxRender('pages.home'))->name('pwax.test.page');
+            $router->get('/greet', fn () => pwaxRender('pages.with-data', ['name' => 'Ada']));
         });
     }
 

@@ -72,7 +72,7 @@ return [
     */
 
     'components' => [
-        'directive' => 'pwax',
+        'directive' => 'pwaxImport',
         'allowed' => [],
         'scoped_styles' => true,
     ],
@@ -170,9 +170,9 @@ return [
     |--------------------------------------------------------------------------
     |
     | Keyed by name. Each value is either a raw JavaScript expression or an
-    | "@pwax('view.name')" string referencing a component that default-exports one.
+    | "@pwaxImport('view.name')" string referencing a component that default-exports one.
     |
-    |     'plugins' => ['toast' => "@pwax('plugins.toast')"],
+    |     'plugins' => ['toast' => "@pwaxImport('plugins.toast')"],
     |
     | SECURITY: these values are emitted into the page as JavaScript. They are
     | configuration, never a place for user input.
@@ -275,7 +275,41 @@ return [
     |
     */
 
-    'manifest_path' => '/manifest.webmanifest',
+    'manifest_path' => '/manifest.json',
+
+    /*
+    |--------------------------------------------------------------------------
+    | Document head
+    |--------------------------------------------------------------------------
+    |
+    | What goes in <head>, in a fixed order so that the markup is predictable whichever
+    | page rendered it.
+    |
+    | title            Falls back to `manifest.name`. Override per page with
+    |                  pwaxRender('pages.about')->title('About us').
+    | title_template   Applied only when a page supplied its own title, e.g.
+    |                  ':title · Acme' renders 'About us · Acme'.
+    | description      Falls back to `manifest.description`.
+    | icon             <link rel="icon">. Defaults to the smallest square manifest icon
+    |                  of at least 32px, then /favicon.ico if that file exists.
+    | base             <base href>. Leave null unless you know you need it: it changes
+    |                  how every relative URL in the document resolves, including the
+    |                  src of every image in every component. Routing does not need it —
+    |                  a subdirectory install is already handled by the runtime.
+    | color_scheme     <meta name="color-scheme">, e.g. 'light dark'.
+    | theme_color_dark Theme colour for a dark colour scheme, if it differs.
+    |
+    */
+
+    'head' => [
+        'title' => null,
+        'title_template' => null,
+        'description' => null,
+        'icon' => null,
+        'base' => null,
+        'color_scheme' => null,
+        'theme_color_dark' => null,
+    ],
 
     'manifest' => [
         // A stable identity for the installed app, independent of `start_url`. Without
@@ -355,9 +389,9 @@ return [
     | Service worker
     |--------------------------------------------------------------------------
     |
-    | The worker is driven by an asset manifest — `sw.json` — in the same way Angular's
-    | worker is driven by `ngsw.json`. The manifest lists every URL the application is
-    | made of together with a content hash, so the worker precaches the whole app at
+    | The worker is driven by an asset manifest — `sw.json`. The manifest lists every URL
+    | the application is made of together with a content hash, so the worker precaches
+    | the whole app at
     | install time and busts individual entries when their hash changes. There is no
     | "visit the page once to cache it" step, and no manual version bump needed to ship
     | a change.
@@ -381,7 +415,7 @@ return [
 
     'service_worker' => [
         'enabled' => false,
-        'path' => '/service-worker.js',
+        'path' => '/sw.js',
         'scope' => '/',
         'blade' => null,
         'version' => 'v1',
@@ -390,6 +424,29 @@ return [
         'offline_url' => null,
         'max_entries' => 60,
         'navigation_preload' => true,
+
+        /*
+        | How a full page navigation is answered.
+        |
+        | 'network-first'  Go to the network, fall back to the precached shell. Safe
+        |                  alongside any server-rendered route inside the worker's scope.
+        | 'app-shell'      Serve the precached shell immediately, with no network wait,
+        |                  and let the runtime fetch the page payload. Much faster, but
+        |                  every navigation this worker claims becomes the SPA — check
+        |                  `navigation_urls` first if Horizon, Telescope, Nova or a
+        |                  Filament panel share this domain.
+        */
+        'navigation_strategy' => 'network-first',
+
+        /*
+        | Which navigations belong to the application. A path matched by none of these,
+        | or excluded by a leading !, bypasses the worker entirely and goes straight to
+        | the network.
+        |
+        | The defaults claim everything except paths containing a file extension or a
+        | double underscore — so /reports/2024.pdf and /admin/__debug are left alone.
+        */
+        'navigation_urls' => ['/**', '!/**/*.*', '!/**/*__*', '!/**/*__*/**'],
 
         /*
         | The asset manifest itself. `ttl` is how long the built manifest is memoised
@@ -445,7 +502,7 @@ return [
         'paths' => [],
 
         /*
-        | Package view namespaces to scan as well, e.g. ['ui'] for `@pwax('ui::button')`.
+        | Package view namespaces to scan as well, e.g. ['ui'] for `@pwaxImport('ui::button')`.
         |
         | Empty by default, and deliberately so. Every package that calls
         | `loadViewsFrom()` registers a namespace — Laravel's own exception page renderer
@@ -456,33 +513,146 @@ return [
         'namespaces' => [],
 
         /*
-        | Additional URLs to precache.
+        |----------------------------------------------------------------------
+        | Asset groups
+        |----------------------------------------------------------------------
         |
-        | `files` are static files under `public/` — a logo, a font, a stylesheet — and
-        | are hashed from disk, so changing one busts only that entry.
+        | `files` are globs resolved against your public/ directory and hashed from
+        | disk, so changing one file busts exactly that entry. `urls` are literal and
+        | may be cross-origin.
         |
-        | `precache` are application routes. Use it only for pages that render the same
-        | for everyone: the worker refuses to store any response the server marked
-        | `no-store`, which is every page Pwax renders through `pwax_component()`.
+        |   install_mode  'prefetch' fetches everything at install, so the application
+        |                 works offline after a single visit. 'lazy' fetches on first
+        |                 use and then keeps it, which suits a large media library
+        |                 nobody looks at all of.
+        |   update_mode   what happens on the next deploy to an entry whose hash
+        |                 changed: fetch it eagerly, or wait until it is asked for.
+        |
+        | Glob syntax: ** crosses directory boundaries, * does not, ? is one character,
+        | {a,b} and (a|b) alternate, and a leading ! excludes.
+        |
+        | public/storage is never walked — it is a symlink to user uploads, and
+        | precaching whatever anyone has ever uploaded is not what this is for. .php
+        | files, dotfiles and source maps are excluded too.
         */
-        'files' => [],
+        'asset_groups' => [
+            [
+                'name' => 'app',
+                'install_mode' => 'prefetch',
+                'update_mode' => 'prefetch',
+                'files' => ['/favicon.ico', '/css/**.css', '/js/**.js', '/build/**'],
+            ],
+            [
+                'name' => 'assets',
+                'install_mode' => 'lazy',
+                'update_mode' => 'prefetch',
+                'files' => [
+                    '/images/**',
+                    '/fonts/**',
+                    '/media/**',
+                    '/**.(svg|png|jpg|jpeg|webp|avif|gif|ico|woff|woff2|ttf|otf|mp4|webm|mp3|ogg)',
+                ],
+            ],
+        ],
 
-        'precache' => [],
-    ],
+        /*
+        | Ceilings on what a glob may pull in.
+        |
+        | A stray '/**' on a media-heavy public/ should not try to precache two
+        | gigabytes. On breach the manifest is truncated at a stable point — so it stays
+        | byte-identical between builds — and the reason appears in the manifest's
+        | `warnings`, in `php artisan pwax:precache`, and in the log. Truncating beats
+        | throwing: a partial precache with a message is recoverable, a 500 on sw.json
+        | takes the whole application's offline capability with it.
+        */
+        'max_files' => 2000,
+        'max_bytes' => 67108864,
 
-    /*
-    |--------------------------------------------------------------------------
-    | Global helper functions
-    |--------------------------------------------------------------------------
-    |
-    | Pwax's canonical API is the `Pwax` facade. Setting this to true additionally
-    | defines the bare `vue()` and `router()` helpers from 1.x. They occupy very
-    | common names in the global namespace, so they are opt-in.
-    |
-    */
+        // Source maps are legitimate, merely large and useless without devtools open.
+        'source_maps' => false,
 
-    'helpers' => [
-        'global' => false,
+        // Extra glob patterns never precached, whatever the asset groups say.
+        'exclude_files' => [],
+
+        /*
+        |----------------------------------------------------------------------
+        | Pages
+        |----------------------------------------------------------------------
+        |
+        | Application routes to make available offline.
+        |
+        | The worker fetches each one the way the client runtime does — with
+        | `Accept: application/json` and `X-Pwax-Component` — and stores the JSON
+        | payload, not the HTML. Asking for the HTML is what the worker used to do, and
+        | why this feature never worked: the HTML shell is `no-store`, so every entry
+        | was silently refused.
+        |
+        | A route listed here must call ->cacheable(). A page payload is `no-store` by
+        | default because it can embed the signed-in user's data, and the worker honours
+        | that. Pages that have not opted in are reported rather than dropped in silence.
+        |
+        |     Route::get('/about', fn () => pwaxRender('pages.about')->cacheable());
+        |
+        | `runtime` caches pages as they are visited, which is what makes everywhere you
+        | have been work offline rather than only the routes you remembered to list.
+        | Those are stored per signed-in identity and dropped when it changes; see
+        | `identity_cache_limit` below. Turn it off if no page on this application may
+        | reach disk.
+        */
+        'pages' => [
+            'urls' => [],
+            'runtime' => true,
+            'strategy' => 'freshness',   // 'freshness' | 'performance'
+            'timeout' => 2000,
+            'max_entries' => 60,
+
+            /*
+            | Fetched without cookies at install, so what is precached is the guest
+            | rendering — which is what "renders the same for everyone" means. Set this
+            | to 'include' only if the page genuinely needs the session, and understand
+            | that it then stores whichever visitor triggered the install.
+            */
+            'credentials' => 'omit',
+        ],
+
+        /*
+        |----------------------------------------------------------------------
+        | Data groups
+        |----------------------------------------------------------------------
+        |
+        | Runtime caching for API responses. Without them an offline page renders but
+        | every fetch it makes fails.
+        |
+        |   freshness    go to the network, fall back to the cache after `timeout` ms
+        |   performance  serve the cache while it is younger than `max_age`
+        |
+        | SECURITY: these are responses, not files, and they can hold one person's data.
+        | They are stored per signed-in identity and `no-store` is still honoured, but a
+        | device shared between two people is a device with both their data on it. Do not
+        | add an authenticated endpoint here without deciding that is acceptable.
+        */
+        'data_groups' => [
+            // [
+            //     'name' => 'posts',
+            //     'urls' => ['/api/posts', '/api/posts/**'],
+            //     'version' => 1,
+            //     'cache_config' => [
+            //         'strategy' => 'freshness',
+            //         'max_size' => 50,
+            //         'max_age' => 3600,
+            //         'timeout' => 3000,
+            //     ],
+            // ],
+        ],
+
+        /*
+        | How many signed-in identities keep caches on one device.
+        |
+        | Every person who signs in leaves a set behind. On a shared machine that grows
+        | until the browser evicts storage on its own, which takes the application's
+        | offline capability with it. Oldest go first.
+        */
+        'identity_cache_limit' => 2,
     ],
 
 ];

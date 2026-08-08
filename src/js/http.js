@@ -7,6 +7,7 @@
 
 export const COMPONENT_HEADER = 'X-Pwax-Component';
 export const LOCATION_HEADER = 'X-Pwax-Location';
+export const IDENTITY_HEADER = 'X-Pwax-Identity';
 
 export class HttpError extends Error {
     constructor(response, body) {
@@ -35,6 +36,15 @@ export function createHttp(config) {
 
         if (config.csrf) {
             base['X-CSRF-TOKEN'] = config.csrf;
+        }
+
+        // Read by the service worker, not by the server, which is why it is deliberately
+        // absent from `Pwax::VARY`: the response does not depend on it, and varying on it
+        // would split every shared cache per user for no gain. The worker uses it to name
+        // the caches it stores page payloads in, so one person's cached page cannot be
+        // served to the next on a shared device.
+        if (config.identity) {
+            base[IDENTITY_HEADER] = config.identity;
         }
 
         return { ...base, ...extra };

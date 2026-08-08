@@ -190,7 +190,7 @@ class Pwax
     }
 
     /**
-     * Compile a `@pwax` directive expression into the JavaScript that loads it.
+     * Compile a `@pwaxImport` directive expression into the JavaScript that loads it.
      *
      * Accepts either `'components.modal'` or `'Modal from components.modal'`, the latter
      * selecting a named export instead of the default one.
@@ -205,7 +205,7 @@ class Pwax
      * each waited at module top level for the other to finish evaluating — a deadlock
      * in native ES modules. Deferring resolution to render time removes the cycle.
      */
-    public function importExpression(?string $expression): string
+    public function import(?string $expression): string
     {
         $expression = trim((string) $expression, " \t\n\r\"'");
 

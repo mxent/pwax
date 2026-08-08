@@ -57,7 +57,7 @@ class OfflineManifestTest extends TestCase
         $urls = $this->urls();
 
         $this->assertContains('/__pwax__/pwax.js', $urls);
-        $this->assertContains('/manifest.webmanifest', $urls);
+        $this->assertContains('/manifest.json', $urls);
         $this->assertTrue(
             (bool) array_filter($urls, static fn (string $u): bool => str_contains($u, 'vue.global.prod.js')),
             'The Vue build must be precached; without it the app cannot start offline at all.'

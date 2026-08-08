@@ -57,9 +57,19 @@ class PrecacheCommand extends Command
         $this->components->twoColumnDetail('<fg=gray>Version</>', (string) ($built['version'] ?? ''));
         $this->newLine();
 
+        // A glob that pulled in more than the ceilings allow is truncated rather than
+        // fatal, which is the right behaviour and a terrible thing to discover in
+        // production. Say so here, where someone is already looking.
+        /** @var list<string> $warnings */
+        $warnings = $built['warnings'] ?? [];
+
+        foreach ($warnings as $warning) {
+            $this->components->warn($warning);
+        }
+
         $total = 0;
 
-        /** @var list<array{name: string, urls: list<string>}> $groups */
+        /** @var list<array{name: string, urls: list<string>, kind?: string}> $groups */
         $groups = $built['assetGroups'] ?? [];
 
         /** @var array<string, string> $hashes */

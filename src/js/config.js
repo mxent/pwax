@@ -12,6 +12,7 @@ const DEFAULTS = {
     hashRouting: false,
     serviceWorker: null,
     csrf: null,
+    identity: null,
     home: '/',
 };
 

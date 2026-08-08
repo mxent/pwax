@@ -180,6 +180,36 @@ export function createServiceWorkerApi() {
             });
         },
 
+        /**
+         * Drop everything cached for one signed-in identity.
+         *
+         * What to call on sign-out. Unlike `clearCaches()` it leaves the precache — the
+         * framework, the components, the shell — in place, so the next person to use the
+         * device gets an application that still works offline rather than one that has to
+         * download itself again.
+         *
+         * @param {string} identity  `window.pwax.config.identity` for the user signing out.
+         */
+        forgetIdentity(identity) {
+            const controller = navigator.serviceWorker?.controller;
+
+            if (!controller || !identity) {
+                return Promise.resolve(false);
+            }
+
+            return new Promise((resolve) => {
+                const channel = new MessageChannel();
+                const timer = window.setTimeout(() => resolve(false), 5000);
+
+                channel.port1.onmessage = () => {
+                    window.clearTimeout(timer);
+                    resolve(true);
+                };
+
+                controller.postMessage({ type: 'PWAX_FORGET_IDENTITY', identity }, [channel.port2]);
+            });
+        },
+
         /** Unregister the worker entirely. */
         async unregister() {
             const registration = await navigator.serviceWorker?.getRegistration();

@@ -36,7 +36,7 @@ installable app manifest, and you never leave PHP or run a frontend build.
 ```
 
 ```php
-Route::get('/', fn () => pwax_component('pages.home', [
+Route::get('/', fn () => pwaxRender('pages.home', [
     'greeting' => 'Hello, ' . auth()->user()?->name,
 ]))->name('index');
 ```
@@ -82,7 +82,7 @@ to a small client runtime that hands the template to Vue's in-browser compiler.
   Browser                         Laravel
      │                               │
      │  GET /profile                 │
-     ├──────────────────────────────►│  Route → pwax_component('pages.profile')
+     ├──────────────────────────────►│  Route → pwaxRender('pages.profile')
      │                               │    render Blade → split blocks → scope styles
      │  ◄── HTML shell ──────────────┤    → embed template + script + style in the shell
      │                               │
@@ -93,7 +93,7 @@ to a small client runtime that hands the template to Vue's in-browser compiler.
      │                               │
      │  first paint
      │                               │
-     │  a @pwax('components.modal') first renders
+     │  a @pwaxImport('components.modal') first renders
      ├── GET /__pwax__/c/{id}.js ───►│  the component, as a real ES module:
      │  ◄── module ──────────────────┤  template + script + styles + scope in one file
      │                               │
@@ -157,7 +157,7 @@ php artisan pwax:component pages.home
 
 ```php
 // routes/web.php
-Route::get('/', fn () => pwax_component('pages.home'))->name('index');
+Route::get('/', fn () => pwaxRender('pages.home'))->name('index');
 ```
 
 Check your setup at any time:
@@ -251,7 +251,7 @@ server-injected values outside it.
 Pass an array as the second argument. It becomes ordinary Blade view data:
 
 ```php
-Route::get('/posts/{post}', fn (Post $post) => pwax_component('pages.post', [
+Route::get('/posts/{post}', fn (Post $post) => pwaxRender('pages.post', [
     'post' => $post,
     'canEdit' => auth()->user()?->can('update', $post),
 ]))->name('posts.show');
@@ -281,26 +281,26 @@ Routes stay in `routes/web.php`. There is no second route table to maintain. Vue
 hands every path to Pwax, which asks the server what to render.
 
 ```php
-Route::get('/', fn () => pwax_component('pages.home'))->name('index');
-Route::get('/about', fn () => pwax_component('pages.about'))->name('about');
+Route::get('/', fn () => pwaxRender('pages.home'))->name('index');
+Route::get('/about', fn () => pwaxRender('pages.about'))->name('about');
 
 Route::middleware('auth')->group(function () {
-    Route::get('/settings', fn () => pwax_component('pages.settings'))->name('settings');
+    Route::get('/settings', fn () => pwaxRender('pages.settings'))->name('settings');
 });
 ```
 
-Link between pages with `<RouterLink>`, using `pwax_route()` to resolve named routes:
+Link between pages with `<RouterLink>`, using `pwaxRoute()` to resolve named routes:
 
 ```blade
 <template>
     <nav>
-        <RouterLink to="{{ pwax_route('index') }}">Home</RouterLink>
-        <RouterLink to="{{ pwax_route('posts.show', ['post' => 1]) }}">First post</RouterLink>
+        <RouterLink to="{{ pwaxRoute('index') }}">Home</RouterLink>
+        <RouterLink to="{{ pwaxRoute('posts.show', ['post' => 1]) }}">First post</RouterLink>
     </nav>
 </template>
 ```
 
-`pwax_route()` returns a path (`/posts/1`); pass `true` as the third argument for an
+`pwaxRoute()` returns a path (`/posts/1`); pass `true` as the third argument for an
 absolute URL. Unlike 1.x's `router()`, an unknown route name **throws** when
 `APP_DEBUG` is on rather than silently sending the link to your home page.
 
@@ -331,7 +331,7 @@ followed redirect that returns HTML as an instruction to reload.
 So this just works:
 
 ```php
-Route::middleware('auth')->get('/settings', fn () => pwax_component('pages.settings'));
+Route::middleware('auth')->get('/settings', fn () => pwaxRender('pages.settings'));
 ```
 
 An unauthenticated visitor is taken to your login page by the SPA router.
@@ -367,7 +367,7 @@ Use the `@pwax` directive to reference another component:
 <script>
     export default {
         components: {
-            Modal: @pwax('components.modal'),
+            Modal: @pwaxImport('components.modal'),
         },
         data() {
             return { open: false };
@@ -379,7 +379,7 @@ Use the `@pwax` directive to reference another component:
 To pick a named export instead of the default one:
 
 ```blade
-Backdrop: @pwax('Backdrop from components.modal'),
+Backdrop: @pwaxImport('Backdrop from components.modal'),
 ```
 
 `@pwax` returns a Vue async component, resolved the first time it renders. That means:
@@ -392,8 +392,8 @@ Backdrop: @pwax('Backdrop from components.modal'),
 > **Do not wrap it in an arrow function.**
 >
 > ```blade
-> Modal: @pwax('components.modal'),        {{-- correct --}}
-> Modal: () => @pwax('components.modal'),  {{-- renders as [object Object] --}}
+> Modal: @pwaxImport('components.modal'),        {{-- correct --}}
+> Modal: () => @pwaxImport('components.modal'),  {{-- renders as [object Object] --}}
 > ```
 >
 > `() => Component` is the Vue **2** idiom for lazy components and was dropped in Vue 3.
@@ -444,14 +444,14 @@ component reference or a dotted path to a global:
 ```php
 'plugins' => [
     // A Pwax component whose default export is a Vue plugin.
-    'toast' => "@pwax('plugins.toast')",
+    'toast' => "@pwaxImport('plugins.toast')",
 
     // A UMD library already loaded by a <script> tag.
     'i18n'  => 'VueI18n.createI18n',
 ],
 
 'directives' => [
-    'focus' => "@pwax('directives.focus')",
+    'focus' => "@pwaxImport('directives.focus')",
 ],
 ```
 
@@ -466,7 +466,7 @@ component reference or a dotted path to a global:
 
 ```php
 'middleware_js' => [
-    'confirmed' => "@pwax('middleware.confirmed')",
+    'confirmed' => "@pwaxImport('middleware.confirmed')",
 ],
 ```
 
@@ -498,7 +498,7 @@ export default {
 
 ### Manifest
 
-Served from `/manifest.webmanifest` and configured in `config/pwax.php`. Browsers require
+Served from `/manifest.json` and configured in `config/pwax.php`. Browsers require
 a 192×192 and a 512×512 icon before offering to install:
 
 ```php
@@ -541,32 +541,51 @@ Off by default. Turn it on:
 ```
 
 That is the whole configuration for a fully offline-capable app. Pwax generates an asset
-manifest at **`/sw.json`** — the same idea as Angular's `ngsw.json` — listing every URL
-the application is made of with a content hash:
+manifest at **`/sw.json`**, listing every URL the application is made of with a content
+hash:
 
 ```json
 {
+  "configVersion": 2,
   "hash": "9c41f0be2a7d5581",
   "version": "v1",
   "shellUrl": "/__pwax__/shell",
+  "navigationStrategy": "network-first",
+  "pageHeaders": {
+    "Accept": "application/json",
+    "X-Requested-With": "XMLHttpRequest",
+    "X-Pwax-Component": "true"
+  },
   "assetGroups": [
-    { "name": "app", "installMode": "prefetch", "urls": [
+    { "name": "app", "installMode": "prefetch", "kind": "asset", "urls": [
         "/vendor/pwax/vue.global.prod.js?v=3.5.41",
         "/vendor/pwax/vue-router.global.prod.js?v=5.2.0",
         "/__pwax__/pwax.js",
-        "/manifest.webmanifest",
+        "/manifest.json",
+        "/favicon.ico",
         "/__pwax__/shell"
     ]},
-    { "name": "components", "installMode": "prefetch", "urls": [
+    { "name": "components", "installMode": "prefetch", "kind": "asset", "urls": [
         "/__pwax__/c/Y29tcG9uZW50cy5tb2RhbA3f9a1c0d.js"
-    ]}
+    ]},
+    { "name": "assets", "installMode": "lazy", "kind": "asset",
+      "urls": ["/images/logo.svg"], "patterns": ["^\\/images\\/.*$"] },
+    { "name": "pages", "installMode": "prefetch", "kind": "page",
+      "strategy": "freshness", "credentials": "omit", "urls": ["/", "/about"] }
   ],
+  "dataGroups": [],
   "hashTable": { "/__pwax__/c/Y29tcG9uZW50cy5tb2RhbA3f9a1c0d.js": "a41c9b02f7de5163" },
-  "critical": ["/__pwax__/pwax.js", "/__pwax__/shell"]
+  "critical": ["/__pwax__/pwax.js", "/__pwax__/shell"],
+  "warnings": []
 }
 ```
 
-`service-worker.js` fetches that on install and caches the lot in one pass. **Nothing has
+`pageHeaders` is the one entry worth understanding. Page responses vary on those three
+headers, so the worker both fetches with them and keys its cache on them — when the two
+sides disagreed, every page lookup missed silently, which is the defect this release
+exists to fix.
+
+`sw.js` fetches that on install and caches the lot in one pass. **Nothing has
 to be visited first to be available**: a visitor who loaded one page can go offline and
 still reach every route and every component in the application.
 
@@ -581,9 +600,33 @@ for plugins, directives and client middleware. Include all of them, or pick:
     'components' => ['components.*', 'ui.*'], // only these
     'components' => false,                    // none; cached lazily as they load
     'exclude' => ['vendor.pwax.*', 'admin.*'],
-    'files' => ['/css/app.css', '/fonts/inter.woff2'],
 ],
 ```
+
+Your own static files — images, fonts, stylesheets, build output — come from asset groups,
+which take globs:
+
+```php
+'service_worker' => [
+    'asset_groups' => [
+        [
+            'name' => 'app',
+            'install_mode' => 'prefetch',                 // fetched at install
+            'files' => ['/favicon.ico', '/css/**.css', '/js/**.js', '/build/**'],
+        ],
+        [
+            'name' => 'assets',
+            'install_mode' => 'lazy',                     // fetched on first use, then kept
+            'files' => ['/images/**', '/fonts/**'],
+        ],
+    ],
+],
+```
+
+`**` crosses directories, `*` does not, `{a,b}` and `(a|b)` alternate, and a leading `!`
+excludes. `public/storage` is never walked — it is a symlink to user uploads — and `.php`
+files, dotfiles and source maps are never matched whatever the patterns say. `max_files`
+and `max_bytes` cap a runaway glob and report what they truncated.
 
 Only your own view paths are scanned. Package view namespaces are not — every package
 that calls `loadViewsFrom()` registers one, Laravel's own exception-page renderer
@@ -591,7 +634,7 @@ included, and none of those are components your application imports. Opt in by n
 you publish components from a package of your own:
 
 ```php
-'service_worker' => ['namespaces' => ['acme-ui']],   // finds @pwax('acme-ui::button')
+'service_worker' => ['namespaces' => ['acme-ui']],   // finds @pwaxImport('acme-ui::button')
 ```
 
 See exactly what that resolves to:
@@ -626,7 +669,7 @@ discard everything deliberately:
 'service_worker' => ['version' => 'v2'],
 ```
 
-The manifest hash is embedded in `service-worker.js` itself. That is what makes a deploy
+The manifest hash is embedded in `sw.js` itself. That is what makes a deploy
 reach an existing install: a browser only treats a worker as new if its bytes differ, so a
 worker whose source never changed would leave clients on the build they first installed.
 
@@ -642,18 +685,45 @@ CSRF token and no page component, identical for every visitor. When a navigation
 reach the network the worker serves that, the runtime boots, and client-side routing
 carries on as normal.
 
-The page *content* for a route is still fetched from the server, and is `no-store` for the
-same reason. A page that renders the same for everyone can say so, and then works offline
-too:
+The page *content* for a route is a separate question, and it is the one that decides
+whether the application is genuinely usable offline or merely renders a shell. Two
+mechanisms cover it.
+
+**Precached pages.** A page that renders the same for everyone can say so, and is then
+fetched at install time and available before it has ever been visited:
 
 ```php
-Route::get('/about', fn () => pwax_component('pages.about')->cacheable());
-Route::get('/docs/{page}', fn ($page) => pwax_component('pages.docs', [...])
+Route::get('/about', fn () => pwaxRender('pages.about')->cacheable());
+Route::get('/docs/{page}', fn ($page) => pwaxRender('pages.docs', [...])
     ->cacheable(86400, shared: true));
 ```
 
+```php
+'service_worker' => ['pages' => ['urls' => ['/', '/about']]],
+```
+
 Only the JSON payload becomes cacheable — the HTML shell stays `no-store` because it
-carries the CSRF token.
+carries the CSRF token. The worker fetches these anonymously, so what it stores is the
+guest rendering, which is what "renders the same for everyone" means.
+
+**Visited pages.** On by default, and what makes an authenticated application work
+offline rather than only its public routes: every page a visitor opens is cached as they
+go.
+
+```php
+'service_worker' => ['pages' => ['runtime' => true]],
+```
+
+Storing a signed-in user's page is only safe because of where it is stored. The Cache API
+is scoped to the origin, not to a user, so these go into a cache named after an opaque
+HMAC of the signed-in identity — one person's cached page is not merely cleared when
+somebody else signs in, it was never reachable under their name. Call
+`pwax.sw.forgetIdentity(window.pwax.config.identity)` on sign-out to drop it immediately,
+and mark anything that must never reach disk at all:
+
+```php
+Route::get('/recovery-codes', fn () => pwaxRender('pages.codes')->offline(false));
+```
 
 Point `offline_url` at your own page to replace the fallback, publish the worker to change
 its behaviour:
@@ -690,13 +760,17 @@ document.addEventListener('pwax:online', () => banner.hidden = true);
 
 ### On sign-out
 
-The worker refuses to store anything the server marked `no-store`, so pages never reach
-disk. Components can still render differently for an administrator, so on a shared device
-it is worth clearing them:
+Drop the signing-out user's pages, runtime entries and API responses, leaving the
+precached framework and components in place so the application still works offline for
+whoever comes next:
 
 ```js
-await window.pwax.sw.clearCaches();
+await window.pwax.sw.forgetIdentity(window.pwax.config.identity);
 ```
+
+`pwax.sw.clearCaches()` is the heavier hammer — it discards everything, including the
+framework, so the next visitor downloads the application again. Reach for it when a
+component renders differently for an administrator and you want no trace left.
 
 ## Frontend assets
 
@@ -834,6 +908,9 @@ Two things are worth knowing:
 - **A component can still vary by user** — an admin-only branch, a localised string — and
   precached components are stored per browser profile, not per user. On a shared device,
   call `pwax.sw.clearCaches()` when someone signs out.
+- **Visited pages are cached by default** (`service_worker.pages.runtime`). They are
+  partitioned by signed-in identity and `->offline(false)` exempts a page entirely, but
+  the trade is real: turn it off if no page in this application may reach disk.
 
 ### Your responsibilities
 
@@ -861,7 +938,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `routes.register` | `true` | Register package routes automatically |
 | `routes.domain` | `null` | Restrict package routes to a domain |
 | `routes.static_middleware` | `[]` | Middleware for runtime/manifest/worker |
-| `components.directive` | `'pwax'` | Blade directive name (`import` is rejected) |
+| `components.directive` | `'pwaxImport'` | Blade directive name (`import` is rejected) |
 | `components.allowed` | `[]` | Allowlist of servable view patterns |
 | `components.scoped_styles` | `true` | Honour `<style scoped>` |
 | `blade.*` | `null` | Override bundled partials |
@@ -878,14 +955,17 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `csp.nonce` | `null` | Nonce (or callable) for inline blocks |
 | `customization.*` | see config | Preloader colours |
 | `manifest_path`, `manifest` | see config | Web App Manifest (all spec members) |
-| `helpers.global` | `false` | Define 1.x `vue()` / `router()` |
+| `head.title`, `.title_template` | `null` | Document title and its wrapper |
+| `head.description`, `.icon` | `null` | Fall back to the manifest's |
+| `head.base` | `null` | `<base href>`; off because it rewrites every relative URL |
+| `head.color_scheme`, `.theme_color_dark` | `null` | Dark-mode head hints |
 
 ### Service worker
 
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `service_worker.enabled` | `false` | Register and serve the worker |
-| `service_worker.path`, `.scope` | `/service-worker.js`, `/` | Where it lives and what it controls |
+| `service_worker.path`, `.scope` | `/sw.js`, `/` | Where it lives and what it controls |
 | `service_worker.version` | `'v1'` | Mixed into the manifest hash; bump to discard everything |
 | `service_worker.strategy` | `network-first` | For requests not in the manifest |
 | `service_worker.max_entries` | `60` | Cap on the **runtime** cache; precached entries are never evicted |
@@ -896,8 +976,18 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `service_worker.components` | `'all'` | `'all'`, `false`, or a list of view patterns |
 | `service_worker.exclude` | `['vendor.pwax.*']` | Never precached, whatever `components` says |
 | `service_worker.paths` | `[]` | Extra directories to scan for components |
-| `service_worker.files` | `[]` | Extra static files under `public/` to precache |
-| `service_worker.precache` | `[]` | Extra application routes to precache |
+| `service_worker.asset_groups` | see config | Glob-resolved static assets, prefetch or lazy |
+| `service_worker.max_files`, `.max_bytes` | `2000`, `64 MB` | Ceilings on what a glob may pull in |
+| `service_worker.source_maps` | `false` | Precache `.map` files |
+| `service_worker.exclude_files` | `[]` | Globs never precached |
+| `service_worker.pages.urls` | `[]` | Routes precached as payloads; each needs `->cacheable()` |
+| `service_worker.pages.runtime` | `true` | Cache pages as they are visited |
+| `service_worker.pages.strategy`, `.timeout` | `freshness`, `2000` | How a page payload is fetched |
+| `service_worker.pages.credentials` | `'omit'` | Precache the guest rendering, not one visitor's |
+| `service_worker.data_groups` | `[]` | API response caching |
+| `service_worker.navigation_strategy` | `network-first` | Or `app-shell` for zero-round-trip navigation |
+| `service_worker.navigation_urls` | see config | Which navigations the worker claims |
+| `service_worker.identity_cache_limit` | `2` | Signed-in identities keeping caches on one device |
 | `service_worker.offline_url` | `null` | Page shown offline; defaults to the shell |
 | `service_worker.navigation_preload` | `true` | Start the network request before the worker boots |
 
@@ -922,7 +1012,8 @@ The runtime publishes `window.pwax`:
 | `pwax.http.json(url, options?)` | Fetch JSON with Pwax's headers and CSRF token |
 | `pwax.styles` | The reference-counted style manager |
 | `pwax.sw.update()` | Check for a new build now |
-| `pwax.sw.clearCaches()` | Delete every Pwax cache — worth calling on sign-out |
+| `pwax.sw.clearCaches()` | Delete every Pwax cache, framework included |
+| `pwax.sw.forgetIdentity(id)` | Drop one signed-in identity's pages and data — call on sign-out |
 | `pwax.sw.unregister()` | Remove the service worker entirely |
 | `pwax.app`, `pwax.router` | The Vue app and router instances |
 | `pwax.config`, `pwax.version` | Runtime configuration and package version |
@@ -952,9 +1043,9 @@ Headlines:
 
 | 1.x | 2.0 |
 | --- | --- |
-| `@import('view')` | `@pwax('view')` |
-| `vue('view', $data)` | `pwax_component('view', $data)` |
-| `router('name')` | `pwax_route('name')` |
+| `@import('view')` | `@pwaxImport('view')` |
+| `vue('view', $data)` | `pwaxRender('view', $data)` |
+| `router('name')` | `pwaxRoute('name')` |
 | `/__pwax__/{name}.json` | `/__pwax__/c/{signed-id}.js` |
 | Component routes had no middleware | run through `web` |
 | Vue 3.5.18 / Router 4 / Pinia 3 from unpkg | 3.5.41 / 5.2.0 / 4.0.2, self-hosted |

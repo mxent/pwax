@@ -11,14 +11,24 @@ class BladeDirectiveTest extends TestCase
 {
     public function test_the_directive_emits_php_rather_than_a_baked_url(): void
     {
-        $compiled = Blade::compileString("@pwax('components.modal')");
+        $compiled = Blade::compileString("@pwaxImport('components.modal')");
 
         // The URL must be resolved when the view runs. In 1.x the directive returned its
         // final output, which froze the URL into storage/framework/views — so changing
         // route_prefix, or running view:cache before routes were loaded, broke imports.
         $this->assertStringContainsString('<?php echo', $compiled);
-        $this->assertStringContainsString('importExpression', $compiled);
+        $this->assertStringContainsString('Pwax::import(', $compiled);
         $this->assertStringNotContainsString('window.pwax.component', $compiled);
+    }
+
+    public function test_only_the_canonical_directive_is_registered_by_default(): void
+    {
+        $compiled = Blade::compileString("@pwax('a') @pwaxImport('b')");
+
+        // Blade captures the maximal run of word characters after `@`, so `@pwaxImport`
+        // is looked up whole rather than as `@pwax` followed by a literal `Import('b')`.
+        $this->assertSame(1, substr_count($compiled, 'Pwax::import('));
+        $this->assertStringNotContainsString("Import('b')", $compiled);
     }
 
     /**
@@ -43,7 +53,7 @@ class BladeDirectiveTest extends TestCase
 
     public function test_resolves_a_component_to_a_synchronous_async_component(): void
     {
-        $js = Pwax::importExpression("'components.modal'");
+        $js = Pwax::import("'components.modal'");
 
         // Synchronous, not awaited: two components that import each other would
         // deadlock at module top level under native ES modules if this awaited.
@@ -59,7 +69,7 @@ class BladeDirectiveTest extends TestCase
 
     public function test_supports_selecting_a_named_export(): void
     {
-        $js = Pwax::importExpression("'Backdrop from components.modal'");
+        $js = Pwax::import("'Backdrop from components.modal'");
 
         $this->assertStringContainsString('"Backdrop"', $js);
         $this->assertStringContainsString($this->id('components.modal'), $js);
@@ -67,13 +77,13 @@ class BladeDirectiveTest extends TestCase
 
     public function test_an_empty_expression_degrades_gracefully(): void
     {
-        $this->assertStringContainsString('null', Pwax::importExpression(null));
-        $this->assertStringContainsString('null', Pwax::importExpression(''));
+        $this->assertStringContainsString('null', Pwax::import(null));
+        $this->assertStringContainsString('null', Pwax::import(''));
     }
 
     public function test_the_emitted_url_is_json_encoded(): void
     {
-        $js = Pwax::importExpression("'components.modal'");
+        $js = Pwax::import("'components.modal'");
 
         $this->assertMatchesRegularExpression('/window\.pwax\.component\("[^"]+", "[^"]*"\)/', $js);
     }

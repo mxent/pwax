@@ -63,7 +63,7 @@ Route::group(array_filter([
     Route::get($prefix . '/pwax.js', [PwaxController::class, 'runtime'])->name('pwax.runtime');
 
     Route::get(
-        ltrim((string) config('pwax.manifest_path', '/manifest.webmanifest'), '/'),
+        ltrim((string) config('pwax.manifest_path', '/manifest.json'), '/'),
         [PwaxController::class, 'manifest']
     )->name('pwax.manifest');
 
@@ -71,7 +71,7 @@ Route::group(array_filter([
     // takes effect without rebuilding the route table; the controller returns 404 when
     // the worker is off.
     Route::get(
-        ltrim((string) config('pwax.service_worker.path', '/service-worker.js'), '/'),
+        ltrim((string) config('pwax.service_worker.path', '/sw.js'), '/'),
         [PwaxController::class, 'serviceWorker']
     )->name('pwax.service-worker');
 

@@ -9,9 +9,101 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Pages work offline.** An application could precache its framework, its components and
+  its shell, install as a PWA, boot offline — and still show "This page needs an internet
+  connection to load", because the one thing never cached was the page. Page payloads are
+  now fetched the way the client runtime fetches them and stored under that same request,
+  so the Cache API's `Vary` check succeeds instead of missing every time.
+- **Runtime page caching**, so everywhere a visitor has been works offline rather than only
+  the routes listed in config. Configure with `service_worker.pages.runtime`.
+- **Per-identity cache partitioning.** Pages, runtime entries and API responses are stored
+  in caches named after an opaque HMAC of the signed-in user. One person's cached page is
+  not merely cleared when another signs in — it was never reachable under their name.
+  `pwax.sw.forgetIdentity()` drops one identity's caches on sign-out without discarding the
+  precache.
+- **Asset groups** (`service_worker.asset_groups`) with `install_mode`, `update_mode` and
+  glob patterns resolved against `public/`. Images, fonts, stylesheets and build output are
+  precached without listing each one.
+- **Data groups** (`service_worker.data_groups`) with `freshness` and `performance`
+  strategies, `max_age` and `max_size`. An offline page used to render and then fail every
+  fetch it made.
+- **`navigation_strategy`** with an `app-shell` option for zero-round-trip navigation, and
+  **`navigation_urls`** so a path the application does not own bypasses the worker.
+- `ComponentResponse::title()` for a per-page document title, applied on first paint and on
+  every client-side navigation.
+- `ComponentResponse::offline(false)` for a page that must never reach disk — stronger than
+  omitting `->cacheable()`, which only declines to precache.
+- `<title>`, `<meta name="description">`, `<link rel="icon">` and an opt-in `<base href>` in
+  the head, in a fixed order.
+- `pwax:doctor` and `pwax:precache` report manifest `warnings`, including a glob truncated
+  by `max_files` or `max_bytes`.
+
+### Fixed
+
+- **`service_worker.precache` never worked.** The worker fetched each listed route without
+  the `X-Pwax-Component` header, so the server answered with the HTML shell; that shell is
+  `no-store`, which the worker correctly refused to store. Every entry was skipped in
+  silence while the documentation described the feature as working.
+- **Cached page entries could never be matched.** Responses carry
+  `Vary: X-Pwax-Component, X-Requested-With, Accept`, and entries were stored under a bare
+  URL with none of those headers set.
+- **The offline shell's hash ignored the shell.** It was computed from a list of config
+  values and `Pwax::shell()` — which returns the shell's *view name*, a constant. Editing
+  the shell layout, either `includes/` partial or any Blade override left it unchanged, so
+  the worker copied a stale shell forward across every deploy.
+- **Configured `pwax.styles` sheets were never precached**, so an application with them set
+  went offline unstyled.
+- The service worker fetched precache URLs with `credentials: 'same-origin'`, so an install
+  triggered while signed in would have stored that user's private renderings once page
+  caching worked. Pages are now fetched anonymously.
+- `resources/views/layouts/shell.blade.php` discarded the `Shell` passed to it and resolved
+  a new one from the container, making the parameter dead and blocking a request-free
+  render.
+- `AssetManifest` compared against a hardcoded `/manifest.webmanifest` default that differed
+  from the one it emitted, so a configured manifest path went unhashed.
+- The `Pwax` facade documented `payload()`'s second argument as `$includeScript`; it has
+  been `$addressable` since 2.0.
+
+### Changed
+
+- **BREAKING:** `pwax_component()` is now `pwaxRender()`, `pwax_route()` is `pwaxRoute()`,
+  and the `@pwax` directive is `@pwaxImport`. `Pwax::importExpression()` is `Pwax::import()`.
+  Each helper is now named after the facade method it wraps. See `UPGRADE.md`.
+- **BREAKING:** the 1.x `vue()` and `router()` helpers and the `pwax.helpers.global` config
+  key are removed. They were deprecated in 2.0.
+- **BREAKING:** the service worker moves from `/service-worker.js` to `/sw.js` and the web
+  manifest from `/manifest.webmanifest` to `/manifest.json`. No redirect or shim is shipped
+  for either — a worker script response cannot be a redirect, so a worker already registered
+  at the old path has to be unregistered once in the browser. See `UPGRADE.md`. Installs
+  survive the manifest move: its `id` defaults to `start_url`.
+- **BREAKING:** `pwax.components.directive` now replaces the default name rather than
+  registering a second directive alongside it, so an application has exactly one spelling.
+  The 1.x `@import('…')` form is no longer special-cased in config values.
+- **BREAKING:** `service_worker.precache` becomes `service_worker.pages.urls` and
+  `service_worker.files` becomes `service_worker.asset_groups`.
+- Page payloads may now be stored by the service worker when a route opts in, where
+  previously `no-store` kept every one of them off disk. The three controls that make that
+  safe — the opt-in itself, anonymous install-time fetches, and identity-partitioned caches
+  — are described in the published config.
+
+### Internal
+
+- The test harness modelled the Cache API keyed on URL alone and ignored `Vary` entirely,
+  which is why none of the page-caching defects were visible to the suite. It now stores
+  each key request's headers and honours `Vary`, with tests of its own pinning that
+  behaviour.
+- New `Mxent\Pwax\Pwa\Glob` compiles glob patterns to regular expressions, used both
+  server-side and — serialised into `sw.json` — by the worker.
+- New `Mxent\Pwax\Pwa\PublicAssets` walks `public/` once per manifest build, refusing
+  symlinks, `.php` files, dotfiles and source maps.
+
+## [2.1.x]
+
+### Added
+
 - **The whole application is now available offline after one visit.** Pwax generates an
-  asset manifest at `/sw.json` — the equivalent of Angular's `ngsw.json` — listing every
-  URL the application is made of with a content hash, and the service worker installs the
+  asset manifest at `/sw.json`, listing every URL the application is made of with a
+  content hash, and the service worker installs the
   lot in one pass. Previously the worker precached one URL (`/`) and everything else was
   cached lazily, after having been fetched online at least once: a visitor who installed
   the app and then lost their connection had no framework, no runtime and no components.
@@ -278,6 +370,7 @@ A rewrite of the internals. See [UPGRADE.md](UPGRADE.md) for the migration check
 - JS/CSS minification and template parsing.
 - Configurable plugins, directives and middleware.
 
-[Unreleased]: https://github.com/mxent/pwax/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/mxent/pwax/compare/v2.1.4...HEAD
+[2.1.x]: https://github.com/mxent/pwax/compare/v2.0.0...v2.1.4
 [2.0.0]: https://github.com/mxent/pwax/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/mxent/pwax/releases/tag/v1.0.0

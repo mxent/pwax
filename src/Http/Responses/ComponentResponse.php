@@ -2,6 +2,7 @@
 
 namespace Mxent\Pwax\Http\Responses;
 
+use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\Support\Responsable;
 use Illuminate\Contracts\View\Factory as ViewFactory;
 use Illuminate\Http\JsonResponse;
@@ -30,6 +31,10 @@ class ComponentResponse implements Responsable
     private bool $sharedCache = false;
 
     private int $status = 200;
+
+    private ?string $title = null;
+
+    private bool $storable = true;
 
     /** @var array<string, string> */
     private array $headers = [];
@@ -65,7 +70,7 @@ class ComponentResponse implements Responsable
      * say so. Only the JSON payload becomes cacheable; the HTML shell stays `no-store`
      * because it carries the CSRF token, and a cached token is worthless at best.
      *
-     *     Route::get('/about', fn () => pwax_component('pages.about')->cacheable());
+     *     Route::get('/about', fn () => pwaxRender('pages.about')->cacheable());
      *
      * Do not call this on a page whose output depends on the visitor. There is no way for
      * the package to tell the difference, and a cache is not a place to find out.
@@ -76,6 +81,44 @@ class ComponentResponse implements Responsable
     {
         $this->payloadTtl = max(0, $seconds);
         $this->sharedCache = $shared;
+
+        return $this;
+    }
+
+    /**
+     * The document title for this page.
+     *
+     * Applied on the first paint through `<title>`, and again on every client-side
+     * navigation — the runtime reads it from the payload. Setting it only in the shell
+     * would leave the title correct once and stale for the rest of the session, which is
+     * worse than not setting it at all.
+     *
+     *     Route::get('/about', fn () => pwaxRender('pages.about')->title('About us'));
+     *
+     * `pwax.head.title_template` wraps it, so a per-page title need not repeat the site
+     * name on every route.
+     */
+    public function title(string $title): self
+    {
+        $this->title = $title;
+
+        return $this;
+    }
+
+    /**
+     * Keep this page out of the service worker's cache entirely.
+     *
+     * The worker stores pages as they are visited so that everywhere you have been works
+     * offline, partitioned by the signed-in identity. That is the right default, and it
+     * is wrong for a page whose content must never reach disk at all — a one-time code,
+     * a recovery key, somebody else's medical record on a shared terminal.
+     *
+     * Stronger than omitting `->cacheable()`: that only declines to precache the page,
+     * while this refuses the runtime cache too.
+     */
+    public function offline(bool $offline = true): self
+    {
+        $this->storable = $offline;
 
         return $this;
     }
@@ -121,11 +164,20 @@ class ComponentResponse implements Responsable
 
     private function json(Component $component): JsonResponse
     {
-        $response = new JsonResponse(
-            $this->pwax->payload($component, addressable: false),
-            $this->status,
-            $this->headers
-        );
+        $payload = $this->pwax->payload($component, addressable: false);
+
+        if ($this->title !== null) {
+            $payload['title'] = $this->documentTitle();
+        }
+
+        $response = new JsonResponse($payload, $this->status, $this->headers);
+
+        if (! $this->storable) {
+            // Read by the service worker, which honours it above everything else — a page
+            // marked this way is refused even by the runtime cache that ordinarily stores
+            // whatever you have visited.
+            $response->headers->set('X-Pwax-Cache', 'none');
+        }
 
         // A page payload is request-specific by default: it can embed the authenticated
         // user's data, so it must never land in a shared cache and the service worker
@@ -159,6 +211,7 @@ class ComponentResponse implements Responsable
                 JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
             ),
             'pwaxComponent' => $component,
+            'pwaxTitle' => $this->documentTitle(),
         ])->render();
 
         $response = new Response($html, $this->status, $this->headers);
@@ -166,6 +219,34 @@ class ComponentResponse implements Responsable
         $response->headers->set('Cache-Control', 'no-store, private');
         $response->headers->set('Vary', Pwax::VARY);
 
+        if (! $this->storable) {
+            $response->headers->set('X-Pwax-Cache', 'none');
+        }
+
         return $response;
+    }
+
+    /**
+     * This page's title, with `pwax.head.title_template` applied.
+     *
+     * The template is deliberately skipped when the page set no title of its own:
+     * ':title · Acme' against a fallback of 'Acme' would render 'Acme · Acme'.
+     */
+    private function documentTitle(): ?string
+    {
+        /** @var Config $config */
+        $config = app(Config::class);
+
+        if ($this->title === null) {
+            $fallback = $config->get('pwax.head.title') ?? $config->get('pwax.manifest.name');
+
+            return is_string($fallback) && $fallback !== '' ? $fallback : null;
+        }
+
+        $template = $config->get('pwax.head.title_template');
+
+        return is_string($template) && str_contains($template, ':title')
+            ? str_replace(':title', $this->title, $template)
+            : $this->title;
     }
 }

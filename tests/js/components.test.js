@@ -57,7 +57,7 @@ describe('component loader', () => {
     });
 
     /**
-     * `components: { Button: () => @pwax('button') }` is the Vue 2 idiom, dropped in
+     * `components: { Button: () => @pwaxImport('button') }` is the Vue 2 idiom, dropped in
      * Vue 3. Vue calls the arrow as a functional component, gets this object instead of
      * vnodes, and renders `String(child)` — which is `[object Object]` by default, with
      * no warning. The message has to land where the developer is looking: on the page.
@@ -69,7 +69,7 @@ describe('component loader', () => {
 
         expect(text).not.toBe('[object Object]');
         expect(text).toContain('arrow function');
-        expect(text).toContain("@pwax('…')");
+        expect(text).toContain("@pwaxImport('…')");
     });
 
     it('loads a component, applying its styles', async () => {

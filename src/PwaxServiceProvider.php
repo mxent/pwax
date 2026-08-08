@@ -28,6 +28,7 @@ use Mxent\Pwax\Minification\MatthiasMullieMinifier;
 use Mxent\Pwax\Minification\NullMinifier;
 use Mxent\Pwax\Pwa\AssetManifest;
 use Mxent\Pwax\Pwa\ComponentRegistry;
+use Mxent\Pwax\Pwa\PublicAssets;
 use Mxent\Pwax\Pwa\WebManifest;
 use Mxent\Pwax\Support\ComponentId;
 use Mxent\Pwax\Support\Shell;
@@ -56,25 +57,10 @@ class PwaxServiceProvider extends ServiceProvider
     {
         $this->loadViewsFrom(__DIR__ . '/../resources/views', 'pwax');
 
-        $this->bootHelpers();
         $this->bootDirectives();
         $this->bootMiddleware();
         $this->bootRoutes();
         $this->bootPublishing();
-    }
-
-    /**
-     * Optionally define the 1.x `vue()` and `router()` globals.
-     *
-     * They are not autoloaded via composer's `files` because those names are generic
-     * enough to collide with application code; `pwax_component()` and `pwax_route()`
-     * always exist and are the supported spelling.
-     */
-    protected function bootHelpers(): void
-    {
-        if ($this->app->make(Config::class)->get('pwax.helpers.global', false)) {
-            require_once __DIR__ . '/helpers-compat.php';
-        }
     }
 
     protected function registerCompiler(): void
@@ -177,6 +163,15 @@ class PwaxServiceProvider extends ServiceProvider
             $app->make(Filesystem::class),
         ));
 
+        // Bound per resolution, not shared: it walks `public/` and remembers what it
+        // found, which is right for one manifest build and wrong for a long-lived
+        // process that should notice a deploy.
+        $this->app->bind(PublicAssets::class, fn ($app): PublicAssets => new PublicAssets(
+            $app,
+            $app->make(Config::class),
+            $app->make(Filesystem::class),
+        ));
+
         $this->app->bind(AssetManifest::class, function ($app): AssetManifest {
             /** @var Config $config */
             $config = $app->make(Config::class);
@@ -188,6 +183,8 @@ class PwaxServiceProvider extends ServiceProvider
                 $app->make(WebManifest::class),
                 $app->make(ComponentRegistry::class),
                 $app,
+                $app->make(ViewFactory::class),
+                $app->make(PublicAssets::class),
                 $this->cacheStore($app, (string) $config->get('pwax.cache.store', '') ?: null),
             );
         });
@@ -202,7 +199,7 @@ class PwaxServiceProvider extends ServiceProvider
      * `route_prefix`, or running `view:cache` in a build step with no routes loaded,
      * produced imports that pointed nowhere.
      *
-     * The name is configurable and defaults to `@pwax`. It must never be `import`: Blade
+     * The name is configurable and defaults to `@pwaxImport`. It must never be `import`: Blade
      * matches a directive even with no arguments, so `@import` would also swallow the CSS
      * at-rule `@import url("…")` in every <style> block in the application.
      */
@@ -211,10 +208,10 @@ class PwaxServiceProvider extends ServiceProvider
         /** @var Config $config */
         $config = $this->app->make(Config::class);
 
-        $name = self::assertDirectiveName((string) $config->get('pwax.components.directive', 'pwax') ?: 'pwax');
+        $name = self::assertDirectiveName((string) $config->get('pwax.components.directive', 'pwaxImport'));
 
         Blade::directive($name, static fn (?string $expression): string => sprintf(
-            '<?php echo \Mxent\Pwax\Facades\Pwax::importExpression(%s); ?>',
+            '<?php echo \Mxent\Pwax\Facades\Pwax::import(%s); ?>',
             $expression === null || trim($expression) === '' ? 'null' : $expression
         ));
     }
@@ -231,7 +228,7 @@ class PwaxServiceProvider extends ServiceProvider
                 'pwax.components.directive cannot be "import": Blade matches a directive even with '
                 . 'no arguments, so an "import" directive also captures the CSS at-rule '
                 . '@import url("…") inside every <style> block in the application and replaces it '
-                . 'with JavaScript. Use the default "pwax".'
+                . 'with JavaScript. Use the default "pwaxImport".'
             );
         }
 
@@ -259,7 +256,7 @@ class PwaxServiceProvider extends ServiceProvider
 
         $router->aliasMiddleware('pwax', HandlePwaxRequests::class);
 
-        // Applied to the application's own routes too, so a `pwax_component()` route in
+        // Applied to the application's own routes too, so a `pwaxRender()` route in
         // web.php gets redirect translation without the developer wiring anything.
         //
         // This goes through the HTTP kernel rather than `Router::pushMiddlewareToGroup`.

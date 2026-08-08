@@ -147,16 +147,31 @@ class ComponentRegistry
 
         $paths = [array_values(array_unique($roots))];
 
-        if ($finder instanceof FileViewFinder) {
-            foreach ($finder->getHints() as $namespace => $hintPaths) {
-                // The package's own views are shell fragments and the worker source, not
-                // components anyone would import. Scanning them only produces noise.
-                if ($namespace === 'pwax') {
-                    continue;
-                }
+        // Namespaced views belong to packages, not to the application, and every package
+        // that calls `loadViewsFrom()` registers one — Laravel's own exception page
+        // among them. Scanning those found `laravel-exceptions-renderer::components.query`
+        // and put it in the manifest, which is both useless offline and a signed URL for
+        // a view nobody meant to expose. Opt in per namespace instead.
+        /** @var list<string> $namespaces */
+        $namespaces = array_values(array_filter(
+            (array) $this->config->get('pwax.service_worker.namespaces', []),
+            'is_string'
+        ));
 
-                $paths[(string) $namespace] = array_values(array_filter($hintPaths, 'is_string'));
+        if ($namespaces === [] || ! $finder instanceof FileViewFinder) {
+            return $paths;
+        }
+
+        $hints = $finder->getHints();
+
+        foreach ($namespaces as $namespace) {
+            // The package's own views are shell fragments and the worker source, never
+            // components an application would import.
+            if ($namespace === 'pwax' || ! isset($hints[$namespace])) {
+                continue;
             }
+
+            $paths[$namespace] = array_values(array_filter($hints[$namespace], 'is_string'));
         }
 
         return $paths;

@@ -173,10 +173,31 @@ async function install() {
     );
 
     const failures = entries.filter((_, i) => results[i].status === 'rejected');
-    const fatal = failures.filter((url) => critical.has(url));
+
+    // Kept apart from failures. A response the server marked `no-store` was not lost, it
+    // was refused — every page rendered by `pwax_component()` says exactly that, on
+    // purpose, so that one visitor's HTML is never written to another's disk. Reporting
+    // that as "could not be precached" reads like a broken install and sends people
+    // looking for a network problem that is not there.
+    const skipped = entries.filter((_, i) => results[i].status === 'fulfilled' && results[i].value === false);
+    const fatal = [...failures, ...skipped].filter((url) => critical.has(url));
 
     if (failures.length) {
-        console.warn(`pwax sw: ${failures.length} of ${entries.length} assets could not be precached`, failures);
+        console.warn(
+            `pwax sw: ${failures.length} of ${entries.length} assets could not be fetched. ` +
+                'Run `php artisan pwax:precache --verify` to find views that cannot render ' +
+                'without controller data.',
+            failures
+        );
+    }
+
+    if (skipped.length) {
+        console.info(
+            `pwax sw: ${skipped.length} URL(s) are excluded from offline caching because the ` +
+                'server sent `Cache-Control: no-store`. Pages rendered by pwax_component() do ' +
+                'that unless the route calls ->cacheable().',
+            skipped
+        );
     }
 
     if (fatal.length) {
@@ -241,7 +262,7 @@ async function store(cache, url, { hash, inherited, previous, crossOrigin }) {
 
             if (copy) {
                 await cache.put(url, copy);
-                return;
+                return true;
             }
         }
     }
@@ -252,11 +273,20 @@ async function store(cache, url, { hash, inherited, previous, crossOrigin }) {
 
     const response = await fetch(request);
 
+    // A response that arrived but must not be kept is reported by returning false, not by
+    // throwing: it is a policy decision, not a failure, and conflating the two turns a
+    // correctly-working install into an alarming one.
+    if (!response.ok || response.status === 206) {
+        throw new Error(`pwax sw: ${url} responded ${response.status}`);
+    }
+
     if (!cacheable(response)) {
-        throw new Error(`pwax sw: ${url} responded ${response.status} and was not stored`);
+        return false;
     }
 
     await cache.put(url, response);
+
+    return true;
 }
 
 /**
@@ -277,8 +307,7 @@ async function settleWithLimit(items, limit, fn) {
             }
 
             try {
-                await fn(items[index]);
-                results[index] = { status: 'fulfilled' };
+                results[index] = { status: 'fulfilled', value: await fn(items[index]) };
             } catch (reason) {
                 results[index] = { status: 'rejected', reason };
             }

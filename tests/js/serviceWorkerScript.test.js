@@ -126,6 +126,31 @@ describe('installing', () => {
         expect(worker.failed()).toBe(true);
     });
 
+    it('reports a refused response as skipped, not as a failure', async () => {
+        // `/settings` is served `no-store`, which is the server saying "this belongs to
+        // one visitor" — not a network problem. Reporting it as a failed asset reads like
+        // a broken install and sends people hunting for a connection fault.
+        const current = manifest();
+        current.assetGroups.push({ name: 'routes', installMode: 'prefetch', urls: ['/settings'] });
+
+        const worker = await boot(current);
+        const messages = worker.log.filter(Array.isArray).map((entry) => String(entry[1]));
+
+        expect(messages.some((m) => m.includes('could not be fetched'))).toBe(false);
+        expect(messages.some((m) => m.includes('no-store'))).toBe(true);
+
+        // …and it genuinely is not stored.
+        const cache = await worker.caches.open('pwax-precache-v1-h1');
+        expect(await cache.match('/settings')).toBeFalsy();
+    });
+
+    it('still reports a genuinely missing asset as a failure', async () => {
+        const worker = await boot(manifest(), { down: new Set([MODAL]) });
+        const messages = worker.log.filter(Array.isArray).map((entry) => String(entry[1]));
+
+        expect(messages.some((m) => m.includes('could not be fetched'))).toBe(true);
+    });
+
     it('does not activate itself', async () => {
         const worker = await boot();
 

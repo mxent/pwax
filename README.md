@@ -585,6 +585,15 @@ for plugins, directives and client middleware. Include all of them, or pick:
 ],
 ```
 
+Only your own view paths are scanned. Package view namespaces are not — every package
+that calls `loadViewsFrom()` registers one, Laravel's own exception-page renderer
+included, and none of those are components your application imports. Opt in by name if
+you publish components from a package of your own:
+
+```php
+'service_worker' => ['namespaces' => ['acme-ui']],   // finds @pwax('acme-ui::button')
+```
+
 See exactly what that resolves to:
 
 ```bash

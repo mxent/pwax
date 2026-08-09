@@ -1424,20 +1424,25 @@ function dataName(manifest, group, identity) {
 async function trimIdentities(manifest) {
     const limit = manifest.identityCacheLimit || 2;
     const prefix = pagesPrefix(manifest);
-    const keys = (await caches.keys()).filter((key) => key.startsWith(prefix));
 
-    if (keys.length <= limit) {
+    // Reserved labels are filtered out *before* counting, not after choosing. They are not
+    // people: `anon` is every signed-out visitor at once, and `install` is the build's own
+    // copies that every identity falls back to. Counting them spends the budget on buckets
+    // nobody signed into — and because they are also the oldest, an eviction that picked
+    // them simply did nothing, so the setting did not begin to bite until there were
+    // several more identities than it names.
+    const identities = (await caches.keys())
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => key.slice(prefix.length))
+        .filter((identity) => !reserved(identity));
+
+    if (identities.length <= limit) {
         return;
     }
 
-    const doomed = keys.slice(0, keys.length - limit).map((key) => key.slice(prefix.length));
-
-    // Neither reserved label is a person who signed in here. `anon` is every signed-out
-    // visitor at once, and dropping it would evict a shared bucket to make room for one
-    // individual; `install` is the build's own copies, which nothing on this device put
-    // there and every identity falls back to.
+    // Oldest first, approximated by insertion order, which is what `caches.keys()` gives.
     await Promise.all(
-        doomed.filter((identity) => !reserved(identity)).map((identity) => forget(manifest, identity))
+        identities.slice(0, identities.length - limit).map((identity) => forget(manifest, identity))
     );
 }
 

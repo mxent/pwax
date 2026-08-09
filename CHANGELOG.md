@@ -48,6 +48,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cache. So the one thing precaching exists to provide was the one thing they could not
   reach. Install-time payloads now live in a bucket every identity reads and none writes
   to, with the visitor's own copy still preferred when they have one.
+- **`identity_cache_limit` counted buckets that were not people.** It names how many
+  signed-in identities keep caches on a device, but the sweep counted the shared ones too
+  — and since those are also the oldest, an eviction that picked one skipped it and
+  deleted nothing. The setting did not begin to bite until there were several more
+  identities than it names.
 - **The whole application was announced as "Loading".** The mount element carried
   `role="status"`, `aria-live="polite"` and `aria-label="Loading"` for the spinner, and the
   runtime removed only the class on mount — so for the rest of the session every reactive

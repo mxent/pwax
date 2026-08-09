@@ -293,6 +293,39 @@ describe('the build’s own page copies', () => {
         expect(names).toContain('pwax-pages-v1-h1-install');
     });
 
+    it('do not spend the identity budget', async () => {
+        const caches = new FakeCaches();
+        const current = manifest({
+            identityCacheLimit: 2,
+            assetGroups: [
+                { name: 'app', installMode: 'prefetch', urls: [RUNTIME, SHELL] },
+                { name: 'pages', installMode: 'prefetch', kind: 'page', urls: [] },
+            ],
+        });
+
+        const worker = await install(caches, current);
+
+        // `install` and `anon` exist alongside three people. The setting says how many
+        // signed-in identities keep caches here, so it is the three that are counted —
+        // and because the reserved two are also the oldest, counting them meant the
+        // eviction picked one of those, skipped it, and deleted nothing at all.
+        await caches.open(`pwax-pages-v1-h1-anon`);
+        for (const who of [ALICE, BOB, 'c1c2c3c4c5c6c7c8']) {
+            await caches.open(`pwax-pages-v1-h1-${who}`);
+        }
+
+        await worker.dispatch('activate');
+
+        const names = await caches.keys();
+
+        expect(names).toContain('pwax-pages-v1-h1-install');
+        expect(names).toContain('pwax-pages-v1-h1-anon');
+        // The oldest person goes; the two most recent stay.
+        expect(names).not.toContain(`pwax-pages-v1-h1-${ALICE}`);
+        expect(names).toContain(`pwax-pages-v1-h1-${BOB}`);
+        expect(names).toContain('pwax-pages-v1-h1-c1c2c3c4c5c6c7c8');
+    });
+
     it('are not dropped by forgetting an identity', async () => {
         const caches = new FakeCaches();
         const current = manifest();

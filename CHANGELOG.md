@@ -71,6 +71,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A stored page is used when the origin answers `5xx`, not only when the network throws.**
+  A connection dropping mid-request, a proxy in between, or an application mid-deploy all
+  produce a reply, so the fallback never ran and the visitor saw an error with a usable
+  copy of the page on the device. Data groups do the same. A `404` or `403` is still never
+  answered from a copy — the server is working correctly and saying something true.
 - `service_worker.strategy` is `service_worker.runtime_strategy`, and defaults to
   `network-only`. The old default kept a copy of every same-origin GET it passed through,
   including URLs the application never declared.

@@ -646,3 +646,44 @@ describe('a precached page and a signed-in visitor', () => {
         );
     });
 });
+
+describe('a server that is failing rather than absent', () => {
+    /** A server that answers this path with a status instead of a payload. */
+    const failing = (current, path, status) => (asked, request) =>
+        asked === path
+            ? new Response('<html>error</html>', { status, headers: { 'Content-Type': 'text/html' } })
+            : server(current)(asked, request);
+
+    it('serves the stored page when the origin returns a 5xx', async () => {
+        // Falling back only when `fetch` throws covers the network being gone and nothing
+        // else. A connection that drops mid-request, a proxy in between, an application
+        // that is deploying — all resolve, with a 5xx, and the visitor used to be shown an
+        // error while a copy of the page sat on the device unread.
+        const caches = new FakeCaches();
+        const current = manifest();
+
+        await boot(current, { caches });
+
+        const broken = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 503) });
+        await broken.dispatch('activate');
+
+        const response = await visit(broken, ABOUT);
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ template: '<p>/about</p>' });
+    });
+
+    it('does not answer a 404 from a stale copy', async () => {
+        const caches = new FakeCaches();
+        const current = manifest();
+
+        await boot(current, { caches });
+
+        const gone = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 404) });
+        await gone.dispatch('activate');
+
+        // The server is working correctly and saying something true. Answering from a
+        // stored copy would invent a page that is not there any more.
+        expect((await visit(gone, ABOUT)).status).toBe(404);
+    });
+});

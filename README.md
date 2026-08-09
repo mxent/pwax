@@ -1086,6 +1086,24 @@ is not an offline app. Three things make storing them safe, and they are worth k
   circumstances — a one-time code, a recovery key. `service_worker.pages.runtime => false`
   turns the whole behaviour off.
 
+### When a stored page is used
+
+By default a page goes to the network first and falls back to what is stored — not only
+when the network is gone, but when the origin answers with a `5xx`. A connection that
+drops mid-request, a proxy in between, an application that is deploying: those all *reply*,
+so waiting for `fetch` to throw would show an error while a copy of the page sat on the
+device unread. A `404` or `403` is never answered from a copy, because the server is
+working correctly and saying something true.
+
+To prefer the stored copy even when the network is fine, make pages cache-first:
+
+```php
+'service_worker' => ['pages' => ['strategy' => 'performance']],
+```
+
+That is faster and can be a version behind. `'freshness'` — the default — goes to the
+network but gives up on it after `pages.timeout` (2000 ms) and uses the copy.
+
 Two things this does not cover, and both are worth deciding about rather than discovering:
 
 - **Every signed-out visitor shares one partition.** There is no identity to name a cache

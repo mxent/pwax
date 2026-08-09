@@ -784,6 +784,26 @@ async function page(request, manifest, group, identity) {
             await trim(destination, group.maxEntries || manifest.maxEntries);
         }
 
+        // A reply is not the same as an answer.
+        //
+        // Falling back only when `fetch` throws covers the network being gone and nothing
+        // else. A connection that drops mid-request, a proxy between here and the origin,
+        // an application that is deploying or has fallen over — those come back as 5xx,
+        // which resolves, so the visitor was shown an error while a copy of the page sat
+        // on the device unread.
+        //
+        // Only 5xx. A 404 or a 403 is the server working correctly and saying something
+        // true, and answering it from a stale copy would be inventing a page that is not
+        // there any more; a redirect to a login screen must reach the runtime, which knows
+        // what to do with it.
+        if (response.status >= 500) {
+            const hit = await storedPage(request, manifest, cache);
+
+            if (hit) {
+                return hit;
+            }
+        }
+
         return response;
     } catch (error) {
         const hit = await storedPage(request, manifest, cache);
@@ -913,6 +933,12 @@ async function dataResponse(request, manifest, group, identity) {
     const cache = await caches.open(dataName(manifest, group, identity));
     const key = new URL(request.url).pathname + new URL(request.url).search;
 
+    const stored = async () => {
+        const hit = await cache.match(request);
+
+        return hit && (await isYoungEnough(cache, key, config.maxAge)) ? hit : null;
+    };
+
     const fresh = async () => {
         const response = await withTimeout(fetch(request), config.timeout);
 
@@ -922,13 +948,19 @@ async function dataResponse(request, manifest, group, identity) {
             await trimData(cache, config.maxSize);
         }
 
+        // Same rule as a page: a failing origin is not an answer, and a stored copy
+        // within its `max_age` beats handing the application a 502 to render.
+        if (response.status >= 500) {
+            return (await stored()) || response;
+        }
+
         return response;
     };
 
     if (config.strategy === 'performance') {
-        const hit = await cache.match(request);
+        const hit = await stored();
 
-        if (hit && (await isYoungEnough(cache, key, config.maxAge))) {
+        if (hit) {
             return hit;
         }
     }
@@ -936,9 +968,9 @@ async function dataResponse(request, manifest, group, identity) {
     try {
         return await fresh();
     } catch (error) {
-        const hit = await cache.match(request);
+        const hit = await stored();
 
-        if (hit && (await isYoungEnough(cache, key, config.maxAge))) {
+        if (hit) {
             return hit;
         }
 

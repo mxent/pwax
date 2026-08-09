@@ -41,6 +41,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The client runtime bundle could never update in a browser that had cached it.**
+  `/__pwax__/pwax.js` carries no version in its URL and is served `immutable`, which tells
+  a browser not to revalidate for a year — not even conditionally, so its ETag was never
+  consulted. Upgrading the package left returning visitors on the runtime they first
+  downloaded. Invisible with the service worker on, since that precaches by content hash;
+  entirely visible with it off, which is the default. The URL is now fingerprinted by the
+  bundle's contents, and the source map is revalidated rather than cached hard so it cannot
+  be paired with a newer bundle.
 - **A signed-in visitor could not open a precached page offline.** Go offline mid-session
   and click a link to a page you have not already opened, and it failed — while *reloading*
   that same URL worked. A navigation is answered from the shared precache; the payload a
@@ -113,6 +121,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   navigation to a page whose stylesheet never loaded.
 - `pwax.transition` names the page transition and its duration. The bundled one fades with
   opacity alone; both it and the progress bar defer to `prefers-reduced-motion`.
+- `pwax.sw.applyUpdate()` takes a waiting build immediately, and the runtime logs one line
+  when one is waiting. A new worker installs and then waits for every tab to close — the
+  right default, and indistinguishable from a deploy that did nothing if an application
+  does not listen for `pwax:update-available`.
 - `service_worker.max_entry_bytes`, bounding a single runtime-cache entry. `max_entries`
   counts entries, which bounds nothing on its own.
 - **Pages work offline.** An application could precache its framework, its components and

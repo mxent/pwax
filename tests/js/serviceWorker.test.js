@@ -257,3 +257,50 @@ describe('the service worker api', () => {
         await expect(createServiceWorkerApi().unregister()).resolves.toBe(true);
     });
 });
+
+describe('taking a waiting update', () => {
+    it('says so on the console, because nothing else will', async () => {
+        const { registration } = installContainer();
+        await registerServiceWorker('/service-worker.js');
+
+        const notices = [];
+        const info = console.info;
+        console.info = (m) => notices.push(m);
+
+        try {
+            const worker = createWorker();
+            registration.installing = worker;
+            registration.emit('updatefound');
+            worker.state = 'installed';
+            worker.emit('statechange');
+        } finally {
+            console.info = info;
+        }
+
+        // A new build waits rather than taking over, and an application that does not
+        // listen for the event gives no sign at all — which reads as a deploy that did
+        // not deploy. This line is what explains it.
+        expect(notices).toHaveLength(1);
+        expect(notices[0]).toContain('applyUpdate');
+    });
+
+    it('lets the update through on request', async () => {
+        const { registration } = installContainer();
+        await registerServiceWorker('/service-worker.js');
+
+        const worker = createWorker();
+        registration.installing = worker;
+        registration.emit('updatefound');
+        worker.state = 'installed';
+        worker.emit('statechange');
+
+        await expect(createServiceWorkerApi().applyUpdate()).resolves.toBe(true);
+        expect(worker.postMessage).toHaveBeenCalledWith({ type: 'PWAX_SKIP_WAITING' });
+    });
+
+    it('reports when there is nothing waiting', async () => {
+        installContainer();
+
+        await expect(createServiceWorkerApi().applyUpdate()).resolves.toBe(false);
+    });
+});

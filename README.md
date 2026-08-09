@@ -911,6 +911,16 @@ other reason will not restart your users' tabs and discard what they were typing
 An open tab re-checks for a new build hourly and when it regains focus. `pwax.sw.update()`
 checks on demand.
 
+> **A new build does not take over on its own.** It installs, then waits until every tab
+> of the application is closed. That is the point — taking over immediately would reload
+> those tabs and discard whatever was being typed — but it does mean an application that
+> ignores the event above can look as though a deploy did nothing: the old worker is still
+> answering every request, out of the old caches.
+>
+> The runtime logs one line to the console when a build is waiting. `pwax.sw.applyUpdate()`
+> lets it through immediately and reloads, which is what to call from a prompt of your own,
+> and what to paste into the console when you are wondering why a fix has not appeared.
+
 ### Going offline and back
 
 ```js
@@ -1227,6 +1237,7 @@ The runtime publishes `window.pwax`:
 | `pwax.http.json(url, options?)` | Fetch JSON with Pwax's headers and CSRF token |
 | `pwax.styles` | The reference-counted style manager |
 | `pwax.sw.update()` | Check for a new build now |
+| `pwax.sw.applyUpdate()` | Let a waiting build take over now, and reload |
 | `pwax.sw.clearCaches()` | Delete every Pwax cache, framework included |
 | `pwax.sw.forgetIdentity(id)` | Drop one signed-in identity's pages and data — call on sign-out |
 | `pwax.sw.unregister()` | Remove the service worker entirely |

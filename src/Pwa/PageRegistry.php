@@ -134,7 +134,7 @@ class PageRegistry
 
         // Any one selected view is enough. A controller that branches between an admin
         // view and a public one still answers a single URL, and precaching it stores
-        // whichever the server renders for an anonymous request.
+        // The view the server renders for the current request.
         return array_values(array_filter(
             $this->all(),
             static function (array $page) use ($allowed): bool {

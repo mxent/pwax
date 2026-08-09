@@ -39,6 +39,7 @@ class DoctorCommand extends Command
         $this->checkRemovedConfig($config);
         $this->checkDirective($config);
         $this->checkAssets($config);
+        $this->checkCrossOriginPolicy($config);
         $this->checkRuntimeBundle();
         $this->checkManifest($config);
         $this->checkServiceWorker($config);
@@ -79,7 +80,7 @@ class DoctorCommand extends Command
             'pwax.service_worker.files' => 'service_worker.asset_groups, which takes globs',
             'pwax.helpers.global' => 'nothing — vue() and router() were removed in 3.0',
             'pwax.service_worker.strategy' => 'service_worker.runtime_strategy, which now defaults to network-only',
-            'pwax.service_worker.identity_cache_limit' => 'nothing — one cache holds the visitor’s pages now, emptied when the signed-in visitor changes, so there is no per-person set left to bound',
+            'pwax.service_worker.identity_cache_limit' => 'nothing — caches are shared across visitors, so there is no per-person set left to bound',
         ];
 
         foreach ($replacements as $key => $replacement) {
@@ -182,6 +183,82 @@ class DoctorCommand extends Command
             'Vue is published locally',
             sprintf('%s is missing. Run `php artisan vendor:publish --tag=pwax-assets`.', $path)
         );
+    }
+
+    /**
+     * Cross-origin isolation is enabled by default on the HTML shell. Every cross-origin
+     * asset the application loads therefore needs a `crossorigin` attribute, or the
+     * browser refuses to load it.
+     */
+    private function checkCrossOriginPolicy(Config $config): void
+    {
+        $coep = $config->get('pwax.security.cross_origin_embedder_policy');
+
+        if ($coep === null || $coep === '') {
+            return;
+        }
+
+        foreach ((array) $config->get('pwax.scripts', []) as $script) {
+            $src = is_array($script) ? ($script['src'] ?? '') : (string) $script;
+
+            if ($src === '' || ! $this->isCrossOriginUrl($src)) {
+                continue;
+            }
+
+            $crossorigin = is_array($script) ? ($script['crossorigin'] ?? null) : null;
+
+            if ($crossorigin === null) {
+                $this->warn_(
+                    sprintf(
+                        'Cross-origin script "%s" is loaded without a `crossorigin` attribute, '
+                        . 'so the browser will refuse to load it under '
+                        . '`Cross-Origin-Embedder-Policy: %s`. Add `crossorigin` to its config entry.',
+                        $src,
+                        $coep
+                    )
+                );
+            }
+        }
+
+        foreach ((array) $config->get('pwax.styles', []) as $style) {
+            $href = is_array($style) ? ($style['href'] ?? '') : (string) $style;
+
+            if ($href === '' || ! $this->isCrossOriginUrl($href)) {
+                continue;
+            }
+
+            $crossorigin = is_array($style) ? ($style['crossorigin'] ?? null) : null;
+
+            if ($crossorigin === null) {
+                $this->warn_(
+                    sprintf(
+                        'Cross-origin stylesheet "%s" is loaded without a `crossorigin` attribute, '
+                        . 'so the browser will refuse to load it under '
+                        . '`Cross-Origin-Embedder-Policy: %s`. Add `crossorigin` to its config entry.',
+                        $href,
+                        $coep
+                    )
+                );
+            }
+        }
+    }
+
+    private function isCrossOriginUrl(string $url): bool
+    {
+        if (! preg_match('#^https?://#i', $url)) {
+            return false;
+        }
+
+        $appUrl = (string) config('app.url');
+
+        if ($appUrl === '') {
+            return true;
+        }
+
+        $host = parse_url($appUrl, PHP_URL_HOST) ?: '';
+        $urlHost = parse_url($url, PHP_URL_HOST) ?: '';
+
+        return $host === '' || $urlHost === '' || strcasecmp($host, $urlHost) !== 0;
     }
 
     private function checkRuntimeBundle(): void
@@ -371,10 +448,10 @@ class DoctorCommand extends Command
 
         if ((bool) $config->get('pwax.service_worker.pages.runtime', true)) {
             $this->warn_(
-                'Pages are cached as they are visited (service_worker.pages.runtime). They are '
-                . 'stored per signed-in identity and ->offline(false) exempts a page, but a '
-                . 'shared device will hold each visitor\'s pages until they sign out. '
-                . 'Call pwax.sw.forgetIdentity() on logout.'
+                'Pages are cached as they are visited (service_worker.pages.runtime). Caches '
+                . 'are shared across visitors — anyone with the device gets the same offline '
+                . 'pages the last user had. Use ->offline(false) on routes whose content must '
+                . 'not be stored at all.'
             );
         }
 

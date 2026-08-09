@@ -222,7 +222,6 @@ class PwaxController extends Controller
 
     /**
      * Serve the service worker.
-     *
      * The worker source carries the current asset-manifest hash. That is what makes a
      * deploy reach existing installs: a browser only treats a worker as new if its bytes
      * differ from the one it already has, so a worker whose source never changes would
@@ -349,7 +348,17 @@ class PwaxController extends Controller
      */
     private function finish(Request $request, SymfonyResponse $response): SymfonyResponse
     {
-        return $this->harden($this->notModified($request, $response) ?? $response);
+        return $this->harden($this->notModified($request, $response) ?? $response, $this->kindOf($response));
+    }
+
+    /**
+     * What kind of response this is, for hardening that depends on the body shape.
+     */
+    private function kindOf(SymfonyResponse $response): string
+    {
+        $type = (string) $response->headers->get('Content-Type', '');
+
+        return str_starts_with($type, 'text/html') ? 'html' : 'asset';
     }
 
     /**
@@ -359,12 +368,89 @@ class PwaxController extends Controller
      * defence in depth rather than a fix — but these endpoints serve JavaScript that
      * browsers execute, which is exactly where content-type sniffing is worth taking off
      * the table.
+     *
+     * `Referrer-Policy: no-referrer` is the strictest sane default: a `Referer` header
+     * sent to a third party (a script, an image) leaks the application's URL, and a
+     * PWA shell is by definition a long-lived document that does not need to send
+     * anything. Anyone who needs a different policy can override it.
+     *
+     * The HTML shell gets `X-Frame-Options: SAMEORIGIN` against clickjacking. Asset
+     * responses are inert when framed and do not need it.
+     *
+     * `Permissions-Policy` shuts off features the application is not asking for. Modern
+     * browsers respect it; older ones ignore it.
+     *
+     * `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy:
+     * require-corp` are the cross-origin isolation pair: they make the document eligible
+     * for `SharedArrayBuffer` and high-resolution timers, and they cost nothing when
+     * nobody tries to frame or open the page from another origin. Same-origin assets
+     * load without `crossorigin` attributes, so this does not break the PWA's own
+     * imports.
      */
-    private function harden(SymfonyResponse $response): SymfonyResponse
+    private function harden(SymfonyResponse $response, string $kind = 'asset'): SymfonyResponse
     {
         $response->headers->set('X-Content-Type-Options', 'nosniff');
 
+        $referrerPolicy = $this->headerFromConfig('pwax.security.referrer_policy', 'no-referrer');
+
+        if ($referrerPolicy !== null) {
+            $response->headers->set('Referrer-Policy', $referrerPolicy);
+        }
+
+        if ($kind === 'html') {
+            $frameOptions = $this->headerFromConfig('pwax.security.frame_options', 'SAMEORIGIN');
+
+            if ($frameOptions !== null) {
+                $response->headers->set('X-Frame-Options', $frameOptions);
+            }
+
+            if (! $response->headers->has('Permissions-Policy')) {
+                $permissionsPolicy = $this->headerFromConfig(
+                    'pwax.security.permissions_policy',
+                    'accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()'
+                );
+
+                if ($permissionsPolicy !== null) {
+                    $response->headers->set('Permissions-Policy', $permissionsPolicy);
+                }
+            }
+
+            // `Cross-Origin-Resource-Policy: same-origin` would block any image or font
+            // served from another origin, which is the whole point of a CDN. The COOP/COEP
+            // pair is the right tool for cross-origin isolation, not CORP.
+            $coop = $this->headerFromConfig('pwax.security.cross_origin_opener_policy', 'same-origin');
+
+            if ($coop !== null) {
+                $response->headers->set('Cross-Origin-Opener-Policy', $coop);
+            }
+
+            $coep = $this->headerFromConfig('pwax.security.cross_origin_embedder_policy', 'require-corp');
+
+            if ($coep !== null) {
+                $response->headers->set('Cross-Origin-Embedder-Policy', $coep);
+            }
+        }
+
         return $response;
+    }
+
+    /**
+     * A configured security header, with `null` to omit and `''` to omit.
+     */
+    private function headerFromConfig(string $key, string $default): ?string
+    {
+        // `Repository::get()` returns the default when the value is `null` (and the
+        // documentation says so). Distinguish "the user set this to null to suppress the
+        // header" from "the user has not said anything either way" with `has()`.
+        $value = $this->config->has($key) ? $this->config->get($key) : $default;
+
+        if ($value === null || $value === false) {
+            return null;
+        }
+
+        $value = (string) $value;
+
+        return $value === '' ? null : $value;
     }
 
     /**

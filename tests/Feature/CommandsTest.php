@@ -110,6 +110,40 @@ class CommandsTest extends TestCase
             ->assertFailed();
     }
 
+    /**
+     * Cross-origin isolation is on by default, and a cross-origin asset loaded without
+     * `crossorigin` is the kind of misconfiguration the browser turns into a silent
+     * missing asset. The doctor is the place that catches it before deploy.
+     */
+    public function test_the_doctor_command_flags_cross_origin_assets_without_crossorigin(): void
+    {
+        config()->set('pwax.manifest.icons', [
+            ['src' => '/i-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
+            ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
+        ]);
+        config()->set('pwax.assets.strategy', 'cdn');
+        config()->set('pwax.scripts', ['https://cdn.example.test/analytics.js']);
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('crossorigin')
+            ->assertSuccessful();
+    }
+
+    /**
+     * Same-origin assets load without `crossorigin`, so they are not flagged.
+     */
+    public function test_the_doctor_command_does_not_flag_same_origin_assets(): void
+    {
+        config()->set('pwax.manifest.icons', [
+            ['src' => '/i-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
+            ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
+        ]);
+        config()->set('pwax.assets.strategy', 'cdn');
+        config()->set('pwax.scripts', ['/js/local.js']);
+
+        $this->artisan('pwax:doctor')->assertSuccessful();
+    }
+
     public function test_the_precache_command_lists_what_is_cached(): void
     {
         config()->set('pwax.service_worker.enabled', true);

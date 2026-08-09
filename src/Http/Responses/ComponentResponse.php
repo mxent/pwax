@@ -10,7 +10,6 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Mxent\Pwax\Data\Component;
 use Mxent\Pwax\Pwax;
-use Mxent\Pwax\Support\Shell;
 
 /**
  * Negotiates between the SPA shell and a JSON component payload.
@@ -110,12 +109,9 @@ class ComponentResponse implements Responsable
      * Keep this page out of the service worker's cache entirely.
      *
      * The worker stores pages as they are visited so that everywhere you have been works
-     * offline, partitioned by the signed-in identity. That is the right default, and it
-     * is wrong for a page whose content must never reach disk at all — a one-time code,
-     * a recovery key, somebody else's medical record on a shared terminal.
-     *
-     * Stronger than omitting `->cacheable()`: that only declines to precache the page,
-     * while this refuses the runtime cache too.
+     * offline. Caches are shared across visitors, so a page that must not reach disk at
+     * all — a one-time code, a recovery key, somebody else's medical record on a shared
+     * terminal — has to opt out by name.
      */
     public function offline(bool $offline = true): self
     {
@@ -171,21 +167,7 @@ class ComponentResponse implements Responsable
             $payload['title'] = $this->documentTitle();
         }
 
-        $identity = $this->identity();
-        $payload['identity'] = $identity;
-
         $response = new JsonResponse($payload, $this->status, $this->headers);
-
-        // The same value as a header, for the service worker.
-        //
-        // The worker has to decide which identity's cache a payload belongs in, and until
-        // now it read that from the *request*. That is wrong at exactly the moment it
-        // matters: signing in through the runtime is a client-side navigation by design,
-        // so the request that follows the sign-in still carries the guest identity, and
-        // the first authenticated page would be filed where every guest can read it. The
-        // response knows who was actually served. Sent even when null — an explicit
-        // `anon` beats a stale header.
-        $response->headers->set('X-Pwax-Identity', $identity ?? 'anon');
 
         if (! $this->storable) {
             // Read by the service worker, which honours it above everything else — a page
@@ -234,33 +216,11 @@ class ComponentResponse implements Responsable
         $response->headers->set('Cache-Control', 'no-store, private');
         $response->headers->set('Vary', Pwax::VARY);
 
-        // Who this document was rendered for, exactly as the payload declares it.
-        //
-        // A navigation is the one request whose sender the service worker cannot identify:
-        // the runtime's fetches carry this header, but a document request made by the
-        // browser carries cookies, and a worker cannot read those. So the worker keeps a
-        // navigation's HTML only when the response says `anon` — a page belonging to
-        // nobody, which is therefore safe to hand to anybody. A missing header means
-        // unknown, and the worker stores nothing.
-        $response->headers->set('X-Pwax-Identity', $this->identity() ?? 'anon');
-
         if (! $this->storable) {
             $response->headers->set('X-Pwax-Cache', 'none');
         }
 
         return $response;
-    }
-
-    /**
-     * The opaque label for whoever this response was rendered for.
-     *
-     * Resolved from the container rather than injected, because a `ComponentResponse` is
-     * built by a route closure long before there is a response to attach it to, and the
-     * shell already knows how to derive it.
-     */
-    private function identity(): ?string
-    {
-        return app(Shell::class)->identity();
     }
 
     /**

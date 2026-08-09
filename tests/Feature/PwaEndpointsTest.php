@@ -64,7 +64,9 @@ class PwaEndpointsTest extends TestCase
 
         $body = (string) $this->get('/sw.js')->getContent();
 
-        $this->assertStringContainsString('"v9"', $body);
+        // The version travels in the banner comment, for log output; cache names are
+        // keyed by the manifest hash alone, so version changes do not invalidate them.
+        $this->assertStringContainsString('version:  v9', $body);
         $this->assertStringContainsString('"/offline"', $body);
     }
 
@@ -141,5 +143,100 @@ class PwaEndpointsTest extends TestCase
                 static fn ($cookie): bool => str_contains($cookie->getName(), 'session')
             )
         );
+    }
+
+    /**
+     * Every response from the package carries `X-Content-Type-Options: nosniff`. These
+     * endpoints serve JavaScript that a browser will execute on faith; taking sniffing
+     * off the table is the cheapest thing that prevents a misconfigured response from
+     * being parsed as something it is not.
+     */
+    public function test_every_endpoint_disables_content_type_sniffing(): void
+    {
+        config()->set('pwax.service_worker.enabled', true);
+
+        $this->get('/manifest.json')->assertHeader('X-Content-Type-Options', 'nosniff');
+        $this->get('/__pwax__/pwax.js')->assertHeader('X-Content-Type-Options', 'nosniff');
+        $this->get('/sw.js')->assertHeader('X-Content-Type-Options', 'nosniff');
+        $this->get('/sw.json')->assertHeader('X-Content-Type-Options', 'nosniff');
+    }
+
+    /**
+     * A PWA shell is by definition a long-lived document. `no-referrer` is the
+     * strictest sane default: a Referer header sent to a third party (a script, an
+     * image) leaks the application's URL, and the shell does not need to send anything.
+     */
+    public function test_every_endpoint_carries_a_referrer_policy(): void
+    {
+        config()->set('pwax.service_worker.enabled', true);
+
+        $this->get('/manifest.json')->assertHeader('Referrer-Policy', 'no-referrer');
+        $this->get('/__pwax__/pwax.js')->assertHeader('Referrer-Policy', 'no-referrer');
+        $this->get('/sw.js')->assertHeader('Referrer-Policy', 'no-referrer');
+    }
+
+    /**
+     * The HTML shell gets `X-Frame-Options: SAMEORIGIN` against clickjacking. Asset
+     * responses are inert when framed and do not need it; that is why the hardening
+     * differentiates them.
+     */
+    public function test_the_html_shell_is_protected_against_framing(): void
+    {
+        config()->set('pwax.service_worker.enabled', true);
+
+        $this->get('/__pwax__/shell')->assertHeader('X-Frame-Options', 'SAMEORIGIN');
+        $this->get('/manifest.json')->assertHeaderMissing('X-Frame-Options');
+    }
+
+    /**
+     * `Permissions-Policy` shuts off features the application is not asking for. Modern
+     * browsers respect it; older ones ignore it.
+     */
+    public function test_the_html_shell_carries_a_permissions_policy(): void
+    {
+        config()->set('pwax.service_worker.enabled', true);
+
+        $header = (string) $this->get('/__pwax__/shell')->headers->get('Permissions-Policy');
+
+        $this->assertStringContainsString('camera=()', $header);
+        $this->assertStringContainsString('microphone=()', $header);
+        $this->assertStringContainsString('geolocation=()', $header);
+    }
+
+    /**
+     * Cross-origin isolation is the standard hardening pair for a PWA shell: it makes
+     * the document eligible for `SharedArrayBuffer` and high-resolution timers, and
+     * costs nothing when nobody tries to frame or open the page from another origin.
+     * Same-origin assets load without `crossorigin` attributes, so this does not break
+     * the PWA's own imports.
+     */
+    public function test_the_html_shell_is_cross_origin_isolated(): void
+    {
+        config()->set('pwax.service_worker.enabled', true);
+
+        $shell = $this->get('/__pwax__/shell');
+
+        $shell->assertHeader('Cross-Origin-Opener-Policy', 'same-origin');
+        $shell->assertHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+        $this->get('/manifest.json')->assertHeaderMissing('Cross-Origin-Opener-Policy');
+    }
+
+    /**
+     * Every value is overridable. Set any of them to `null` to drop the corresponding
+     * header — useful when an upstream middleware (e.g. a CSP nonce library) is the
+     * authoritative source for some of them.
+     */
+    public function test_security_headers_are_configurable(): void
+    {
+        config()->set('pwax.service_worker.enabled', true);
+        config()->set('pwax.security.referrer_policy', null);
+        config()->set('pwax.security.frame_options', 'DENY');
+        config()->set('pwax.security.cross_origin_embedder_policy', null);
+
+        $shell = $this->get('/__pwax__/shell');
+
+        $shell->assertHeaderMissing('Referrer-Policy');
+        $shell->assertHeader('X-Frame-Options', 'DENY');
+        $shell->assertHeaderMissing('Cross-Origin-Embedder-Policy');
     }
 }

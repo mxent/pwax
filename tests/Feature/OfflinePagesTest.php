@@ -57,12 +57,14 @@ class OfflinePagesTest extends TestCase
     }
 
     /**
-     * A page is precacheable because it renders the same for everyone. Fetching it with
-     * cookies would store whichever visitor happened to trigger the install.
+     * Cookies are passed through by default. Caches are shared across visitors, so what
+     * is stored is the response the server returned for whoever fetched the URL — which
+     * for a page that renders the same for everyone is irrelevant, and for a page that
+     * does not is what `->offline(false)` exists to refuse.
      */
-    public function test_pages_are_fetched_anonymously_by_default(): void
+    public function test_pages_are_fetched_with_cookies_by_default(): void
     {
-        $this->assertSame('omit', $this->pageGroup()['credentials']);
+        $this->assertSame('include', $this->pageGroup()['credentials']);
     }
 
     public function test_pages_declare_their_strategy_and_timeout(): void

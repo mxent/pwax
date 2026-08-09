@@ -7,7 +7,6 @@
 
 export const COMPONENT_HEADER = 'X-Pwax-Component';
 export const LOCATION_HEADER = 'X-Pwax-Location';
-export const IDENTITY_HEADER = 'X-Pwax-Identity';
 
 export class HttpError extends Error {
     constructor(response, body) {
@@ -37,18 +36,6 @@ export function createHttp(config) {
         if (config.csrf) {
             base['X-CSRF-TOKEN'] = config.csrf;
         }
-
-        // Read by the service worker, not by the server, which is why it is deliberately
-        // absent from `Pwax::VARY`: the response does not depend on it, so varying on it
-        // would split every shared cache for no gain.
-        //
-        // Always sent, `anon` included. It used to be omitted for a signed-out visitor,
-        // which made an absent header mean two things — "a guest is asking" and "this is
-        // not a Pwax request" — and the worker cannot tell them apart. It needs to: with
-        // one cache per kind rather than one per person, the header is what tells it the
-        // person has changed and the last one's pages have to go. A guest arriving after
-        // somebody signed out has to be able to say so.
-        base[IDENTITY_HEADER] = config.identity || 'anon';
 
         return { ...base, ...extra };
     }

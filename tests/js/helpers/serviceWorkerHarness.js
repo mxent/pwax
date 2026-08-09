@@ -228,7 +228,6 @@ export function render(manifest) {
         manifest.cachePrefix || 'pwax',
         {
             hash: manifest.hash,
-            version: manifest.version,
             strategy: manifest.strategy,
             maxEntries: manifest.maxEntries,
             maxEntryBytes: manifest.maxEntryBytes,

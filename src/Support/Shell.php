@@ -20,6 +20,9 @@ use Throwable;
  */
 class Shell
 {
+    /** The bundle's digest once resolved; `false` until then, `null` if unreadable. */
+    private string|false|null $runtimeVersion = false;
+
     public function __construct(
         private readonly Config $config,
         private readonly Pwax $pwax,
@@ -153,11 +156,45 @@ class Shell
     }
 
     /**
-     * The URL the client runtime bundle is served from.
+     * The URL the client runtime bundle is served from, fingerprinted by its contents.
+     *
+     * The bundle is served `immutable`, which tells a browser not to revalidate for a
+     * year — not even conditionally, so the ETag on it is never consulted. Without a
+     * fingerprint the URL is identical from one package version to the next, and a
+     * returning visitor keeps the runtime they first downloaded until the year is up or
+     * they hard-reload.
+     *
+     * That is invisible when the service worker is on, because it precaches by content
+     * hash and refetches with `cache: 'reload'`. It is not invisible with the worker off,
+     * which is the default.
+     *
+     * The manifest builder asks for this same URL, so the precache key and the script tag
+     * cannot disagree.
      */
     public function runtimeUrl(): string
     {
-        return $this->pwax->route('pwax.runtime');
+        $url = $this->pwax->route('pwax.runtime');
+        $version = $this->runtimeVersion();
+
+        return $version === null ? $url : $url . (str_contains($url, '?') ? '&' : '?') . 'v=' . $version;
+    }
+
+    /**
+     * A short digest of the shipped bundle, or null if it is not readable.
+     *
+     * Its contents rather than the package version: a version is what someone remembered
+     * to bump, and this has to be right when they did not.
+     */
+    private function runtimeVersion(): ?string
+    {
+        if ($this->runtimeVersion !== false) {
+            return $this->runtimeVersion;
+        }
+
+        $path = dirname(__DIR__, 2) . '/dist/pwax.js';
+        $hash = is_file($path) ? @hash_file('xxh128', $path) : false;
+
+        return $this->runtimeVersion = $hash === false ? null : substr($hash, 0, 12);
     }
 
     /**

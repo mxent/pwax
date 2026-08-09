@@ -396,7 +396,7 @@ async function install() {
 
 async function activate() {
     const manifest = installed || (await readManifest(PENDING_KEY)) || (await readManifest(STATE_KEY)) || CONFIG;
-    const keep = new Set([precacheName(manifest), STATE_CACHE]);
+    const keep = new Set([precacheName(manifest), documentsName(manifest), STATE_CACHE]);
 
     // Promoted before the sweep, so a worker terminated midway through cannot come back
     // and mistake the cache it is activating for a stale one.
@@ -528,6 +528,47 @@ async function storeDocument(cache, url, credentials) {
         // The payload is already stored and is what offline correctness depends on. A
         // document that could not be fetched costs a spinner, not a broken page.
     }
+}
+
+/**
+ * Statuses that mean the application never answered, as opposed to answering badly.
+ *
+ * This is the line between "fall back to what is stored" and "show the visitor what the
+ * server said", and it is not all of 5xx. A **500 is the application running and
+ * throwing** — a real bug in a real route — and answering it from cache hides it twice
+ * over: the visitor sees a page that works and reports nothing, and whoever deployed it
+ * has no idea a route is broken until somebody eventually notices. A stale page is worse
+ * than an error page when the error is the thing you needed to know.
+ *
+ * These three are the origin not being reachable through:
+ *
+ *   502  a proxy could not get an answer out of the application at all
+ *   503  the application, or the proxy, is explicitly refusing for now — `php artisan
+ *        down` is a 503, so this is the deploy window
+ *   504  a proxy waited and gave up
+ *
+ * From the device none of those is distinguishable from a bad connection, which is exactly
+ * the case the fallback exists for. Everything else — 500 included, and every 4xx — is the
+ * server working and saying something true, so it goes through untouched.
+ */
+const UNREACHABLE = [502, 503, 504];
+
+function unreachable(response) {
+    return UNREACHABLE.indexOf(response.status) !== -1;
+}
+
+/**
+ * Say when a stored copy stood in for a failing origin.
+ *
+ * Silence here is how an outage goes unnoticed: the application carries on looking healthy
+ * because every visitor is being served yesterday's copy of it. One line, with the status
+ * and the URL, so the failure is visible to anybody with devtools open.
+ */
+function warnStale(url, status) {
+    console.warn(
+        `pwax sw: ${url} answered ${status}; served a stored copy instead. ` +
+            'The origin is not reachable — this is being hidden from the page.'
+    );
 }
 
 function isJson(response) {
@@ -784,6 +825,19 @@ async function page(request, manifest, group, identity) {
             await trim(destination, group.maxEntries || manifest.maxEntries);
         }
 
+        // A reply is not the same as an answer. Falling back only when `fetch` throws
+        // covers the network being gone and nothing else — a proxy between here and the
+        // origin, or an application mid-deploy, resolves.
+        if (unreachable(response)) {
+            const hit = await storedPage(request, manifest, cache);
+
+            if (hit) {
+                warnStale(request.url, response.status);
+
+                return hit;
+            }
+        }
+
         return response;
     } catch (error) {
         const hit = await storedPage(request, manifest, cache);
@@ -913,6 +967,12 @@ async function dataResponse(request, manifest, group, identity) {
     const cache = await caches.open(dataName(manifest, group, identity));
     const key = new URL(request.url).pathname + new URL(request.url).search;
 
+    const stored = async () => {
+        const hit = await cache.match(request);
+
+        return hit && (await isYoungEnough(cache, key, config.maxAge)) ? hit : null;
+    };
+
     const fresh = async () => {
         const response = await withTimeout(fetch(request), config.timeout);
 
@@ -922,13 +982,26 @@ async function dataResponse(request, manifest, group, identity) {
             await trimData(cache, config.maxSize);
         }
 
+        // Same rule as a page: an origin that cannot be reached is not an answer, and a
+        // stored copy within its `max_age` beats handing the application a 502 to render.
+        // A 500 goes through — the API ran and failed, and that is worth knowing.
+        if (unreachable(response)) {
+            const hit = await stored();
+
+            if (hit) {
+                warnStale(request.url, response.status);
+
+                return hit;
+            }
+        }
+
         return response;
     };
 
     if (config.strategy === 'performance') {
-        const hit = await cache.match(request);
+        const hit = await stored();
 
-        if (hit && (await isYoungEnough(cache, key, config.maxAge))) {
+        if (hit) {
             return hit;
         }
     }
@@ -936,9 +1009,9 @@ async function dataResponse(request, manifest, group, identity) {
     try {
         return await fresh();
     } catch (error) {
-        const hit = await cache.match(request);
+        const hit = await stored();
 
-        if (hit && (await isYoungEnough(cache, key, config.maxAge))) {
+        if (hit) {
             return hit;
         }
 
@@ -996,18 +1069,26 @@ async function trimData(cache, maxSize) {
 }
 
 /**
- * Navigations go to the network, and their responses are never stored.
+ * Navigations go to the network, and a guest rendering of one is kept.
  *
- * Storing them is the obvious thing to do and it is wrong here. The Cache API ignores
- * HTTP cache directives, so caching a navigation persists to disk exactly the documents
- * the server marked `no-store, private` — a signed-in user's rendered page, which the
- * next person to use that device would then be served offline.
+ * A page has two representations. The runtime asks for the payload and gets JSON; a
+ * reload, a bookmark, a link from outside the app is a navigation and gets HTML with the
+ * component inlined. Only the first was ever stored after install, so a route the build
+ * did not precache — a dynamic one, or anything route discovery could not reach — had no
+ * document at all, and reloading it offline fell all the way back to the shell.
  *
- * Offline navigation does not need that trade, because the documents it is answered with
- * were fetched at install without cookies: this page's own precached HTML if there is
- * some, and the session-free shell if there is not. Each is the guest rendering or it is
- * not there at all. What is never on disk is a document produced for whoever happened to
- * be signed in when they visited.
+ * What is stored is deliberately narrow: only a response that *says* it was rendered for
+ * a signed-out visitor, by carrying `X-Pwax-Identity: anon`. Not a response that merely
+ * looks anonymous, and not one with no header at all — an unknown identity is treated as
+ * somebody's, so a server that does not send it stores nothing.
+ *
+ * The reason for that narrowness is that a navigation is the one request whose sender the
+ * worker cannot identify. The runtime's fetches carry an identity header; a document
+ * request made by the browser carries cookies, which a worker cannot read. So there is no
+ * way to decide *whose* document to hand back, and the only document that is safe to hand
+ * to anybody is the one that belongs to nobody. Signed-in pages keep working offline the
+ * way they already did: the shell boots and the runtime asks for the payload, and that
+ * request does carry an identity.
  */
 async function navigate(event, manifest) {
     const path = new URL(event.request.url).pathname;
@@ -1026,7 +1107,7 @@ async function navigate(event, manifest) {
     }
 
     if (manifest.navigationStrategy === 'app-shell') {
-        const cached = (await pageDocument(manifest, path)) || (await shellDocument(manifest));
+        const cached = (await storedDocument(manifest, path)) || (await shellDocument(manifest));
 
         if (cached) {
             // Answered from disk, so the preload is not wanted — but it has to be settled
@@ -1040,29 +1121,157 @@ async function navigate(event, manifest) {
     }
 
     try {
-        const preloaded = await settled(preload);
+        const response = (await settled(preload)) || (await fetch(event.request));
 
-        if (preloaded) {
-            return preloaded;
+        // Off the critical path. The document is already on its way to the browser while
+        // this writes; a navigation is the one response where waiting on a cache write
+        // would be paid for in first paint.
+        event.waitUntil(rememberDocument(response, manifest, path));
+
+        // The same rule a page payload follows. An origin that is deploying, or behind a
+        // proxy that cannot reach it, would otherwise replace an application installed on
+        // the device with whatever error page came back — while a document for this exact
+        // route sat in the precache. A 500 is not that: the application ran and threw, and
+        // that page is the thing whoever deployed it needs to see.
+        if (unreachable(response)) {
+            const stored = (await storedDocument(manifest, path)) || (await shellDocument(manifest));
+
+            if (stored) {
+                warnStale(event.request.url, response.status);
+
+                return stored;
+            }
         }
 
-        return await fetch(event.request);
+        return response;
     } catch {
         // This page's own HTML first, and the shell only if there is none. The shell is a
         // correct answer but a worse one: it paints a spinner and waits for the runtime to
         // fetch a payload, where the document already has the component inlined.
         return (
-            (await pageDocument(manifest, path)) || (await shellDocument(manifest)) || offlineDocument()
+            (await storedDocument(manifest, path)) || (await shellDocument(manifest)) || offlineDocument()
         );
     }
 }
 
 /**
+ * Keep a navigation's HTML, when it is safe to hand back to anyone.
+ *
+ * `X-Pwax-Identity: anon`, present and explicit. A response with no header is not treated
+ * as anonymous — an application that does not send one, or a route that is not a Pwax page
+ * at all, would otherwise have a signed-in document filed where every visitor can read it.
+ * Missing means unknown, and unknown means no.
+ *
+ * `redirected` is the HTML counterpart of the payload path's JSON check. A route behind
+ * `auth` answers a signed-out navigation by redirecting to the login screen, and `fetch`
+ * follows it silently — so without this the login page would be stored as that route's
+ * document and served under its URL forever.
+ */
+async function rememberDocument(response, manifest, path) {
+    // The same switch that governs the payload. `pages.runtime => false` is documented as
+    // the way to keep page content off disk entirely, and a document is page content —
+    // more of it than the payload, since the markup is rendered rather than described.
+    if (manifest.pageRuntime === false) {
+        return;
+    }
+
+    if (
+        !response ||
+        !response.ok ||
+        response.redirected ||
+        !isHtml(response) ||
+        !storablePage(response) ||
+        (response.headers.get('X-Pwax-Identity') || '') !== 'anon'
+    ) {
+        return;
+    }
+
+    // Cloned before the first `await`, while the body is still untouched. The response
+    // itself is being read by the browser at the same time, and a clone taken after it has
+    // started is a locked stream.
+    const copy = response.clone();
+
+    try {
+        const cache = await caches.open(documentsName(manifest));
+        const defaults = manifest.pageDefaults || {};
+
+        await cache.put(path, copy);
+
+        // Bounded by `pages.max_entries`, not the runtime cache's. A document is a page,
+        // and the setting that says how many pages to keep should govern both of its
+        // halves.
+        await trim(cache, defaults.maxEntries || manifest.maxEntries);
+    } catch {
+        // A full disk is the likely one, and this is the least important thing on it: the
+        // payload is already stored and is what offline correctness rests on. A document
+        // that could not be written costs a spinner. Swallowed rather than left to reject
+        // inside `waitUntil`, where it would be reported as the worker failing.
+    }
+}
+
+/**
+ * The stored HTML for a path: what this device saw, then what the build shipped.
+ *
+ * Withheld once anyone has signed in on this device, and that is the whole of "use them
+ * according to the request". Every document here is a signed-out rendering — the precached
+ * ones were fetched at install without cookies, the runtime ones said so themselves — and
+ * a signed-out rendering is the wrong answer for a signed-in visitor. It is not a leak:
+ * nothing personal is in these caches. It is the page telling someone they are logged out
+ * when they are not, and unlike a slow paint it does not correct itself, because the
+ * document carries its own inlined payload and the runtime has no reason to refetch it.
+ *
+ * So a device with a signed-in bucket gets the shell instead, and the runtime's own
+ * request — which carries an identity — decides what to render. That costs a spinner and
+ * buys the right page. `pwax.sw.forgetIdentity()` on sign-out clears the bucket and the
+ * fast path comes back.
+ *
+ * Note what this is *not*: the install bucket of guest payloads, which `storedPage()`
+ * still falls back to for a signed-in visitor, is deliberately unguarded. The two look
+ * like the same decision made twice, opposite ways, and they are not. Withholding a
+ * document costs a spinner, because the shell then boots and asks for the payload — which
+ * consults the visitor's own bucket first, and reaches the same guest copy only if they
+ * have none. Withholding the payload would cost the page itself: there is nothing behind
+ * it. One has a strictly better answer available and the other has nothing.
+ */
+async function storedDocument(manifest, path) {
+    if (await signedInHere(manifest)) {
+        return null;
+    }
+
+    const name = documentsName(manifest);
+
+    // `has` before `open`: a read must not bring a cache into existence.
+    if (await caches.has(name)) {
+        const mine = await (await caches.open(name)).match(path, { ignoreVary: true });
+
+        if (mine) {
+            return mine;
+        }
+    }
+
+    return pageDocument(manifest, path);
+}
+
+/** Has anybody signed in on this device under this build? */
+async function signedInHere(manifest) {
+    const prefix = pagesPrefix(manifest);
+
+    return (await caches.keys()).some(
+        (key) => key.startsWith(prefix) && !reserved(key.slice(prefix.length))
+    );
+}
+
+function isHtml(response) {
+    return (response.headers.get('Content-Type') || '').includes('html');
+}
+
+/**
  * The precached HTML for a specific path, if this build stored one.
  *
- * Looked up in the precache by exact URL. A page whose document was never precached — one
- * cached at runtime as it was visited, or a route discovery could not read — simply has
- * none, and the shell answers instead.
+ * Looked up in the precache by exact URL. The second half of `storedDocument()`, and the
+ * older half: this is what the *build* installed, where the documents cache holds what the
+ * device has since visited. A route discovery could not read has neither until somebody
+ * opens it, and until then the shell answers.
  *
  * Not scoped by identity, and does not need to be: this reads the precache by name, and
  * every document in it was fetched without cookies at install. It is the guest rendering
@@ -1214,6 +1423,19 @@ async function networkFirst(request, manifest, identity) {
     try {
         const response = await fetch(request);
         await put(request, response.clone(), manifest, identity);
+
+        // An unreachable origin is not an answer here either. `put()` has already refused
+        // to store it — `cacheable()` rejects anything that is not `ok` — so what is looked
+        // up is the last good copy, never the error that just arrived.
+        if (unreachable(response)) {
+            const cached = await matchScoped(request, manifest, identity);
+
+            if (cached) {
+                warnStale(request.url, response.status);
+
+                return cached;
+            }
+        }
 
         return response;
     } catch (error) {
@@ -1424,6 +1646,18 @@ function pagesPrefix(manifest) {
  */
 function pagesName(manifest, identity) {
     return pagesPrefix(manifest) + identity;
+}
+
+/**
+ * Where navigation HTML lives. One cache, no identity suffix, and both are the point.
+ *
+ * Everything in here is a signed-out rendering, so there is no partition to draw: there is
+ * nobody it belongs to. Keyed by the build like the pages caches, because a document has
+ * the compiled component inlined and one kept across a deploy would paint last week's
+ * markup into this week's shell.
+ */
+function documentsName(manifest) {
+    return `${PREFIX}-documents-${manifest.version || 'v1'}-${manifest.hash}`;
 }
 
 function runtimePrefix(manifest) {

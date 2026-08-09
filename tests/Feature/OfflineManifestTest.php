@@ -56,7 +56,7 @@ class OfflineManifestTest extends TestCase
     {
         $urls = $this->urls();
 
-        $this->assertContains('/__pwax__/pwax.js', $urls);
+        $this->assertContains($this->runtimeUrl(), $urls);
         $this->assertContains('/manifest.json', $urls);
         $this->assertTrue(
             (bool) array_filter($urls, static fn (string $u): bool => str_contains($u, 'vue.global.prod.js')),
@@ -69,7 +69,7 @@ class OfflineManifestTest extends TestCase
         /** @var list<string> $critical */
         $critical = $this->get('/sw.json')->json('critical');
 
-        $this->assertContains('/__pwax__/pwax.js', $critical);
+        $this->assertContains($this->runtimeUrl(), $critical);
         $this->assertContains('/__pwax__/shell', $critical);
     }
 
@@ -112,7 +112,7 @@ class OfflineManifestTest extends TestCase
 
         $this->assertNotContains($this->pwaxUrl('components.modal'), $urls);
         // The framework still is: turning components off is not turning offline off.
-        $this->assertContains('/__pwax__/pwax.js', $urls);
+        $this->assertContains($this->runtimeUrl(), $urls);
     }
 
     public function test_the_allowlist_narrows_precaching_too(): void
@@ -131,6 +131,19 @@ class OfflineManifestTest extends TestCase
 
         $this->assertArrayHasKey($this->pwaxUrl('components.modal'), $hashes);
         $this->assertMatchesRegularExpression('/^[a-f0-9]{16}$/', $hashes[$this->pwaxUrl('components.modal')]);
+    }
+
+    public function test_the_runtime_bundle_is_content_addressed_under_its_fingerprinted_url(): void
+    {
+        /** @var array<string, string> $hashes */
+        $hashes = $this->get('/sw.json')->json('hashTable');
+
+        // The revision is what lets a deploy copy the bundle forward from the previous
+        // precache instead of downloading it again. It is keyed by the URL that was
+        // registered — the fingerprinted one — so looking it up by the bare route silently
+        // yields nothing and costs every visitor the download on every release.
+        $this->assertArrayHasKey($this->runtimeUrl(), $hashes);
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{16}$/', $hashes[$this->runtimeUrl()]);
     }
 
     public function test_the_manifest_hash_changes_when_a_component_changes(): void

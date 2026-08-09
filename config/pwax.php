@@ -227,8 +227,15 @@ return [
     |--------------------------------------------------------------------------
     |
     | asset_ttl  max-age (seconds) for component module responses. They are served
-    |            `private` because a component can render differently per user, and
-    |            always carry an ETag so a repeat request costs a 304.
+    |            `private` because a component can render differently per user.
+    |
+    |            Note what `max-age` means: for that long the browser does not ask
+    |            again at all, so the ETag these carry is not consulted and an edited
+    |            component keeps serving its previous body. The component URL is
+    |            derived from the view name, not its contents, so nothing else busts
+    |            it either. With the service worker on this does not arise — the
+    |            precache is content-addressed and answers before the HTTP cache is
+    |            reached — but with it off, lower this in development.
     | components Cache compiled components. The cache key is a digest of the rendered
     |            output, so entries can never go stale — a changed component simply
     |            produces a new key.
@@ -721,9 +728,15 @@ return [
         | what was found.
         |
         | `runtime` caches pages as they are visited, which covers what discovery
-        | cannot — a `/posts/{post}` someone actually opened. Those go in a cache named
-        | for the signed-in identity, so one visitor's pages are unreachable from
-        | another's session on the same device; see `identity_cache_limit` below.
+        | cannot — a `/posts/{post}` someone actually opened. Payloads go in a cache
+        | named for the signed-in identity, so one visitor's pages are unreachable
+        | from another's session on the same device; see `identity_cache_limit` below.
+        |
+        | A page's rendered HTML is kept too, so reloading such a route offline paints
+        | it rather than a spinner — but only when the response says it was rendered
+        | for nobody. A navigation carries cookies, which a service worker cannot
+        | read, so it cannot tell whose document it would be handing back; the only
+        | one safe to hand to anybody is the anonymous one.
         |
         | Between them these decide whether page content reaches disk at all. Turn
         | `runtime` off if none of it may; for a single page, ->offline(false) refuses

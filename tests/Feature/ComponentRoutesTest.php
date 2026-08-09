@@ -154,6 +154,45 @@ class ComponentRoutesTest extends TestCase
         $this->get('/__pwax__/pwax.js', ['If-None-Match' => $etag])->assertStatus(304);
     }
 
+    public function test_the_runtime_url_is_fingerprinted(): void
+    {
+        $html = (string) $this->get('/__pwax__/pwax.js')->getContent();
+
+        $this->assertSame(
+            1,
+            preg_match('#/__pwax__/pwax\\.js\\?v=([0-9a-f]{12})#', (string) $this->shellHtml(), $m),
+            'The runtime script tag carries no fingerprint. Served `immutable`, the URL is '
+            . 'the only thing that can tell a browser the bundle changed.'
+        );
+
+        // The digest is of the bundle actually being served, not of a version string
+        // somebody remembered to bump.
+        $this->assertSame(substr(hash('xxh128', $html), 0, 12), $m[1]);
+    }
+
+    public function test_the_manifest_and_the_page_agree_on_the_runtime_url(): void
+    {
+        config()->set('pwax.service_worker.enabled', true);
+
+        preg_match('#(/__pwax__/pwax\\.js\\?v=[0-9a-f]{12})#', (string) $this->shellHtml(), $m);
+
+        // If these ever drift, the worker precaches one URL and the page asks for another:
+        // the bundle is downloaded twice and served from cache never.
+        $this->assertContains($m[1], (array) $this->get('/sw.json')->json('critical'));
+    }
+
+    private function shellHtml(): string
+    {
+        return (string) $this->get('/shell')->getContent();
+    }
+
+    protected function defineRoutes($router): void
+    {
+        parent::defineRoutes($router);
+
+        $router->middleware('web')->get('/shell', fn () => pwaxRender('pages.home'));
+    }
+
     public function test_the_runtime_source_map_is_served(): void
     {
         // The bundle ends with a `sourceMappingURL` comment. Nothing answered it, so

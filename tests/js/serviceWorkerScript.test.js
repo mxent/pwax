@@ -571,6 +571,56 @@ describe('the runtime strategy', () => {
         expect(await runtime.match('/big.bin')).toBeFalsy();
     });
 
+    /** A runtime-cached URL that starts failing with a given status after its first fetch. */
+    const breaks = (current, caches, status) => {
+        const base = server(current);
+        let broken = false;
+
+        const worker = createWorker({
+            manifest: current,
+            caches,
+            routes: (path) =>
+                broken && path === '/exports/report.csv'
+                    ? new Response('failed', { status })
+                    : base(path),
+        });
+
+        return { worker, break: () => (broken = true) };
+    };
+
+    it('serves the last good copy when the origin cannot be reached', async () => {
+        const current = manifest({ overrides: { strategy: 'network-first' } });
+        const caches = new FakeCaches();
+        const { worker, break: fail } = breaks(current, caches, 502);
+
+        await worker.dispatch('install');
+        await worker.dispatch('activate');
+        await worker.request('/exports/report.csv');
+
+        fail();
+
+        // `put()` refuses to store the 502 — `cacheable()` rejects anything not `ok` — so
+        // what comes back is the copy from before the origin started failing.
+        const response = await worker.request('/exports/report.csv');
+
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe('body:/exports/report.csv');
+    });
+
+    it('lets a 500 through even with a copy on hand', async () => {
+        const current = manifest({ overrides: { strategy: 'network-first' } });
+        const caches = new FakeCaches();
+        const { worker, break: fail } = breaks(current, caches, 500);
+
+        await worker.dispatch('install');
+        await worker.dispatch('activate');
+        await worker.request('/exports/report.csv');
+
+        fail();
+
+        expect((await worker.request('/exports/report.csv')).status).toBe(500);
+    });
+
     it('keeps a response with no declared length', async () => {
         // Measuring it would mean buffering the very responses the ceiling exists to
         // avoid buffering. The entry cap still bounds them.

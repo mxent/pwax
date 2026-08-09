@@ -334,13 +334,18 @@ does. If yours cannot, set `hash_route => true`.
 | `return redirect('/somewhere')` | SPA navigation, no page reload |
 | `return redirect()->away(...)` | full page navigation |
 | `auth` middleware rejects the request | full page load of your login screen |
-| `419` expired CSRF token | full page reload to pick up a fresh token |
+| `419` expired CSRF token | one full page reload to pick up a fresh token |
 | `404`, `403`, `401`, `5xx` | renders the error template |
 
 The first two are translated by Pwax's middleware. The next two cannot be — `auth` and
 `VerifyCsrfToken` *throw*, so their redirects are produced by the exception handler
 outside the middleware pipeline — so the client handles them instead, by treating a
 followed redirect that returns HTML as an instruction to reload.
+
+**One** reload for a `419`, per tab. The reload only helps if it returns a different
+document, and under `navigation_strategy => 'app-shell'` it does not: the worker answers
+that navigation from disk, so the same expired token comes back and the page would reload
+forever. A second `419` renders the error template instead.
 
 So this just works:
 
@@ -668,7 +673,7 @@ hash:
     { "name": "app", "installMode": "prefetch", "kind": "asset", "urls": [
         "/vendor/pwax/vue.global.prod.js?v=3.5.41",
         "/vendor/pwax/vue-router.global.prod.js?v=5.2.0",
-        "/__pwax__/pwax.js",
+        "/__pwax__/pwax.js?v=8f2a41c0d5e7",
         "/manifest.json",
         "/favicon.ico",
         "/__pwax__/shell"
@@ -682,8 +687,11 @@ hash:
       "strategy": "freshness", "credentials": "omit", "urls": ["/", "/about"] }
   ],
   "dataGroups": [],
-  "hashTable": { "/__pwax__/c/Y29tcG9uZW50cy5tb2RhbA3f9a1c0d.js": "a41c9b02f7de5163" },
-  "critical": ["/__pwax__/pwax.js", "/__pwax__/shell"],
+  "hashTable": {
+    "/__pwax__/c/Y29tcG9uZW50cy5tb2RhbA3f9a1c0d.js": "a41c9b02f7de5163",
+    "/__pwax__/pwax.js?v=8f2a41c0d5e7": "8f2a41c0d5e7b193"
+  },
+  "critical": ["/__pwax__/pwax.js?v=8f2a41c0d5e7", "/__pwax__/shell"],
   "warnings": []
 }
 ```
@@ -805,20 +813,26 @@ worker whose source never changed would leave clients on the build they first in
 
 ### The offline shell
 
-**A navigation's own response is never stored.** The Cache API ignores HTTP cache
-directives, so a worker that kept what it fetched would persist to disk exactly the
-documents the server marked `no-store, private` — a signed-in user's rendered page, which
-the next person to use that device would be served offline.
+**A navigation's response is stored only when it belongs to nobody.** The Cache API ignores
+HTTP cache directives, so a worker that kept what it fetched would persist to disk exactly
+the documents the server marked `no-store, private` — a signed-in user's rendered page,
+which the next person to use that device would be served offline. Every page response
+carries `X-Pwax-Identity`, and a document is kept only when it says `anon`; a response
+without the header counts as somebody's, not as anonymous.
 
-Two documents *are* on disk, and neither was fetched during anyone's navigation. Both are
-fetched at install time **without cookies**, so each is the guest rendering or it is not
-there at all: the shell below, and the HTML of each discovered page, which is what lets an
+The documents that install with the build are anonymous by construction: they are fetched
+at install time **without cookies**, so each is the guest rendering or it is not there at
+all. Those are the shell, and the HTML of each discovered page, which is what lets an
 offline navigation paint the real page instead of a spinner.
 
-Instead Pwax precaches `/__pwax__/shell`: the same SPA shell rendered with no session, no
-CSRF token and no page component, identical for every visitor. When a navigation cannot
-reach the network the worker serves that, the runtime boots, and client-side routing
-carries on as normal.
+The shell is `/__pwax__/shell`: the same SPA shell rendered with no session, no CSRF token
+and no page component, identical for every visitor. When a navigation cannot reach the
+network and there is no document for that route, the worker serves the shell, the runtime
+boots, and client-side routing carries on as normal.
+
+`service_worker.pages.runtime => false` turns off both halves of runtime page caching, the
+payload and the document alike. The precached shell and documents are unaffected — they
+are what the build installed, not what a visitor left behind.
 
 The page *content* for a route is a separate question, and it is the one that decides
 whether the application is genuinely usable offline or merely renders a shell. Two
@@ -868,7 +882,7 @@ Route::get('/docs/{page}', fn ($page) => pwaxRender('pages.docs', [...])
 
 **Visited pages.** On by default, and what makes an authenticated application work
 offline rather than only its public routes: every page a visitor opens is cached as they
-go.
+go — the payload always, and the rendered HTML when the response declares itself anonymous.
 
 ```php
 'service_worker' => ['pages' => ['runtime' => true]],
@@ -910,6 +924,16 @@ other reason will not restart your users' tabs and discard what they were typing
 
 An open tab re-checks for a new build hourly and when it regains focus. `pwax.sw.update()`
 checks on demand.
+
+> **A new build does not take over on its own.** It installs, then waits until every tab
+> of the application is closed. That is the point — taking over immediately would reload
+> those tabs and discard whatever was being typed — but it does mean an application that
+> ignores the event above can look as though a deploy did nothing: the old worker is still
+> answering every request, out of the old caches.
+>
+> The runtime logs one line to the console when a build is waiting. `pwax.sw.applyUpdate()`
+> lets it through immediately and reloads, which is what to call from a prompt of your own,
+> and what to paste into the console when you are wondering why a fix has not appeared.
 
 ### Going offline and back
 
@@ -1060,12 +1084,38 @@ Supply the nonce for Pwax's inline `<style>` and JSON blocks:
 The Cache Storage API ignores HTTP cache directives, so a worker that stores whatever it
 fetches writes signed-in users' rendered pages to disk — where the next person to use that
 device is served them offline. Assets carrying `Cache-Control: no-store` are refused
-outright, and **no response to a navigation is ever stored**, whoever made it.
+outright.
 
-The HTML that answers an offline navigation was fetched separately at install, without
-cookies: the session-free shell, and the rendered document of each discovered page. Both
-are the guest rendering by construction — a route behind `auth` answers that cookieless
-request with a login screen, which is refused rather than stored.
+A page has two representations and both are stored, under different rules. The runtime
+asks for the payload and gets JSON; a reload, a bookmark or a link from outside the app is
+a navigation and gets HTML with the component already inlined.
+
+**A navigation's HTML is stored only when the response declares itself anonymous.** Every
+page response carries `X-Pwax-Identity`, and the worker keeps a document only when it says
+`anon`. Not one that merely looks anonymous, and not one with no header at all — an unknown
+identity is treated as somebody's, so an application that does not send it stores nothing.
+
+The reason is that a navigation is the one request whose sender the worker cannot identify.
+The runtime's fetches carry an identity header; a document request made by the browser
+carries cookies, which a worker cannot read. There is no way to decide *whose* document to
+hand back, so the only document safe to hand to anybody is the one that belongs to nobody.
+
+For the same reason, stored documents are **withheld entirely once anyone has signed in on
+the device**. They are all signed-out renderings, and showing one to a signed-in visitor
+tells them they are logged out when they are not — and unlike a slow paint it does not
+correct itself, because the document carries its own inlined payload. Those visitors get the
+shell instead, and the runtime's own request, which does carry an identity, decides what to
+render. That costs a spinner and buys the right page; `pwax.sw.forgetIdentity()` on sign-out
+clears the bucket and the fast path returns.
+
+Payloads are not withheld the same way, and the asymmetry is deliberate: withholding a
+document costs a spinner, because the shell boots and asks for the payload, which reads the
+visitor's own cache first. Withholding the payload would cost the page — there is nothing
+behind it.
+
+The documents installed with the build follow the same principle by construction: they are
+fetched without cookies, so a route behind `auth` answers that request with a login screen,
+which is refused rather than stored.
 
 Page payloads are the deliberate exception, because a shell with nothing to render in it
 is not an offline app. Three things make storing them safe, and they are worth knowing:
@@ -1073,9 +1123,11 @@ is not an offline app. Three things make storing them safe, and they are worth k
 - **They are partitioned by identity.** A visited page goes in a cache named after an
   opaque HMAC of the signed-in user, so another session on the same device cannot reach
   it — it is not cleared later, it was never addressable. Reads are confined to the same
-  name; the precache is the one cache deliberately shared, and it holds only the
-  framework, the components and the session-free shell. Call `pwax.sw.forgetIdentity()`
-  on sign-out to drop the rest at once.
+  name. Three caches are deliberately shared, and none of them can hold anything of one
+  visitor's: the precache (framework, components, session-free shell), the install bucket
+  of guest page payloads, and the documents cache, which stores only responses that
+  declared themselves anonymous. Call `pwax.sw.forgetIdentity()` on sign-out to drop the
+  rest at once.
 - **Precached pages are fetched without cookies**, so what installs is the guest
   rendering. A route behind `auth` answers with a login screen and is refused. Those
   copies sit in a bucket of their own that every identity reads and none writes to — the
@@ -1085,6 +1137,49 @@ is not an offline app. Three things make storing them safe, and they are worth k
 - **`->offline(false)` refuses outright**, for a page that must not reach disk under any
   circumstances — a one-time code, a recovery key. `service_worker.pages.runtime => false`
   turns the whole behaviour off.
+
+### When a stored page is used
+
+By default a page goes to the network first and falls back to what is stored — not only
+when the network is gone, but when the origin cannot be reached through. A proxy that
+cannot get an answer out of the application, or an application mid-deploy, *replies*, so
+waiting for `fetch` to throw would show an error while a copy of the page sat on the device
+unread.
+
+Three statuses, and not one more:
+
+| | |
+| --- | --- |
+| `502` | a proxy could not get an answer out of the application at all |
+| `503` | the application or the proxy is refusing for now — `php artisan down` answers this |
+| `504` | a proxy waited and gave up |
+
+From the device none of those is distinguishable from a bad connection, which is the case
+the fallback exists for.
+
+**A `500` is shown, like a `404`.** It is not the origin being unreachable — it is the
+application running and throwing, in a real route, and answering it from cache hides the
+bug twice over: the visitor sees a page that works and reports nothing, and whoever
+deployed it has no idea that route is broken until somebody eventually notices. A stale
+page is worse than an error page when the error is the thing you needed to know.
+
+The same rule holds for a full page load, not only for a navigation inside the app: a
+reload while the origin is unreachable is answered from the stored document for that route
+— the one visited earlier, or the one installed with the build. It holds for data groups
+and for the runtime cache too.
+
+Whenever a stored copy does stand in for a failing origin, the worker says so on the
+console with the status and the URL. Silence there is how an outage goes unnoticed: the
+application looks healthy because everybody is being served yesterday's copy of it.
+
+To prefer the stored copy even when the network is fine, make pages cache-first:
+
+```php
+'service_worker' => ['pages' => ['strategy' => 'performance']],
+```
+
+That is faster and can be a version behind. `'freshness'` — the default — goes to the
+network but gives up on it after `pages.timeout` (2000 ms) and uses the copy.
 
 Two things this does not cover, and both are worth deciding about rather than discovering:
 
@@ -1177,7 +1272,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `service_worker.exclude_files` | `[]` | Globs never precached |
 | `service_worker.pages.urls` | `[]` | Extra routes to precache, beyond the discovered ones |
 | `service_worker.pages.discover` | `true` | Find every route that renders a page, scoped by `components` |
-| `service_worker.pages.runtime` | `true` | Cache pages as they are visited |
+| `service_worker.pages.runtime` | `true` | Cache pages as they are visited — payload, and HTML when anonymous |
 | `service_worker.pages.strategy`, `.timeout` | `freshness`, `2000` | How a page payload is fetched |
 | `service_worker.pages.credentials` | `'omit'` | Precache the guest rendering, not one visitor's |
 | `service_worker.pages.as_components` | `false` | Also precache page views as importable modules |
@@ -1209,8 +1304,9 @@ The runtime publishes `window.pwax`:
 | `pwax.http.json(url, options?)` | Fetch JSON with Pwax's headers and CSRF token |
 | `pwax.styles` | The reference-counted style manager |
 | `pwax.sw.update()` | Check for a new build now |
+| `pwax.sw.applyUpdate()` | Let a waiting build take over now, and reload |
 | `pwax.sw.clearCaches()` | Delete every Pwax cache, framework included |
-| `pwax.sw.forgetIdentity(id)` | Drop one signed-in identity's pages and data — call on sign-out |
+| `pwax.sw.forgetIdentity(id?)` | Drop one signed-in identity's pages and data — call on sign-out, with no argument |
 | `pwax.sw.unregister()` | Remove the service worker entirely |
 | `pwax.app`, `pwax.router` | The Vue app and router instances |
 | `pwax.config`, `pwax.version` | Runtime configuration and package version |

@@ -765,7 +765,11 @@ class AssetManifest
             return null;
         }
 
-        if ($url === $this->pwax->route('pwax.runtime')) {
+        // Compared against the fingerprinted URL, which is the one that was registered.
+        // Matching the bare route instead would leave the bundle with no revision, and an
+        // entry with no revision can never be copied forward from the previous precache —
+        // so every deploy would re-download the runtime even when it had not changed.
+        if ($url === $this->shell->runtimeUrl()) {
             return $this->hashFile(dirname(__DIR__, 2) . '/dist/pwax.js');
         }
 

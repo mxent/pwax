@@ -139,6 +139,28 @@ and braces.)
 **The announcer** is where a route change is read out. Without it, navigation is silent to
 a screen reader.
 
+### 9. A page's HTML is cached as it is visited
+
+A page answers two ways — JSON to the runtime, HTML to a navigation — and only the JSON
+was kept after install. A route the build never precached, a `/posts/{post}` for instance,
+had no document at all, so reloading it offline fell back to the shell and a spinner. Now
+the HTML is kept too.
+
+Nothing to change, but two things to know.
+
+**It rides on a response header.** Every page response carries `X-Pwax-Identity`, and a
+document is stored only when it says `anon`. If a reverse proxy or CDN in front of the
+application strips response headers it does not recognise, nothing is stored and you get
+the previous behaviour — correct, just slower. Allow the header through.
+
+**`forgetIdentity()` on sign-out now buys speed as well as privacy.** Stored documents are
+all signed-out renderings, so they are withheld entirely once any identity has a cache on
+the device — otherwise a signed-in visitor reloading offline would be told they are logged
+out, and the document carries its own payload so nothing corrects it. Clearing the bucket
+on sign-out restores the fast path for the next visitor.
+
+`service_worker.pages.runtime => false` turns off both halves, as before.
+
 ### Checklist
 
 - [ ] `service_worker.strategy` → `service_worker.runtime_strategy`, and decided on its value
@@ -146,6 +168,7 @@ a screen reader.
 - [ ] `forgetIdentity()` called with no argument
 - [ ] `pwax.sw.registration` → `.controller` or `.registration()`
 - [ ] Published shell view updated, if you have one — announcer, mount attributes
+- [ ] `X-Pwax-Identity` survives your proxy or CDN, if you have one
 - [ ] `php artisan pwax:doctor` is clean
 - [ ] Tested offline, signed in as two different users on one browser profile
 

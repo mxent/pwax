@@ -91,7 +91,13 @@ function server(current, { cacheable = [ABOUT], down = new Set() } = {}) {
                 return new Response(
                     `<html><div id="pwax"></div><script id="pwax-initial">{"url":"${path}"}</script></html>`,
                     {
-                        headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-store, private' },
+                        headers: {
+                            'Content-Type': 'text/html',
+                            'Cache-Control': 'no-store, private',
+                            // Who it was rendered for. The worker keeps a navigation's HTML
+                            // only when this says `anon`, so the fake has to send it.
+                            'X-Pwax-Identity': 'anon',
+                        },
                     }
                 );
             }
@@ -644,5 +650,232 @@ describe('a precached page and a signed-in visitor', () => {
         expect((await (await offline.request(DASHBOARD, signedIn)).json()).template).toContain(
             'dashboard'
         );
+    });
+});
+
+describe('a server that is failing rather than absent', () => {
+    /** A server that answers this path with a status instead of a payload. */
+    const failing = (current, path, status) => (asked, request) =>
+        asked === path
+            ? new Response('<html>error</html>', { status, headers: { 'Content-Type': 'text/html' } })
+            : server(current)(asked, request);
+
+    it('serves the stored page when the origin cannot be reached', async () => {
+        // Falling back only when `fetch` throws covers the network being gone and nothing
+        // else. A proxy that cannot reach the application, or one that is mid-deploy,
+        // resolves — and the visitor used to be shown an error while a copy of the page sat
+        // on the device unread. 503 is what `php artisan down` answers with.
+        const caches = new FakeCaches();
+        const current = manifest();
+
+        await boot(current, { caches });
+
+        const broken = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 503) });
+        await broken.dispatch('activate');
+
+        const response = await visit(broken, ABOUT);
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ template: '<p>/about</p>' });
+    });
+
+    it('lets a 500 through, because the application ran and threw', async () => {
+        const caches = new FakeCaches();
+        const current = manifest();
+
+        await boot(current, { caches });
+
+        const broken = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 500) });
+        await broken.dispatch('activate');
+
+        // Answering this from cache hides it twice: the visitor sees a page that works and
+        // reports nothing, and whoever deployed the bug has no idea a route is broken. A
+        // stale page is worse than an error page when the error is the thing you needed.
+        expect((await visit(broken, ABOUT)).status).toBe(500);
+    });
+
+    it('does not answer a 404 from a stale copy', async () => {
+        const caches = new FakeCaches();
+        const current = manifest();
+
+        await boot(current, { caches });
+
+        const gone = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 404) });
+        await gone.dispatch('activate');
+
+        // The server is working correctly and saying something true. Answering from a
+        // stored copy would invent a page that is not there any more.
+        expect((await visit(gone, ABOUT)).status).toBe(404);
+    });
+
+    it('answers a navigation from the precached document when the origin returns a 5xx', async () => {
+        // The rule has to hold on a reload too, not only on a payload fetch. A reload
+        // during a deploy would otherwise replace an application that is installed on the
+        // device with whatever error page the origin managed to produce.
+        const caches = new FakeCaches();
+        const current = manifest();
+
+        await boot(current, { caches });
+
+        const broken = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 502) });
+        await broken.dispatch('activate');
+
+        const response = await broken.navigate(ABOUT);
+
+        expect(response.status).toBe(200);
+        await expect(response.text()).resolves.toContain('pwax-initial');
+    });
+
+    it('lets a navigation see a 404', async () => {
+        const caches = new FakeCaches();
+        const current = manifest();
+
+        await boot(current, { caches });
+
+        const gone = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 404) });
+        await gone.dispatch('activate');
+
+        expect((await gone.navigate(ABOUT)).status).toBe(404);
+    });
+
+    it('lets a navigation see a 500', async () => {
+        const caches = new FakeCaches();
+        const current = manifest();
+
+        await boot(current, { caches });
+
+        const broken = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 500) });
+        await broken.dispatch('activate');
+
+        // The reload that would have shown the error is the one a developer does when
+        // something looks wrong. Answering it from the precache is how a broken deploy
+        // survives the afternoon.
+        expect((await broken.navigate(ABOUT)).status).toBe(500);
+    });
+});
+
+/**
+ * The other representation.
+ *
+ * A page answers two ways: JSON to the runtime, HTML to a navigation. Only the JSON was
+ * ever stored after install, so a route the build did not precache — a dynamic one, or
+ * anything route discovery could not reach — had no document at all and reloading it
+ * offline fell back to the shell.
+ */
+describe('documents cached as they are visited', () => {
+    /** A document response with whatever identity the server wants to claim. */
+    const withIdentity = (current, identity) => (path, request) => {
+        const wants = request && request.headers.get('X-Pwax-Component') === 'true';
+
+        if (path === DASHBOARD && !wants) {
+            return new Response(`<html><span>${identity ?? 'none'}</span></html>`, {
+                headers: {
+                    'Content-Type': 'text/html',
+                    'Cache-Control': 'no-store, private',
+                    ...(identity ? { 'X-Pwax-Identity': identity } : {}),
+                },
+            });
+        }
+
+        return server(current, { cacheable: [ABOUT, DASHBOARD] })(path, request);
+    };
+
+    it('serves a route the build never precached', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
+
+        // /dashboard is not in the manifest, so install stored no document for it.
+        await worker.navigate(DASHBOARD);
+
+        const response = await offline(current, caches).navigate(DASHBOARD);
+
+        // The real page, inlined component and all — not the shell and a spinner.
+        await expect(response.text()).resolves.toContain('pwax-initial');
+    });
+
+    it('stores nothing when the server does not say who the page is for', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        const worker = createWorker({ manifest: current, caches, routes: withIdentity(current, null) });
+        await worker.dispatch('install');
+        await worker.dispatch('activate');
+        await worker.navigate(DASHBOARD);
+
+        // Missing is unknown, and unknown is somebody's. An application that does not send
+        // the header — or a route that is not a Pwax page at all — must not have its HTML
+        // filed where every visitor can read it.
+        await expect((await offline(current, caches).navigate(DASHBOARD)).text()).resolves.toBe(
+            '<html>shell</html>'
+        );
+    });
+
+    it('stores nothing when the page was rendered for somebody', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        const worker = createWorker({
+            manifest: current,
+            caches,
+            routes: withIdentity(current, 'cd5318ce8cd873b4'),
+        });
+        await worker.dispatch('install');
+        await worker.dispatch('activate');
+        await worker.navigate(DASHBOARD);
+
+        await expect((await offline(current, caches).navigate(DASHBOARD)).text()).resolves.toBe(
+            '<html>shell</html>'
+        );
+    });
+
+    it('withholds a guest document once somebody has signed in here', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
+        await worker.navigate(ABOUT);
+
+        // Someone signs in and the runtime asks for a page under their identity, which is
+        // what puts a bucket on this device.
+        await visit(worker, DASHBOARD, 'cd5318ce8cd873b4');
+
+        const response = await offline(current, caches).navigate(ABOUT);
+
+        // Every stored document is a signed-out rendering, and handing one to a signed-in
+        // visitor tells them they are logged out when they are not — and unlike a slow
+        // paint it does not correct itself, because the document carries its own payload.
+        // The shell defers the question to a request that carries an identity.
+        await expect(response.text()).resolves.toBe('<html>shell</html>');
+    });
+
+    it('stores nothing when runtime page caching is off', async () => {
+        // `pages.runtime => false` is documented as the way to keep page content off disk
+        // entirely, and a document is more page content than the payload is — the markup
+        // rendered rather than described.
+        const current = manifest({ pageRuntime: false });
+        const caches = new FakeCaches();
+
+        const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
+        await worker.navigate(DASHBOARD);
+
+        expect(await caches.keys()).not.toContain('pwax-documents-v1-h1');
+    });
+
+    it('drops the documents of a build that has been replaced', async () => {
+        const caches = new FakeCaches();
+        const first = manifest();
+
+        const worker = await boot(first, { caches, cacheable: [ABOUT, DASHBOARD] });
+        await worker.navigate(DASHBOARD);
+
+        expect(await caches.keys()).toContain('pwax-documents-v1-h1');
+
+        // A document has the compiled component inlined, so one kept across a deploy would
+        // paint the previous build's markup into this build's shell.
+        await boot(manifest({ hash: 'h2' }), { caches, cacheable: [ABOUT, DASHBOARD] });
+
+        expect(await caches.keys()).not.toContain('pwax-documents-v1-h1');
     });
 });

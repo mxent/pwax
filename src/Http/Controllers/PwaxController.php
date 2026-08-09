@@ -113,7 +113,13 @@ class PwaxController extends Controller
         $body = (string) file_get_contents($path);
 
         $response = new Response($body, 200, ['Content-Type' => 'application/json; charset=utf-8']);
-        $response->headers->set('Cache-Control', 'public, max-age=31536000, immutable');
+
+        // Revalidated, not immutable. The bundle is fingerprinted in its URL and this is
+        // not — the `sourceMappingURL` comment inside it is a bare filename — so caching
+        // this hard would pair a new bundle with last release's mappings and send whoever
+        // is debugging to the wrong lines. A 304 costs nothing; the map is only ever
+        // fetched with devtools open.
+        $response->headers->set('Cache-Control', 'no-cache, must-revalidate');
         $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
 
         return $this->finish($request, $response);

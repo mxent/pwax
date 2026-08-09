@@ -20,6 +20,17 @@ const UPDATE_INTERVAL = 60 * 60 * 1000;
 /** Connectivity listeners belong to the page, not to a registration. */
 let connectivityWatched = false;
 
+/**
+ * A build that has installed and is waiting for every tab to close, with the callback
+ * that lets it through.
+ *
+ * Held here so `pwax.sw.applyUpdate()` can reach it. Without that, an application whose
+ * developer has not wired up the `pwax:update-available` event has no way to take an
+ * update short of closing every tab — and no way to tell that is what is happening, which
+ * reads exactly like a deploy that did not deploy.
+ */
+let pendingUpdate = null;
+
 export function registerServiceWorker(path, { scope = '/' } = {}) {
     // Truthiness, not `in`. Service workers require a secure context, and on a page
     // served over plain HTTP the property is present on the prototype but the value is
@@ -52,16 +63,31 @@ function watchForUpdates(registration) {
     let lastCheck = Date.now();
 
     const announce = (worker) => {
-        document.dispatchEvent(
-            new CustomEvent('pwax:update-available', {
-                detail: {
-                    activate: () => {
-                        activating = true;
-                        worker.postMessage({ type: 'PWAX_SKIP_WAITING' });
-                    },
-                },
-            })
+        const activate = () => {
+            // Cleared as it is taken. Leaving it set would have a second call report
+            // success against a worker that is already on its way to controlling the page.
+            pendingUpdate = null;
+            activating = true;
+            worker.postMessage({ type: 'PWAX_SKIP_WAITING' });
+        };
+
+        pendingUpdate = { worker, activate };
+
+        // Said out loud, because the alternative is silence. A new build does not take
+        // over on its own — that would reload every open tab and discard whatever was
+        // being typed — so it waits, and an application that does not listen for the event
+        // below gives no sign at all. The symptom is a deploy that appears not to have
+        // happened, and this is the one line that explains it.
+        //
+        // `info`, not `warn`: nothing is wrong. The lint rule allows only warn and error,
+        // and logging this at either would report a deploy working as designed as a fault.
+        // eslint-disable-next-line no-console
+        console.info(
+            'pwax: a new version is installed and waiting. It takes over when every tab of ' +
+                'this app is closed, or immediately via pwax.sw.applyUpdate().'
         );
+
+        document.dispatchEvent(new CustomEvent('pwax:update-available', { detail: { activate } }));
     };
 
     // A worker already waiting means an update arrived while the page was closed.
@@ -136,10 +162,54 @@ function watchConnectivity() {
 }
 
 /**
+ * The registration, or null where service workers are unavailable.
+ *
+ * A free function rather than a method, so nothing here depends on `this`. These are
+ * published on `window.pwax.sw`, and `const { applyUpdate } = window.pwax.sw` is a
+ * perfectly ordinary thing to write — it must not be the difference between working and
+ * throwing.
+ */
+function currentRegistration() {
+    return navigator.serviceWorker
+        ? navigator.serviceWorker.getRegistration().then((r) => r ?? null)
+        : Promise.resolve(null);
+}
+
+/**
  * The programmatic side of the worker, published as `window.pwax.sw`.
  */
 export function createServiceWorkerApi() {
     return {
+        /**
+         * Take a waiting update now, rather than when the last tab closes.
+         *
+         * The page reloads once the new worker takes control, because half the
+         * application would otherwise be running against the other half's caches.
+         *
+         * @returns {Promise<boolean>} false when there was nothing waiting.
+         */
+        async applyUpdate() {
+            // `pendingUpdate` first, because it carries the flag that permits the reload.
+            if (pendingUpdate) {
+                pendingUpdate.activate();
+
+                return true;
+            }
+
+            // Nothing was announced to this page — the worker was already waiting when it
+            // loaded, or another tab took the announcement. The message still gets through;
+            // the reload is then the browser's, on `controllerchange`.
+            const waiting = (await currentRegistration())?.waiting;
+
+            if (!waiting) {
+                return false;
+            }
+
+            waiting.postMessage({ type: 'PWAX_SKIP_WAITING' });
+
+            return true;
+        },
+
         /** Ask the browser to check for a new worker now. */
         async update() {
             if (!navigator.serviceWorker) {
@@ -244,9 +314,7 @@ export function createServiceWorkerApi() {
          * The registration, for real. Asynchronous, because the platform's is.
          */
         registration() {
-            return navigator.serviceWorker
-                ? navigator.serviceWorker.getRegistration().then((r) => r ?? null)
-                : Promise.resolve(null);
+            return currentRegistration();
         },
     };
 }

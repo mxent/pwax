@@ -38,9 +38,34 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `public/` covers hidden *directories* rather than only hidden files.
 - Configured preloader colours are validated before being interpolated into the shell's
   inline `<style>`, where Blade's HTML escaping does not apply.
+- **A stored document is withheld once anyone has signed in on the device.** Every document
+  the worker holds is a signed-out rendering, and one handed to a signed-in visitor tells
+  them they are logged out when they are not — permanently, since the document carries its
+  own inlined payload and the runtime has no reason to refetch it. Those visitors are given
+  the shell, and the runtime's own request, which carries an identity, decides what to
+  render. `pwax.sw.forgetIdentity()` on sign-out restores the fast path.
+
+### Added
+
+- **A page's HTML is cached as it is visited, not only at install.** A page answers two
+  ways — JSON to the runtime, HTML with the component inlined to a navigation — and only
+  the JSON was stored after install. A route the build never precached, a dynamic one or
+  anything route discovery could not reach, had no document at all, so reloading it offline
+  fell back to the shell and a spinner. Documents are now kept as they are visited, and only
+  when the response declares `X-Pwax-Identity: anon`: a missing header is treated as
+  somebody's, because a navigation is the one request whose sender a worker cannot identify.
+  `ComponentResponse`'s HTML representation sends that header alongside the payload's.
 
 ### Fixed
 
+- **The client runtime bundle could never update in a browser that had cached it.**
+  `/__pwax__/pwax.js` carries no version in its URL and is served `immutable`, which tells
+  a browser not to revalidate for a year — not even conditionally, so its ETag was never
+  consulted. Upgrading the package left returning visitors on the runtime they first
+  downloaded. Invisible with the service worker on, since that precaches by content hash;
+  entirely visible with it off, which is the default. The URL is now fingerprinted by the
+  bundle's contents, and the source map is revalidated rather than cached hard so it cannot
+  be paired with a newer bundle.
 - **A signed-in visitor could not open a precached page offline.** Go offline mid-session
   and click a link to a page you have not already opened, and it failed — while *reloading*
   that same URL worked. A navigation is answered from the shared precache; the payload a
@@ -68,9 +93,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A `navigation_urls` pattern that will not compile is skipped with a warning instead of
   thrown, where it previously turned every navigation in the application into the offline
   page.
+- **An expired CSRF token could reload the page forever.** A `419` is answered by reloading
+  to pick up a fresh token, which assumes the reload reaches the server — and under
+  `navigation_strategy => 'app-shell'` it does not, because the worker answers navigations
+  from disk and returns the same expired token. One reload per tab now, re-armed whenever a
+  page loads successfully; a second `419` renders the error template.
+- `pwax.sw.applyUpdate()` no longer depends on `this`, so `const { applyUpdate } =
+  window.pwax.sw` works.
 
 ### Changed
 
+- **A stored copy is used when the origin cannot be reached through, not only when the
+  network throws.** A proxy that cannot get an answer out of the application, or an
+  application mid-deploy, produces a *reply* — so the fallback never ran and the visitor
+  saw an error with a usable copy on the device. The rule applies everywhere there is
+  something to fall back to: page payloads, data groups, full navigations — which answer
+  from the stored document, so a reload during a deploy still gets the installed
+  application — and the runtime cache.
+
+  Exactly `502`, `503` and `504`, none of which is distinguishable from a bad connection
+  from the device: a proxy that could not reach the application, one refusing for now
+  (`php artisan down` answers `503`), and one that waited and gave up. **A `500` is shown,
+  like a `404`** — the application ran and threw, and answering that from cache hides the
+  bug twice: the visitor sees a page that works and reports nothing, and whoever deployed
+  it does not learn the route is broken. When a stored copy does stand in, the worker says
+  so on the console with the status and the URL.
 - `service_worker.strategy` is `service_worker.runtime_strategy`, and defaults to
   `network-only`. The old default kept a copy of every same-origin GET it passed through,
   including URLs the application never declared.
@@ -108,6 +155,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   navigation to a page whose stylesheet never loaded.
 - `pwax.transition` names the page transition and its duration. The bundled one fades with
   opacity alone; both it and the progress bar defer to `prefers-reduced-motion`.
+- `pwax.sw.applyUpdate()` takes a waiting build immediately, and the runtime logs one line
+  when one is waiting. A new worker installs and then waits for every tab to close — the
+  right default, and indistinguishable from a deploy that did nothing if an application
+  does not listen for `pwax:update-available`.
 - `service_worker.max_entry_bytes`, bounding a single runtime-cache entry. `max_entries`
   counts entries, which bounds nothing on its own.
 - **Pages work offline.** An application could precache its framework, its components and

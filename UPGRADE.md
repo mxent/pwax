@@ -1,5 +1,155 @@
 # Upgrading
 
+## 3.x → 4.0
+
+4.0 is a consolidation. Nothing about how you write a component or a route changes; what
+changes is a handful of config keys that had grown two names for one idea, and one default
+that was storing more than it should have been.
+
+**Two of these are security fixes.** If you use `service_worker.pages.runtime` — it is on
+by default — upgrade rather than cherry-picking the renames.
+
+```bash
+composer require mxent/pwax:^4.0
+php artisan pwax:doctor
+```
+
+`pwax:doctor` reads your published config and names every key below that no longer does
+anything, so it is the checklist. There are no code changes to make unless you call
+`pwax.sw.registration`.
+
+---
+
+### 1. Cached pages could be read across identities
+
+Pages, API responses and runtime entries are stored in caches named after the signed-in
+visitor, so one person's pages are unreachable from another's session. That held for
+writes and not for reads: the offline fallback used a lookup that searches *every* cache on
+the origin, so two people sharing a device — the second one offline — could be served the
+first one's cached responses.
+
+Nothing to change. Upgrading is the fix.
+
+### 2. The identity could be a session out of date
+
+`window.pwax.config.identity` was read once, when the document loaded, and Pwax turns a
+post-login `redirect()` into a client-side navigation on purpose. So someone who signed in
+through the runtime kept sending the guest identity, and the first pages of their
+authenticated session were filed in the partition every signed-out visitor can read.
+
+Page payloads now report the identity they were rendered for, and the runtime follows it.
+
+**If you call `forgetIdentity()` on sign-out, drop the argument:**
+
+```diff
+- pwax.sw.forgetIdentity(window.pwax.config.identity);
++ pwax.sw.forgetIdentity();
+```
+
+Passing it by hand was the documented pattern and the easiest way to pass a stale value.
+
+### 3. `service_worker.strategy` is now `runtime_strategy`, defaulting to `network-only`
+
+It sat next to `navigation_strategy` meaning something entirely different — one governs
+documents, the other governs every same-origin GET nothing in the manifest claims.
+
+```diff
+- 'strategy' => 'network-first',
++ 'runtime_strategy' => 'network-only',
+```
+
+The default changed too. `network-first` kept a copy of everything it passed through: a
+one-off PDF, a CSV export, a file under `/storage`. If you were relying on that, set
+`'runtime_strategy' => 'network-first'` explicitly — but consider whether those URLs belong
+in an `asset_group` or a `data_group`, where they are listed, hashed and bounded.
+
+### 4. Data groups are flat, and `max_size` is `max_entries`
+
+```diff
+  [
+      'name' => 'posts',
+      'urls' => ['/api/posts', '/api/posts/**'],
+-     'cache_config' => [
+-         'strategy' => 'freshness',
+-         'max_size' => 50,
+-         'max_age' => 3600,
+-         'timeout' => 3000,
+-     ],
++     'strategy' => 'freshness',
++     'max_entries' => 50,
++     'max_age' => 3600,
++     'timeout' => 3000,
+  ],
+```
+
+`pages` and `asset_groups` were already flat; data groups were the odd one out, and
+`max_size` was a third spelling of a quantity already called `max_entries` twice. A group
+left in the old shape still works — on defaults, with none of the bounds you wrote — which
+is why `pwax:doctor` calls it out by name.
+
+### 5. New: `service_worker.max_entry_bytes`
+
+Defaults to 5 MB. `max_entries` counts entries, which bounds nothing on its own: sixty JSON
+payloads and sixty videos are very different amounts of a visitor's disk, and one large
+response can push the origin past its quota and have the browser evict the precache.
+
+### 6. `routes.static_middleware` ships with a throttle
+
+```diff
+- 'static_middleware' => [],
++ 'static_middleware' => ['throttle:120,1'],
+```
+
+These routes are outside `web` on purpose, which also puts them outside its rate limiting,
+and `/sw.json` walks `public/`, every view root and every route on each build. Adjust the
+rate to suit; leave it empty only if something in front of the app already limits it.
+
+### 7. `pwax.sw.registration` returned the wrong object
+
+It returned the controlling `ServiceWorker`, not the `ServiceWorkerRegistration` — so
+`.waiting`, `.scope` and `.update()` on it were all `undefined`.
+
+```diff
+- const worker = pwax.sw.registration;
++ const worker = pwax.sw.controller;
++ const registration = await pwax.sw.registration();
+```
+
+### 8. If you published the shell view
+
+`vendor:publish --tag=pwax-views` copies `layouts/shell.blade.php` into your application,
+so an upgrade cannot change it. Two edits are worth making by hand:
+
+```diff
+- <div id="pwax" class="pwax-preloader" role="status" aria-live="polite" aria-label="Loading">
++ <div id="pwax" class="pwax-preloader">
++     <span class="pwax-sr-only" role="status">Loading</span>
+      @yield('content')
+  </div>
++
++ <div id="pwax-announcer" class="pwax-sr-only" role="status" aria-live="polite"></div>
+```
+
+The first: those attributes belong to the spinner, and the runtime removes the preloader
+class on mount but cannot remove semantics you own — so the application root stayed a live
+region labelled "Loading" for the whole session, and every reactive text change in the app
+was announced. (The runtime now strips them defensively, so this is belt and braces.)
+
+The second is where a route change is announced. Without it, navigation is silent to a
+screen reader.
+
+### Checklist
+
+- [ ] `service_worker.strategy` → `service_worker.runtime_strategy`, and decided on its value
+- [ ] Data groups flattened; `max_size` → `max_entries`
+- [ ] `forgetIdentity()` called with no argument
+- [ ] `pwax.sw.registration` → `.controller` or `.registration()`
+- [ ] Published shell view updated, if you have one
+- [ ] `php artisan pwax:doctor` is clean
+- [ ] Tested offline, signed in as two different users on one browser profile
+
+---
+
 ## 2.x → 3.0
 
 3.0 makes an installed application actually work offline, and settles the naming so the

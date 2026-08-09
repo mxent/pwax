@@ -6,8 +6,9 @@ namespace Mxent\Pwax\Compiler;
  * Rewrites `<style scoped>` rules so they only match the component that declared them.
  *
  * Every selector gains a `[data-pwax-{scope}]` attribute qualifier, and the component's
- * template roots are stamped with the matching attribute. This mirrors what Vue's SFC
- * compiler does at build time, done here at render time instead.
+ * template roots are stamped with the matching attribute, so a rule can only ever match
+ * inside the component it was written in. The scope id is derived from the view's own
+ * contents, which keeps it stable between requests and changes it when the view changes.
  *
  * It exists to fix a structural problem in 1.x: styles were injected globally and torn
  * down by removing every `[pwax-attached]` element on navigation, which also removed the
@@ -15,7 +16,7 @@ namespace Mxent\Pwax\Compiler;
  * leak into its siblings in the first place, and the runtime can reference-count style
  * elements instead of clearing them wholesale.
  *
- * Escape hatches, matching Vue's naming:
+ * Escape hatches, keeping the names Vue authors already type:
  *   - `:deep(.child)`  — the part inside is left unscoped, so it can reach child components.
  *   - `:global(.thing)` — the selector is emitted verbatim, with no scoping at all.
  */

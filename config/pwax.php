@@ -72,8 +72,9 @@ return [
     |            your APP_KEY, so this is defence in depth rather than the primary
     |            control. Leave empty to allow any view you explicitly reference.
     |
-    | scoped_styles  Honour `<style scoped>` by rewriting selectors and stamping the
-    |                template, the way Vue's SFC compiler does at build time.
+    | scoped_styles  Honour `<style scoped>` by rewriting each selector and stamping the
+    |                template's elements to match, so a rule cannot reach outside the
+    |                component it was written in.
     |
     */
 

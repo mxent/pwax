@@ -214,13 +214,16 @@ describe('updating', () => {
         expect(await cache.match(RUNTIME), 'activate deleted the cache install built').toBeTruthy();
     });
 
-    it('leaves other libraries’ caches alone', async () => {
+    it('leaves caches it did not create alone', async () => {
+        // The sweep is by prefix, and an origin may have caches belonging to something
+        // else entirely — another worker, a library, the application's own code.
+        // Deleting one of those is someone else's outage.
         const caches = new FakeCaches();
-        await caches.open('workbox-precache-v1');
+        await caches.open('site-assets-v1');
 
         await boot(manifest(), { caches });
 
-        expect(await caches.has('workbox-precache-v1')).toBe(true);
+        expect(await caches.has('site-assets-v1')).toBe(true);
     });
 });
 

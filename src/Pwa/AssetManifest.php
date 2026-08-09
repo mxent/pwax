@@ -2,6 +2,8 @@
 
 namespace Mxent\Pwax\Pwa;
 
+use Illuminate\Contracts\Cache\Lock;
+use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\Foundation\Application;
@@ -100,28 +102,98 @@ class AssetManifest
             return $this->build();
         }
 
-        try {
-            $cached = $this->cache->get(self::CACHE_KEY);
+        $cached = $this->cached();
 
-            if (is_array($cached)) {
-                /** @var array<string, mixed> $cached */
-                return $cached;
+        return $cached ?? $this->buildOnce($ttl);
+    }
+
+    /**
+     * The memoised manifest, or null if there is not one to hand.
+     *
+     * A missing or misconfigured cache store is never the reason an application cannot
+     * install itself: an unreachable store reads as a miss, and the caller builds.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function cached(): ?array
+    {
+        try {
+            $cached = $this->cache?->get(self::CACHE_KEY);
+        } catch (Throwable) {
+            return null;
+        }
+
+        /** @var array<string, mixed>|null $cached */
+        return is_array($cached) ? $cached : null;
+    }
+
+    /**
+     * Build the manifest, with one builder at a time where the store allows it.
+     *
+     * `/sw.json` sits outside the `web` group on purpose — it is the same for every
+     * visitor and has no use for a session — which also means no session, no auth and,
+     * unless the application adds one, no rate limit. Every miss walks `public/`, every
+     * view root and every route, so a burst of requests arriving in the window after an
+     * expiry each paid for the whole thing: a stampede that a single unauthenticated
+     * client can keep going indefinitely.
+     *
+     * The lock holds for ten seconds and is not waited on. A request that cannot take it
+     * builds anyway rather than queueing — an unbounded queue of waiting workers is its
+     * own outage, and the store may not support locks at all. What it does buy is that
+     * the winner writes the memo, so the queue drains into a cache hit.
+     *
+     * @return array<string, mixed>
+     */
+    private function buildOnce(int $ttl): array
+    {
+        $lock = $this->lock();
+
+        try {
+            // Someone else holds the lock. One more look before duplicating their work:
+            // if they have already finished, their answer is in the store and this
+            // request is a cache hit rather than a second full walk.
+            if ($lock === null) {
+                $fresh = $this->cached();
+
+                if ($fresh !== null) {
+                    return $fresh;
+                }
             }
-        } catch (Throwable) {
-            // A missing or misconfigured cache store must never be the reason the app
-            // cannot install itself. Fall through and build.
-            return $this->build();
-        }
 
-        $manifest = $this->build();
+            $manifest = $this->build();
+
+            try {
+                $this->cache?->put(self::CACHE_KEY, $manifest, $ttl);
+            } catch (Throwable) {
+                // The manifest is already built and correct; only the memo was lost.
+            }
+
+            return $manifest;
+        } finally {
+            try {
+                $lock?->release();
+            } catch (Throwable) {
+                // A lock that cannot be released expires on its own.
+            }
+        }
+    }
+
+    /**
+     * The build lock, or null when the store cannot provide one.
+     */
+    private function lock(): ?Lock
+    {
+        if (! $this->cache instanceof LockProvider) {
+            return null;
+        }
 
         try {
-            $this->cache->put(self::CACHE_KEY, $manifest, $ttl);
-        } catch (Throwable) {
-            // Same again: the manifest is already built and correct.
-        }
+            $lock = $this->cache->lock(self::CACHE_KEY . ':build', 10);
 
-        return $manifest;
+            return $lock->get() ? $lock : null;
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     /**

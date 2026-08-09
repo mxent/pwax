@@ -1251,12 +1251,8 @@ function tooLarge(response, manifest) {
  * person and one moment — component modules and page payloads carrying user data say
  * exactly that, and honouring it is what keeps them off disk.
  *
- * This is the first of the three things standing between a page payload and someone
- * else's disk. The second is that the worker fetches pages without cookies at install
- * time, so what it precaches is the guest rendering. The third is that anything cached
- * per visit lives in a cache named after the signed-in identity, so it is unreachable
- * from any other. A page reaches disk only when a developer wrote `->cacheable()`, which
- * is the assertion that it renders the same for everyone.
+ * This governs assets. Page payloads take the other gate, `storablePage()`, which is
+ * deliberately more permissive and explains itself there — do not merge the two.
  */
 function cacheable(response) {
     if (!response || !response.ok || response.status === 206 || response.type === 'opaque') {

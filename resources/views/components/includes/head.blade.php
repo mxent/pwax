@@ -19,9 +19,26 @@
     $icon = $pwaxManifest->favicon();
     $base = config('pwax.head.base');
     $csrf = $shell->csrfToken();
-    $background = config('pwax.customization.init_background', '#ffffff');
-    $spinnerBg = config('pwax.customization.init_spinner_bg', '#f3f3f3');
-    $spinnerColor = config('pwax.customization.init_spinner_color', '#0c83ff');
+    /*
+     * These land inside a <style> block, where Blade's escaping does not help: it escapes
+     * for HTML, and CSS has its own way out. A value of `#fff; } html { display: none } .x {`
+     * is a valid string and a broken page. Configuration is not user input, so this is
+     * hardening rather than a hole — but a typo should cost one wrong colour, not the
+     * whole stylesheet.
+     */
+    $pwaxColor = static function (string $key, string $fallback): string {
+        $value = trim((string) config($key, $fallback));
+
+        // Hex, the CSS colour functions, and the named keywords. Anything else, including
+        // anything carrying a brace, a semicolon or a comment marker, is not a colour.
+        return preg_match('/^(#[0-9a-f]{3,8}|[a-z]+|(rgb|rgba|hsl|hsla|oklch|lab)\([0-9a-z%.,\/\s+-]*\))$/i', $value) === 1
+            ? $value
+            : $fallback;
+    };
+
+    $background = $pwaxColor('pwax.customization.init_background', '#ffffff');
+    $spinnerBg = $pwaxColor('pwax.customization.init_spinner_bg', '#f3f3f3');
+    $spinnerColor = $pwaxColor('pwax.customization.init_spinner_color', '#0c83ff');
 
     $documentTitle = $title ?: (config('pwax.head.title') ?: config('pwax.manifest.name'));
     $description = config('pwax.head.description') ?: config('pwax.manifest.description');

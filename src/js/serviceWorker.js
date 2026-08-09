@@ -153,12 +153,15 @@ export function createServiceWorkerApi() {
         },
 
         /**
-         * Delete every Pwax cache.
+         * Delete every Pwax cache, including the precache.
          *
-         * Worth calling on sign-out. The worker refuses to store anything the server
-         * marked `no-store`, so a signed-in user's pages never reach disk in the first
-         * place — but a component that renders differently for an administrator does,
-         * and on a shared device that is worth clearing.
+         * The blunt instrument. `forgetIdentity()` is almost always the one you want on
+         * sign-out: it drops what belonged to that person and leaves the framework, the
+         * components and the shell in place, so the next visitor gets an application that
+         * still works offline instead of one that downloads itself again.
+         *
+         * Reach for this when the device itself should be left with nothing — a shared
+         * terminal at the end of a shift, a kiosk being handed on.
          */
         clearCaches() {
             const controller = navigator.serviceWorker?.controller;

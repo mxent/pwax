@@ -91,7 +91,7 @@ class PwaxController extends Controller
         $response->headers->set('Cache-Control', 'public, max-age=31536000, immutable');
         $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
 
-        return $this->notModified($request, $response) ?? $response;
+        return $this->finish($request, $response);
     }
 
     /**
@@ -116,7 +116,7 @@ class PwaxController extends Controller
         $response->headers->set('Cache-Control', 'public, max-age=31536000, immutable');
         $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
 
-        return $this->notModified($request, $response) ?? $response;
+        return $this->finish($request, $response);
     }
 
     /**
@@ -130,7 +130,7 @@ class PwaxController extends Controller
         $response->headers->set('Cache-Control', 'public, max-age=86400');
         $response->headers->set('ETag', '"' . $manifest->hash() . '"');
 
-        return $this->notModified($request, $response) ?? $response;
+        return $this->finish($request, $response);
     }
 
     /**
@@ -169,7 +169,7 @@ class PwaxController extends Controller
         $response->headers->set('Cache-Control', 'no-cache, must-revalidate');
         $response->headers->set('ETag', '"' . $hash . '"');
 
-        return $this->notModified($request, $response) ?? $response;
+        return $this->finish($request, $response);
     }
 
     /**
@@ -211,7 +211,7 @@ class PwaxController extends Controller
         $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
         $response->headers->set('X-Robots-Tag', 'noindex');
 
-        return $this->notModified($request, $response) ?? $response;
+        return $this->finish($request, $response);
     }
 
     /**
@@ -247,7 +247,7 @@ class PwaxController extends Controller
         $response->headers->set('Cache-Control', 'no-cache, must-revalidate');
         $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
 
-        return $this->notModified($request, $response) ?? $response;
+        return $this->finish($request, $response);
     }
 
     /**
@@ -289,7 +289,7 @@ class PwaxController extends Controller
         $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
         $response->headers->set('Vary', Pwax::VARY);
 
-        return $this->notModified($request, $response) ?? $response;
+        return $this->finish($request, $response);
     }
 
     /**
@@ -330,6 +330,33 @@ class PwaxController extends Controller
     {
         $response = new Response($body, $status, ['Content-Type' => $contentType]);
         $response->headers->set('Cache-Control', 'no-store, private');
+
+        return $this->harden($response);
+    }
+
+    /**
+     * Answer a conditional request if we can, and harden whatever goes out.
+     *
+     * Every response this controller produces passes through here or through `plain()`,
+     * which is the point: a header that is meant to be on all of them should not depend on
+     * whoever adds the next endpoint remembering it.
+     */
+    private function finish(Request $request, Response $response): SymfonyResponse
+    {
+        return $this->harden($this->notModified($request, $response) ?? $response);
+    }
+
+    /**
+     * Headers every Pwax endpoint carries.
+     *
+     * Each response here already declares an accurate `Content-Type`, so `nosniff` is
+     * defence in depth rather than a fix — but these endpoints serve JavaScript that
+     * browsers execute, which is exactly where content-type sniffing is worth taking off
+     * the table.
+     */
+    private function harden(SymfonyResponse $response): SymfonyResponse
+    {
+        $response->headers->set('X-Content-Type-Options', 'nosniff');
 
         return $response;
     }

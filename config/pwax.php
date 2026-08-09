@@ -34,9 +34,15 @@ return [
     | tokens into something the client runtime can act on.
     |
     | `routes.static_middleware` applies to the runtime bundle, the manifest and the
-    | service worker. These are identical for every visitor and never touch the
-    | session, so the default is deliberately empty: adding `web` here would start a
-    | session and set a cookie on requests that have no use for either.
+    | service worker. These are identical for every visitor and never touch the session,
+    | so `web` deliberately does not appear: adding it would start a session and set a
+    | cookie on requests that have no use for either.
+    |
+    | It is not empty, though. Being outside `web` also means being outside anything that
+    | would slow an unauthenticated caller down, and `/sw.json` is the expensive one —
+    | each build walks public/, every view root and every route. The manifest is memoised
+    | and now builds under a lock, so a flood mostly meets a cache hit; the throttle is
+    | the backstop for the window where it does not.
     |
     */
 
@@ -45,7 +51,7 @@ return [
     'routes' => [
         'register' => true,
         'domain' => null,
-        'static_middleware' => [],
+        'static_middleware' => ['throttle:120,1'],
     ],
 
     /*

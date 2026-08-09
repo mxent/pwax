@@ -71,6 +71,29 @@ class AccessibilityTest extends TestCase
         $this->assertStringContainsString('<html lang="en">', (string) $this->get('/page')->getContent());
     }
 
+    public function test_a_configured_colour_that_is_not_a_colour_is_refused(): void
+    {
+        // Inside a <style> block Blade's escaping does not help — it escapes for HTML,
+        // and CSS has its own way out. Config is not user input, so this is hardening
+        // rather than a hole, but a typo should cost one wrong colour, not the stylesheet.
+        config()->set('pwax.customization.init_background', '#fff; } html { display: none } .x {');
+
+        $html = (string) $this->get('/page')->getContent();
+
+        $this->assertStringNotContainsString('display: none', $html);
+        $this->assertStringContainsString('background: #ffffff', $html);
+    }
+
+    public function test_a_real_colour_is_kept(): void
+    {
+        config()->set('pwax.customization.init_spinner_color', 'oklch(70% 0.1 250)');
+
+        $this->assertStringContainsString(
+            'border-top-color: oklch(70% 0.1 250)',
+            (string) $this->get('/page')->getContent()
+        );
+    }
+
     /**
      * The opening tag of the element with this id, attributes and all.
      */

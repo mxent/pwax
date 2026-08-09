@@ -668,7 +668,7 @@ hash:
     { "name": "app", "installMode": "prefetch", "kind": "asset", "urls": [
         "/vendor/pwax/vue.global.prod.js?v=3.5.41",
         "/vendor/pwax/vue-router.global.prod.js?v=5.2.0",
-        "/__pwax__/pwax.js",
+        "/__pwax__/pwax.js?v=8f2a41c0d5e7",
         "/manifest.json",
         "/favicon.ico",
         "/__pwax__/shell"
@@ -682,8 +682,11 @@ hash:
       "strategy": "freshness", "credentials": "omit", "urls": ["/", "/about"] }
   ],
   "dataGroups": [],
-  "hashTable": { "/__pwax__/c/Y29tcG9uZW50cy5tb2RhbA3f9a1c0d.js": "a41c9b02f7de5163" },
-  "critical": ["/__pwax__/pwax.js", "/__pwax__/shell"],
+  "hashTable": {
+    "/__pwax__/c/Y29tcG9uZW50cy5tb2RhbA3f9a1c0d.js": "a41c9b02f7de5163",
+    "/__pwax__/pwax.js?v=8f2a41c0d5e7": "8f2a41c0d5e7b193"
+  },
+  "critical": ["/__pwax__/pwax.js?v=8f2a41c0d5e7", "/__pwax__/shell"],
   "warnings": []
 }
 ```

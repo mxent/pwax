@@ -4,6 +4,7 @@ namespace Mxent\Pwax\Tests;
 
 use Mxent\Pwax\Facades\Pwax as PwaxFacade;
 use Mxent\Pwax\PwaxServiceProvider;
+use Mxent\Pwax\Support\Shell;
 use Orchestra\Testbench\TestCase as BaseTestCase;
 
 abstract class TestCase extends BaseTestCase
@@ -59,5 +60,16 @@ abstract class TestCase extends BaseTestCase
     protected function componentHeaders(): array
     {
         return ['X-Pwax-Component' => 'true'];
+    }
+
+    /**
+     * The runtime bundle's URL, fingerprint and all.
+     *
+     * Asked of the same object the shell and the manifest ask, so a test cannot pass
+     * against a URL nothing actually serves.
+     */
+    protected function runtimeUrl(): string
+    {
+        return $this->app->make(Shell::class)->runtimeUrl();
     }
 }

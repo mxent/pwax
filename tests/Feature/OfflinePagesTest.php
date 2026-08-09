@@ -123,7 +123,9 @@ class OfflinePagesTest extends TestCase
         config()->set('pwax.service_worker.data_groups', [[
             'name' => 'posts',
             'urls' => ['/api/posts', '/api/posts/**'],
-            'cache_config' => ['strategy' => 'performance', 'max_age' => 60, 'max_size' => 10],
+            'strategy' => 'performance',
+            'max_age' => 60,
+            'max_entries' => 10,
         ]]);
 
         /** @var list<array<string, mixed>> $groups */
@@ -133,7 +135,26 @@ class OfflinePagesTest extends TestCase
         $this->assertSame('posts', $groups[0]['name']);
         $this->assertSame('performance', $groups[0]['cacheConfig']['strategy']);
         $this->assertSame(60, $groups[0]['cacheConfig']['maxAge']);
+        $this->assertSame(10, $groups[0]['cacheConfig']['maxSize']);
         $this->assertCount(2, $groups[0]['patterns']);
+    }
+
+    public function test_a_data_group_written_the_old_way_is_not_silently_honoured(): void
+    {
+        // Flat now, like `pages` and `asset_groups`. A group left nested reads as
+        // configured and runs on defaults, which is why `pwax:doctor` calls it out —
+        // there is nothing here that could detect it at runtime.
+        config()->set('pwax.service_worker.data_groups', [[
+            'name' => 'posts',
+            'urls' => ['/api/posts'],
+            'cache_config' => ['strategy' => 'performance', 'max_size' => 10],
+        ]]);
+
+        /** @var list<array<string, mixed>> $groups */
+        $groups = $this->get('/sw.json')->json('dataGroups');
+
+        $this->assertSame('freshness', $groups[0]['cacheConfig']['strategy']);
+        $this->assertSame(50, $groups[0]['cacheConfig']['maxSize']);
     }
 
     public function test_a_data_group_with_no_urls_is_ignored(): void

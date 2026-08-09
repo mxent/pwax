@@ -37,6 +37,11 @@ class GlobTest extends TestCase
             'and only one' => ['/?.js', '/ab.js', false],
             'a dot is literal' => ['/a.js', '/axjs', false],
             'dotfiles are reachable' => ['/**/.*', '/a/.env', true],
+            'a hidden leaf is not a hidden directory' => ['/**/.*', '/.git/config', false],
+            'which the directory rule catches' => ['/**/.*/**', '/.git/config', true],
+            'at any depth' => ['/**/.*/**', '/foo/.git/config', true],
+            'stacked double stars still match' => ['/a/**/**/b', '/a/x/y/b', true],
+            'and still anchor' => ['/a/**/**/b', '/c/x/b', false],
         ];
     }
 
@@ -93,6 +98,38 @@ class GlobTest extends TestCase
 
         $this->assertStringStartsWith('^', $compiled[0]);
         $this->assertStringStartsWith('!^', $compiled[1]);
+    }
+
+    /**
+     * A doubled `**` must not cost anything to compile past.
+     *
+     * Each non-trailing `**` becomes `(?:.+/)?`, and adjacent optional greedy groups make
+     * the engine try every division of the path between them before it can report a
+     * mismatch — exponential in segments, not length. Twelve stacked `**` took five
+     * seconds against a sixty-character path before they were folded together.
+     *
+     * The pattern is matched on every fetch the worker handles, against a path that comes
+     * from the URL, so this is a timing assertion on purpose: the compiled shape is the
+     * thing under test, and only the clock can tell whether it is still there.
+     */
+    public function test_stacked_double_stars_do_not_backtrack(): void
+    {
+        $glob = '/' . implode('/', array_fill(0, 14, '**')) . '/x.css';
+        $path = '/' . implode('/', array_fill(0, 20, 'segment')) . '/x.png';
+
+        $started = hrtime(true);
+        $this->assertFalse(Glob::matches($glob, $path));
+        $elapsed = (hrtime(true) - $started) / 1e6;
+
+        $this->assertLessThan(250, $elapsed, sprintf(
+            'Matching took %.0fms. Consecutive ** segments are backtracking again.',
+            $elapsed
+        ));
+    }
+
+    public function test_folding_double_stars_changes_no_meaning(): void
+    {
+        $this->assertSame(Glob::toRegex('/a/**/b'), Glob::toRegex('/a/**/**/**/b'));
     }
 
     public function test_an_unclosed_brace_is_treated_as_a_literal(): void

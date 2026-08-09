@@ -62,6 +62,10 @@ Route::group(array_filter([
 ]), function () use ($prefix): void {
     Route::get($prefix . '/pwax.js', [PwaxController::class, 'runtime'])->name('pwax.runtime');
 
+    // The bundle's own `sourceMappingURL` points here. Without it every developer who
+    // opens devtools gets a 404 from the package and debugs minified code.
+    Route::get($prefix . '/pwax.js.map', [PwaxController::class, 'sourceMap'])->name('pwax.runtime-map');
+
     Route::get(
         ltrim((string) config('pwax.manifest_path', '/manifest.json'), '/'),
         [PwaxController::class, 'manifest']

@@ -10,7 +10,7 @@ import { importInlineModule, importModule, styleMetadata, toComponentOptions } f
 
 const PAGE_STYLE_KEY = 'pwax:page';
 
-const DEFAULT_LOADER = '<div class="pwax-loading" role="status" aria-live="polite">Loading…</div>';
+const DEFAULT_LOADER = '<div class="pwax-loading" role="status">Loading…</div>';
 
 const DEFAULT_ERROR = `
     <div class="pwax-error" role="alert">
@@ -25,20 +25,48 @@ export function createPageComponent({
     styles,
     config,
     initial,
+    // A map, or a promise of one. `index.js` hands over the promise so that resolving
+    // module middleware does not hold up the first paint; `await` accepts both.
     middleware = {},
     templates = {},
+    progress = null,
+    transition = 'pwax-page',
 }) {
     let initialPayload = initial;
 
     return {
         name: 'PwaxPage',
 
-        // Loader and error markup come from the server so they stay customisable through
-        // Blade, while this bundle itself remains static and cacheable.
+        /*
+         * The page that is on screen stays on screen until the next one is ready.
+         *
+         * This used to render the loader *instead of* the current component the moment a
+         * navigation started, so every click threw away what the visitor was reading,
+         * collapsed the layout to the height of the word "Loading", and then expanded it
+         * again — a flash of nothing between every two pages, at its worst on exactly the
+         * connections where it matters most.
+         *
+         * Now `component` is only reassigned once the replacement has been fetched,
+         * compiled and had its styles applied. During the fetch the old page is untouched
+         * and the progress bar is the only thing that moves. The loader is still here for
+         * the one case that has nothing to keep: the very first paint of an application
+         * whose landing page was not inlined.
+         *
+         * Keyed on the path so Vue treats each page as a new element and runs the
+         * transition; `mode="out-in"` because two pages briefly overlapping is a layout
+         * jump, which is the thing being fixed.
+         *
+         * Loader and error markup come from the server so they stay customisable through
+         * Blade, while this bundle itself remains static and cacheable.
+         */
         template: `
             <template v-if="error">${templates.error || DEFAULT_ERROR}</template>
-            <template v-else-if="loading">${templates.loader || DEFAULT_LOADER}</template>
-            <component v-else :is="component"></component>
+            <template v-else>
+                <template v-if="!component">${templates.loader || DEFAULT_LOADER}</template>
+                <transition name="${transition}" mode="out-in">
+                    <component v-if="component" :is="component" :key="renderedPath"></component>
+                </transition>
+            </template>
         `,
 
         data() {
@@ -47,6 +75,13 @@ export function createPageComponent({
                 loading: true,
                 error: null,
                 currentPath: null,
+                // The path of the component actually on screen, which during a navigation
+                // is not the path being navigated to. It is what keys the transition, so
+                // it must change only when the rendered page does.
+                renderedPath: null,
+                // The first paint is not a navigation: the browser has just read the
+                // document, so announcing it again would be noise.
+                announced: false,
             };
         },
 
@@ -95,6 +130,7 @@ export function createPageComponent({
 
                 this.error = null;
                 this.loading = true;
+                progress?.start();
 
                 const controller = new AbortController();
                 this.controller = controller;
@@ -105,6 +141,8 @@ export function createPageComponent({
                     if (controller.signal.aborted) {
                         return;
                     }
+
+                    this.adoptIdentity(payload);
 
                     if (payload && payload.__location) {
                         window.location.href = payload.__location;
@@ -140,8 +178,52 @@ export function createPageComponent({
                 } finally {
                     if (this.controller === controller) {
                         this.controller = null;
+
+                        // Only the navigation still in flight finishes the bar. An
+                        // aborted one has been replaced by another that is still running,
+                        // and completing it there would flash the bar to full and start
+                        // it again for every link clicked in quick succession.
+                        progress?.done();
                     }
                 }
+            },
+
+            /**
+             * Follow the server's view of who is signed in.
+             *
+             * `config.identity` is read once from the shell's JSON island, and a Pwax
+             * application can change who is signed in without ever loading another
+             * document: `return redirect('/dashboard')` from a login controller is
+             * translated into a client-side navigation on purpose, and that is the
+             * documented behaviour.
+             *
+             * So the identity the runtime sends can be a whole session out of date — the
+             * guest label, still attached to every request an authenticated user makes.
+             * The service worker names its caches from it, which means those pages were
+             * being filed in the bucket every guest on the device can read. Worse, the
+             * documented sign-out call, `forgetIdentity(window.pwax.config.identity)`,
+             * read the same stale value and quietly cleared nothing.
+             *
+             * Every page payload now carries the identity it was actually rendered for, so
+             * the correction costs no extra request. `http.headers()` reads `config` per
+             * call, so assigning here is all the plumbing there is.
+             */
+            adoptIdentity(payload) {
+                if (!payload || !Object.prototype.hasOwnProperty.call(payload, 'identity')) {
+                    return;
+                }
+
+                const identity = payload.identity || null;
+
+                if (identity === config.identity) {
+                    return;
+                }
+
+                config.identity = identity;
+
+                // Anything the previous identity accumulated is now unreachable under the
+                // new name anyway, but a sign-out should not leave it on the device.
+                document.dispatchEvent(new CustomEvent('pwax:identity', { detail: { identity } }));
             },
 
             /**
@@ -185,12 +267,27 @@ export function createPageComponent({
                         document.title = payload.title;
                     }
 
+                    // Finished before the swap, not alongside it. The bar completing is
+                    // what says the waiting is over; the fade is what says the page has
+                    // changed. Running them in that order reads as one sequence rather
+                    // than two things happening at once.
+                    progress?.done();
+
+                    // The swap, and the only point at which the page on screen changes.
+                    // Everything above this line ran while the previous page was still
+                    // rendered: the fetch, the compile, the external assets, the
+                    // stylesheet. `renderedPath` moves with it, because it keys the
+                    // transition and must not change while a navigation is merely in
+                    // flight — a failed one leaves the visitor where they were.
                     this.component = Vue.shallowRef(
                         Vue.defineAsyncComponent(() => Promise.resolve(options))
                     );
+                    this.renderedPath = this.currentPath;
                     this.loading = false;
 
                     this.$nextTick(() => {
+                        this.announce();
+
                         document.dispatchEvent(
                             new CustomEvent('pwax:navigated', {
                                 detail: { component: options, path: this.currentPath },
@@ -199,6 +296,38 @@ export function createPageComponent({
                     });
                 } catch (error) {
                     this.fail(error);
+                }
+            },
+
+            /**
+             * Tell a screen reader the page changed.
+             *
+             * A full navigation announces itself: the browser resets focus and reads the
+             * new document. A router does neither. It swaps the DOM under a user who is
+             * given no signal that anything happened, and leaves focus wherever the link
+             * they followed used to be — which, once that link is gone, is the top of the
+             * document with nothing selected.
+             *
+             * Announcing the title is the smallest thing that restores the signal, and
+             * the title is already correct here because `mount()` has just set it.
+             * Nothing is announced for the first paint: the browser has just read the
+             * document, and repeating it is noise.
+             */
+            announce() {
+                if (!this.announced) {
+                    this.announced = true;
+
+                    return;
+                }
+
+                const announcer = document.getElementById('pwax-announcer');
+
+                if (announcer) {
+                    // Cleared first. A live region only announces a *change*, so
+                    // navigating twice to pages with the same title would otherwise be
+                    // read once.
+                    announcer.textContent = '';
+                    announcer.textContent = document.title;
                 }
             },
 
@@ -249,13 +378,30 @@ export function createPageComponent({
              */
             async runMiddleware(options) {
                 const names = options.middleware || [];
+
+                if (!names.length) {
+                    return false;
+                }
+
+                // Awaited here rather than before the application mounted. Middleware is
+                // only consulted once a page's options are in hand, so gating first paint
+                // on a module fetch it does not need was pure delay.
+                const registered = await middleware;
                 let redirected = false;
 
                 for (const name of names) {
-                    const fn = middleware[name];
+                    const fn = registered[name];
 
                     if (typeof fn !== 'function') {
-                        console.warn(`pwax: unknown middleware "${name}"`);
+                        // The name and where it was asked for. Reporting the name alone
+                        // points at `middleware_js` in config, which is usually correct
+                        // and occasionally a red herring — the entry can be present and
+                        // have failed to load, and then the only way to find which page
+                        // is affected is to guess.
+                        console.warn(
+                            `pwax: unknown middleware "${name}" on ${this.currentPath || 'this page'}. ` +
+                                'Check that it is listed in pwax.middleware_js and that its module loaded.'
+                        );
                         continue;
                     }
 

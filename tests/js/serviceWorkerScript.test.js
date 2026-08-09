@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FakeCaches, createWorker } from './helpers/serviceWorkerHarness.js';
+import { FakeCaches, createWorker, navigation } from './helpers/serviceWorkerHarness.js';
 
 const SHELL = '/__pwax__/shell';
 const RUNTIME = '/__pwax__/pwax.js';
@@ -214,13 +214,16 @@ describe('updating', () => {
         expect(await cache.match(RUNTIME), 'activate deleted the cache install built').toBeTruthy();
     });
 
-    it('leaves other libraries’ caches alone', async () => {
+    it('leaves caches it did not create alone', async () => {
+        // The sweep is by prefix, and an origin may have caches belonging to something
+        // else entirely — another worker, a library, the application's own code.
+        // Deleting one of those is someone else's outage.
         const caches = new FakeCaches();
-        await caches.open('workbox-precache-v1');
+        await caches.open('site-assets-v1');
 
         await boot(manifest(), { caches });
 
-        expect(await caches.has('workbox-precache-v1')).toBe(true);
+        expect(await caches.has('site-assets-v1')).toBe(true);
     });
 });
 
@@ -401,5 +404,178 @@ describe('being a good citizen of the dev server', () => {
         expect(peak).toBeLessThanOrEqual(6);
         // …and still fetched everything.
         expect(worker.fetches.length).toBeGreaterThanOrEqual(urls.length);
+    });
+});
+
+describe('navigation preload', () => {
+    /** A navigation the browser has already started fetching for us. */
+    const withPreload = (worker, path, response) =>
+        worker.dispatch('fetch', {
+            request: navigation(path),
+            preloadResponse: Promise.resolve(response),
+        });
+
+    it('uses the preloaded response instead of fetching again', async () => {
+        const current = manifest({ overrides: { navigationUrls: [] } });
+        const worker = await boot(current);
+        const before = worker.fetches.length;
+
+        const response = await withPreload(
+            worker,
+            '/dashboard',
+            new Response('<html>preloaded</html>')
+        );
+
+        expect(await response.text()).toBe('<html>preloaded</html>');
+        expect(worker.fetches.length).toBe(before);
+    });
+
+    it('uses it for a path the application does not own', async () => {
+        // Navigation preload is enabled for the whole scope, so the browser has already
+        // sent this request. Answering it with `fetch` would send it a second time and
+        // discard the first — every declined navigation costing the server two.
+        // Already compiled by the server: `navigationUrls` reaches the worker as regular
+        // expressions, not as the globs written in config.
+        const current = manifest({ overrides: { navigationUrls: ['^/app/.*$'] } });
+        const worker = await boot(current);
+        const before = worker.fetches.length;
+
+        const response = await withPreload(
+            worker,
+            '/horizon/dashboard',
+            new Response('<html>horizon</html>')
+        );
+
+        expect(await response.text()).toBe('<html>horizon</html>');
+        expect(worker.fetches.length).toBe(before);
+    });
+
+    it('settles the preload it does not use', async () => {
+        const current = manifest({
+            overrides: { navigationStrategy: 'app-shell', navigationUrls: [] },
+        });
+        const worker = await boot(current);
+
+        let settled = false;
+        const preload = Promise.resolve(new Response('<html>ignored</html>')).then((r) => {
+            settled = true;
+            return r;
+        });
+
+        const response = await worker.dispatch('fetch', {
+            request: navigation('/dashboard'),
+            preloadResponse: preload,
+        });
+
+        // The shell answers, but the preload is still awaited. Left dangling it logs
+        // "the navigation preload request was cancelled before preloadResponse settled"
+        // in the console of every app on this strategy, which reads like a bug.
+        expect(await response.text()).toBe('<html>shell</html>');
+        expect(settled).toBe(true);
+    });
+
+    it('falls back to the network when the preload fails', async () => {
+        const current = manifest({ overrides: { navigationUrls: [] } });
+        const worker = await boot(current);
+
+        const response = await worker.dispatch('fetch', {
+            request: navigation('/dashboard'),
+            preloadResponse: Promise.reject(new TypeError('Failed to fetch')),
+        });
+
+        // A preload can fail for reasons other than the network being gone, so a
+        // rejection is not on its own an offline signal.
+        expect(await response.text()).toBe('body:/dashboard');
+    });
+});
+
+describe('a manifest with a bad pattern', () => {
+    it('ignores the pattern rather than the whole navigation list', async () => {
+        // An unusable pattern used to throw out of the match, which `route()` caught and
+        // answered with the offline page — so one bad rule took every navigation in the
+        // application down with it.
+        const current = manifest({ overrides: { navigationUrls: ['^/app/.*$', '/broken/**'] } });
+        const worker = await boot(current);
+
+        const response = await worker.dispatch('fetch', {
+            request: navigation('/app/dashboard'),
+            preloadResponse: Promise.resolve(null),
+        });
+
+        expect(await response.text()).toBe('body:/app/dashboard');
+        expect(worker.log).toContainEqual([
+            'warn',
+            'pwax sw: ignoring an asset pattern that will not compile',
+            '/broken/**',
+        ]);
+    });
+});
+
+describe('the runtime strategy', () => {
+    it('stores nothing for a URL the application never declared', async () => {
+        // The default. A one-off download, a CSV export, a file under /storage — none of
+        // it is part of the application, and all of it used to be kept.
+        const current = manifest({ overrides: { strategy: 'network-only' } });
+        const worker = await boot(current);
+
+        const response = await worker.request('/exports/report.csv');
+
+        expect(await response.text()).toBe('body:/exports/report.csv');
+
+        const names = await worker.caches.keys();
+        expect(names.filter((name) => name.startsWith('pwax-runtime-'))).toEqual([]);
+    });
+
+    it('keeps them when asked to', async () => {
+        const current = manifest({ overrides: { strategy: 'network-first' } });
+        const worker = await boot(current);
+
+        await worker.request('/exports/report.csv');
+
+        const runtime = await worker.caches.open('pwax-runtime-v1-anon');
+        expect(await runtime.match('/exports/report.csv')).toBeTruthy();
+    });
+
+    it('refuses a response larger than the entry ceiling', async () => {
+        const current = manifest({
+            overrides: { strategy: 'network-first', maxEntryBytes: 1024 },
+        });
+        const caches = new FakeCaches();
+        const base = server(current);
+
+        const worker = createWorker({
+            manifest: current,
+            caches,
+            routes: (path) =>
+                path === '/big.bin'
+                    ? new Response('x', {
+                          headers: { 'Cache-Control': 'public', 'Content-Length': '99999' },
+                      })
+                    : base(path),
+        });
+
+        await worker.dispatch('install');
+        await worker.dispatch('activate');
+
+        // Handed back, just not kept: the entry cap counts entries, so one large response
+        // can crowd out everything the cap was meant to protect.
+        expect(await (await worker.request('/big.bin')).text()).toBe('x');
+
+        const runtime = await caches.open('pwax-runtime-v1-anon');
+        expect(await runtime.match('/big.bin')).toBeFalsy();
+    });
+
+    it('keeps a response with no declared length', async () => {
+        // Measuring it would mean buffering the very responses the ceiling exists to
+        // avoid buffering. The entry cap still bounds them.
+        const current = manifest({
+            overrides: { strategy: 'network-first', maxEntryBytes: 1024 },
+        });
+        const worker = await boot(current);
+
+        await worker.request('/streamed');
+
+        const runtime = await worker.caches.open('pwax-runtime-v1-anon');
+        expect(await runtime.match('/streamed')).toBeTruthy();
     });
 });

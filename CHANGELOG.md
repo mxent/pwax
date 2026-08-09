@@ -7,8 +7,91 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **Cached responses could be read across signed-in identities.** Pages, API responses and
+  runtime entries are stored in caches named after the signed-in visitor, which the
+  package documents as making a cross-user read impossible rather than merely unlikely.
+  That held for writes and not for reads: the offline fallback used a lookup that names no
+  cache, and by specification such a lookup searches *every* cache on the origin. Two
+  people sharing a device — the second one offline — and the worker served the first one's
+  responses. Reads are now confined to the reading identity's own cache and the precache,
+  which is shared on purpose and holds only the framework, the components and the
+  session-free shell.
+- **The client identity could be a whole session out of date.** It was read once from the
+  document, and Pwax turns a post-login `redirect()` into a client-side navigation on
+  purpose — so a visitor who signed in through the runtime kept sending the guest label,
+  and the first pages of their authenticated session were filed in the partition every
+  signed-out visitor can read. The documented sign-out call read the same stale value and
+  cleared nothing. Payloads now carry the identity they were rendered for and responses
+  carry it as a header, so the worker files by who was actually served rather than by who
+  asked.
+- **Catastrophic backtracking in the glob compiler.** Consecutive `**` segments compiled to
+  adjacent optional greedy groups; twelve of them took five seconds to reject a
+  sixty-character path, and these patterns are matched against the request URL on every
+  fetch the worker handles. Runs of `**` are now folded into one, which changes no
+  pattern's meaning.
+- `/sw.json` builds under a lock and `routes.static_middleware` ships with a throttle.
+  Those routes sit outside `web` deliberately, which also put them outside its rate
+  limiting, while each manifest build walks `public/`, every view root and every route.
+- Every Pwax endpoint now sends `X-Content-Type-Options: nosniff`, and the deny list for
+  `public/` covers hidden *directories* rather than only hidden files.
+- Configured preloader colours are validated before being interpolated into the shell's
+  inline `<style>`, where Blade's HTML escaping does not apply.
+
+### Fixed
+
+- **The whole application was announced as "Loading".** The mount element carried
+  `role="status"`, `aria-live="polite"` and `aria-label="Loading"` for the spinner, and the
+  runtime removed only the class on mount — so for the rest of the session every reactive
+  text change anywhere in the app was read aloud by a screen reader.
+- **A route change told a screen reader nothing.** The shell now carries a live region and
+  the runtime announces each navigation's title into it.
+- Function default exports are returned as themselves, so client middleware and Vue
+  functional components work. Spreading a function into an object produced `{}`.
+- `pwax.sw.registration` returned the controlling `ServiceWorker`, not the
+  `ServiceWorkerRegistration` — see **Changed**.
+- `dist/pwax.js.map` is served. The bundle has always ended with a `sourceMappingURL`
+  comment pointing at a route that did not exist.
+- A `navigation_urls` pattern that will not compile is skipped with a warning instead of
+  thrown, where it previously turned every navigation in the application into the offline
+  page.
+
+### Changed
+
+- `service_worker.strategy` is `service_worker.runtime_strategy`, and defaults to
+  `network-only`. The old default kept a copy of every same-origin GET it passed through,
+  including URLs the application never declared.
+- Data groups are written flat, and `max_size` is `max_entries` — the same quantity that
+  the pages block and the runtime cache already spelled that way.
+- `pwax.sw.registration` is `pwax.sw.controller`; `pwax.sw.registration()` returns the
+  registration.
+- `forgetIdentity()` defaults to the current identity.
+- Navigation preload is consumed rather than discarded, so a navigation the worker declines
+  to handle no longer costs the server two requests.
+- The view-tree walk and the route walk happen once per manifest build rather than two and
+  four times.
+- Middleware modules no longer delay the first paint. Plugins and directives still do,
+  because Vue offers no way to register either after mount.
+
 ### Added
 
+- **A navigation no longer unmounts the page you are on.** The current page stays rendered
+  while the next one is fetched, compiled and has its styles applied; only then do the two
+  swap, with a fade. Previously the loader replaced the component the moment a navigation
+  began, so every click threw away what the visitor was reading and collapsed the layout to
+  a single line, twice. A failed navigation now leaves you where you were.
+- **A navigation progress bar**, which is the only thing that moves while you wait. It
+  waits 250 ms before appearing, eases towards a ceiling it never reaches, and completes
+  before the page swaps rather than alongside it. Navigations only — a document arriving is
+  the browser's own wait, and the shell's spinner already covers it. `pwax.progress`;
+  `window.pwax.progress` exposes `start()` and `done()` for an application's own slow work.
+- `customization.init_spinner` turns the first-load spinner off, for an application that
+  renders its own skeleton into the mount element.
+- `pwax.transition` names the page transition and its duration. The bundled one fades with
+  opacity alone; both it and the progress bar defer to `prefers-reduced-motion`.
+- `service_worker.max_entry_bytes`, bounding a single runtime-cache entry. `max_entries`
+  counts entries, which bounds nothing on its own.
 - **Pages work offline.** An application could precache its framework, its components and
   its shell, install as a PWA, boot offline — and still show "This page needs an internet
   connection to load", because the one thing never cached was the page. Page payloads are
@@ -33,7 +116,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   glob patterns resolved against `public/`. Images, fonts, stylesheets and build output are
   precached without listing each one.
 - **Data groups** (`service_worker.data_groups`) with `freshness` and `performance`
-  strategies, `max_age` and `max_size`. An offline page used to render and then fail every
+  strategies, `max_age` and `max_entries`. An offline page used to render and then fail every
   fetch it made.
 - **`navigation_strategy`** with an `app-shell` option for zero-round-trip navigation, and
   **`navigation_urls`** so a path the application does not own bypasses the worker.

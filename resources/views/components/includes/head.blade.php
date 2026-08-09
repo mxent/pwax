@@ -19,9 +19,33 @@
     $icon = $pwaxManifest->favicon();
     $base = config('pwax.head.base');
     $csrf = $shell->csrfToken();
-    $background = config('pwax.customization.init_background', '#ffffff');
-    $spinnerBg = config('pwax.customization.init_spinner_bg', '#f3f3f3');
-    $spinnerColor = config('pwax.customization.init_spinner_color', '#0c83ff');
+    /*
+     * These land inside a <style> block, where Blade's escaping does not help: it escapes
+     * for HTML, and CSS has its own way out. A value of `#fff; } html { display: none } .x {`
+     * is a valid string and a broken page. Configuration is not user input, so this is
+     * hardening rather than a hole — but a typo should cost one wrong colour, not the
+     * whole stylesheet.
+     */
+    $pwaxColor = static function (string $key, string $fallback): string {
+        $value = trim((string) config($key, $fallback));
+
+        // Hex, the CSS colour functions, and the named keywords. Anything else, including
+        // anything carrying a brace, a semicolon or a comment marker, is not a colour.
+        return preg_match('/^(#[0-9a-f]{3,8}|[a-z]+|(rgb|rgba|hsl|hsla|oklch|lab)\([0-9a-z%.,\/\s+-]*\))$/i', $value) === 1
+            ? $value
+            : $fallback;
+    };
+
+    $background = $pwaxColor('pwax.customization.init_background', '#ffffff');
+    $spinnerBg = $pwaxColor('pwax.customization.init_spinner_bg', '#f3f3f3');
+    $spinnerColor = $pwaxColor('pwax.customization.init_spinner_color', '#0c83ff');
+
+    // The navigation progress bar. Defaults to the spinner's colour so an application that
+    // set one has already set the other.
+    $spinner = (bool) config('pwax.customization.init_spinner', true);
+    $progressColor = $pwaxColor('pwax.progress.color', $spinnerColor);
+    $progressHeight = (int) config('pwax.progress.height', 3);
+    $transitionMs = (int) config('pwax.transition.duration', 150);
 
     $documentTitle = $title ?: (config('pwax.head.title') ?: config('pwax.manifest.name'));
     $description = config('pwax.head.description') ?: config('pwax.manifest.description');
@@ -124,6 +148,10 @@
         z-index: 9999;
     }
 
+    @if ($spinner)
+    /* The first load's indicator, covering the gap between the document arriving and the
+       runtime mounting. `customization.init_spinner` turns it off for an application that
+       renders its own skeleton into the mount element instead. */
     .pwax-preloader::after {
         content: '';
         position: absolute;
@@ -149,6 +177,7 @@
             animation-duration: 3s;
         }
     }
+    @endif
 
     .pwax-error {
         padding: 1.5rem;
@@ -171,6 +200,77 @@
     .pwax-loading {
         padding: 1.5rem;
         font-family: system-ui, sans-serif;
+    }
+
+    /* The navigation progress bar.
+       Fixed and scaled from the left, so it never participates in layout and never
+       reflows the page underneath it — the whole point is that nothing else moves. */
+    #pwax-progress {
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 2147483000;
+        width: 100%;
+        height: {{ $progressHeight }}px;
+        background: {{ $progressColor }};
+        transform: scaleX(0);
+        transform-origin: 0 50%;
+        opacity: 0;
+        pointer-events: none;
+        will-change: transform, opacity;
+        transition: transform 200ms ease-out, opacity 200ms linear;
+    }
+
+    #pwax-progress.pwax-progress-visible {
+        opacity: 1;
+    }
+
+    /* The completing stroke: full width, then fade. The width transition is quicker here
+       so "done" reads as an arrival rather than one last slow crawl. */
+    #pwax-progress.pwax-progress-done {
+        opacity: 0;
+        transition: transform 120ms ease-out, opacity 220ms linear 100ms;
+    }
+
+    /* Page transitions.
+       Opacity only — nothing that changes an element's size or position, because a
+       transform on the outgoing page is a second kind of movement to look at, and the
+       reason this exists is that navigation felt unsettled. */
+    .pwax-page-enter-active,
+    .pwax-page-leave-active {
+        transition: opacity {{ $transitionMs }}ms ease;
+    }
+
+    .pwax-page-enter-from,
+    .pwax-page-leave-to {
+        opacity: 0;
+    }
+
+    /* Motion is a preference, and both of these are motion. The progress bar keeps its
+       colour and its position — it just stops sliding — and pages swap outright. */
+    @media (prefers-reduced-motion: reduce) {
+        #pwax-progress {
+            transition: opacity 200ms linear;
+        }
+
+        .pwax-page-enter-active,
+        .pwax-page-leave-active {
+            transition: none;
+        }
+    }
+
+    /* Read by a screen reader, invisible to everyone else. Hiding it outright, or
+       collapsing its visibility, would hide it from both. */
+    .pwax-sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+        border: 0;
     }
 </style>
 

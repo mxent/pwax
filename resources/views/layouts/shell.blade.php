@@ -35,12 +35,36 @@
 
 <body>
     {{--
-        `pwax-preloader` shows the spinner until the runtime mounts and removes the
-        class. Content rendered inside is replaced on mount.
+        `pwax-preloader` covers the mount point with the spinner until the runtime mounts
+        and removes the class. Content rendered inside is replaced on mount.
+
+        This is the first load, and it is the browser's own wait: a document arriving. The
+        progress bar has no part in it — that is for navigations, where the address bar
+        does not move and nothing else would say a page is on its way. It is not rendered
+        here at all; the runtime creates it on the first navigation slow enough to need
+        one, so an application whose navigations are all fast never puts it in the
+        document.
+
+        The loading semantics are on their own element rather than on this one. They used
+        to be here, and `role="status"` with `aria-live="polite"` is right for a spinner
+        and badly wrong for an application root: the runtime removed the class on mount
+        and left the attributes, so for the rest of the session every reactive text change
+        anywhere in the app was announced, and the whole application was labelled
+        "Loading". This element is a container; nothing about it is a status.
     --}}
-    <div id="pwax" class="pwax-preloader" role="status" aria-live="polite" aria-label="Loading">
+    <div id="pwax" class="pwax-preloader">
+        <span class="pwax-sr-only" role="status">Loading</span>
         @yield('content')
     </div>
+
+    {{--
+        Where the runtime announces a client-side navigation.
+
+        A browser announces a page change on its own. A router does not — it swaps the DOM
+        and leaves a screen-reader user with no signal that anything happened, which is the
+        one thing an SPA has to put back by hand.
+    --}}
+    <div id="pwax-announcer" class="pwax-sr-only" role="status" aria-live="polite"></div>
 
     <x-pwax::includes.foot :shell="$pwaxShell" :initial="$pwaxInitial ?? null" />
     @stack('pwax-foot')

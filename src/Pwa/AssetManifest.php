@@ -2,6 +2,8 @@
 
 namespace Mxent\Pwax\Pwa;
 
+use Illuminate\Contracts\Cache\Lock;
+use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\Foundation\Application;
@@ -100,28 +102,110 @@ class AssetManifest
             return $this->build();
         }
 
-        try {
-            $cached = $this->cache->get(self::CACHE_KEY);
+        $cached = $this->cached();
 
-            if (is_array($cached)) {
-                /** @var array<string, mixed> $cached */
-                return $cached;
+        return $cached ?? $this->buildOnce($ttl);
+    }
+
+    /**
+     * The memoised manifest, or null if there is not one to hand.
+     *
+     * A missing or misconfigured cache store is never the reason an application cannot
+     * install itself: an unreachable store reads as a miss, and the caller builds.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function cached(): ?array
+    {
+        try {
+            $cached = $this->cache?->get(self::CACHE_KEY);
+        } catch (Throwable) {
+            return null;
+        }
+
+        /** @var array<string, mixed>|null $cached */
+        return is_array($cached) ? $cached : null;
+    }
+
+    /**
+     * Build the manifest, with one builder at a time where the store allows it.
+     *
+     * `/sw.json` sits outside the `web` group on purpose — it is the same for every
+     * visitor and has no use for a session — which also means no session, no auth and,
+     * unless the application adds one, no rate limit. Every miss walks `public/`, every
+     * view root and every route, so a burst of requests arriving in the window after an
+     * expiry each paid for the whole thing: a stampede that a single unauthenticated
+     * client can keep going indefinitely.
+     *
+     * The lock holds for ten seconds and is not waited on. A request that cannot take it
+     * builds anyway rather than queueing — an unbounded queue of waiting workers is its
+     * own outage, and the store may not support locks at all. What it does buy is that
+     * the winner writes the memo, so the queue drains into a cache hit.
+     *
+     * @return array<string, mixed>
+     */
+    private function buildOnce(int $ttl): array
+    {
+        $lock = $this->lock();
+
+        try {
+            // Someone else holds the lock. One more look before duplicating their work:
+            // if they have already finished, their answer is in the store and this
+            // request is a cache hit rather than a second full walk.
+            if ($lock === null) {
+                $fresh = $this->cached();
+
+                if ($fresh !== null) {
+                    return $fresh;
+                }
             }
-        } catch (Throwable) {
-            // A missing or misconfigured cache store must never be the reason the app
-            // cannot install itself. Fall through and build.
-            return $this->build();
-        }
 
-        $manifest = $this->build();
+            $manifest = $this->build();
+
+            try {
+                $this->cache?->put(self::CACHE_KEY, $manifest, $ttl);
+            } catch (Throwable) {
+                // The manifest is already built and correct; only the memo was lost.
+            }
+
+            return $manifest;
+        } finally {
+            try {
+                $lock?->release();
+            } catch (Throwable) {
+                // A lock that cannot be released expires on its own.
+            }
+        }
+    }
+
+    /**
+     * The build lock, or null when it could not be taken.
+     *
+     * Asked of the *store*, not the repository. `LockProvider` is implemented by stores —
+     * Redis, database, array, memcached — and file and null stores do not implement it at
+     * all, so an application on either simply builds without coordination, as it did
+     * before. `Repository::lock()` looks like it exists only because `__call` forwards it,
+     * which is why this reaches for `getStore()` rather than testing the repository.
+     */
+    private function lock(): ?Lock
+    {
+        if ($this->cache === null) {
+            return null;
+        }
 
         try {
-            $this->cache->put(self::CACHE_KEY, $manifest, $ttl);
-        } catch (Throwable) {
-            // Same again: the manifest is already built and correct.
-        }
+            $store = $this->cache->getStore();
 
-        return $manifest;
+            if (! $store instanceof LockProvider) {
+                return null;
+            }
+
+            $lock = $store->lock(self::CACHE_KEY . ':build', 10);
+
+            return $lock->get() ? $lock : null;
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     /**
@@ -149,6 +233,12 @@ class AssetManifest
 
         $this->warnings = [];
 
+        // The registry is a singleton and remembers its last walk, so the build declares
+        // when that answer stops being good enough. Everything below this line — the
+        // components group, and the page group scoping itself by the same selection —
+        // then shares one walk of the view tree instead of repeating it.
+        $this->registry->forget();
+
         $groups = array_merge(
             [$this->group('app', $this->appGroup($hashes, $crossOrigin, $critical))],
             [$this->group('components', $this->componentGroup($hashes))],
@@ -173,8 +263,9 @@ class AssetManifest
             'configVersion' => 2,
             'version' => (string) $this->config->get('pwax.service_worker.version', 'v1'),
             'cachePrefix' => (string) $this->config->get('pwax.service_worker.cache_name', 'pwax'),
-            'strategy' => (string) $this->config->get('pwax.service_worker.strategy', 'network-first'),
+            'strategy' => $this->runtimeStrategy(),
             'maxEntries' => (int) $this->config->get('pwax.service_worker.max_entries', 60),
+            'maxEntryBytes' => (int) $this->config->get('pwax.service_worker.max_entry_bytes', 5242880),
             'navigationPreload' => (bool) $this->config->get('pwax.service_worker.navigation_preload', true),
             'navigationStrategy' => $this->navigationStrategy(),
             'navigationUrls' => Glob::compile($this->navigationUrls()),
@@ -534,10 +625,7 @@ class AssetManifest
                 continue;
             }
 
-            /** @var array<string, mixed> $cache */
-            $cache = (array) ($declaration['cache_config'] ?? []);
-
-            $strategy = (string) ($cache['strategy'] ?? 'freshness');
+            $strategy = (string) ($declaration['strategy'] ?? 'freshness');
 
             $groups[] = [
                 'name' => is_string($declaration['name'] ?? null) ? $declaration['name'] : 'data-' . $index,
@@ -545,14 +633,35 @@ class AssetManifest
                 'patterns' => Glob::compile($patterns),
                 'cacheConfig' => [
                     'strategy' => $strategy === 'performance' ? 'performance' : 'freshness',
-                    'maxSize' => (int) ($cache['max_size'] ?? 50),
-                    'maxAge' => (int) ($cache['max_age'] ?? 3600),
-                    'timeout' => (int) ($cache['timeout'] ?? 3000),
+                    'maxSize' => (int) ($declaration['max_entries'] ?? 50),
+                    'maxAge' => (int) ($declaration['max_age'] ?? 3600),
+                    'timeout' => (int) ($declaration['timeout'] ?? 3000),
                 ],
             ];
         }
 
         return $groups;
+    }
+
+    /**
+     * How a same-origin GET nothing else claims is answered.
+     *
+     * `network-only` by default, and that is the change from 3.x. The catch-all used to be
+     * `network-first`, which stored a copy of everything it passed through: a one-off PDF,
+     * a CSV export, a file under `/storage` — anything the application never declared. All
+     * of it counted against the origin's quota, none of it was ever asked for offline, and
+     * the entry cap counts entries rather than bytes so sixty large ones is a very
+     * different amount of disk from sixty small ones.
+     *
+     * An application that wants the old behaviour asks for it, and then knows it has.
+     */
+    private function runtimeStrategy(): string
+    {
+        $strategy = (string) $this->config->get('pwax.service_worker.runtime_strategy', 'network-only');
+
+        return in_array($strategy, ['network-first', 'stale-while-revalidate'], true)
+            ? $strategy
+            : 'network-only';
     }
 
     private function navigationStrategy(): string

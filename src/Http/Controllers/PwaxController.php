@@ -91,7 +91,32 @@ class PwaxController extends Controller
         $response->headers->set('Cache-Control', 'public, max-age=31536000, immutable');
         $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
 
-        return $this->notModified($request, $response) ?? $response;
+        return $this->finish($request, $response);
+    }
+
+    /**
+     * Serve the runtime's source map.
+     *
+     * The bundle ends with a `sourceMappingURL` comment and nothing answered it, so every
+     * developer who opened devtools on a Pwax application got a 404 from the package —
+     * and, having no map, stepped through minified code. The sources it contains are the
+     * package's own, published and MIT licensed, so there is nothing here to withhold.
+     */
+    public function sourceMap(Request $request): SymfonyResponse
+    {
+        $path = dirname(__DIR__, 3) . '/dist/pwax.js.map';
+
+        if (! is_file($path)) {
+            return $this->plain('{}', 404, 'application/json; charset=utf-8');
+        }
+
+        $body = (string) file_get_contents($path);
+
+        $response = new Response($body, 200, ['Content-Type' => 'application/json; charset=utf-8']);
+        $response->headers->set('Cache-Control', 'public, max-age=31536000, immutable');
+        $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
+
+        return $this->finish($request, $response);
     }
 
     /**
@@ -105,7 +130,7 @@ class PwaxController extends Controller
         $response->headers->set('Cache-Control', 'public, max-age=86400');
         $response->headers->set('ETag', '"' . $manifest->hash() . '"');
 
-        return $this->notModified($request, $response) ?? $response;
+        return $this->finish($request, $response);
     }
 
     /**
@@ -144,7 +169,7 @@ class PwaxController extends Controller
         $response->headers->set('Cache-Control', 'no-cache, must-revalidate');
         $response->headers->set('ETag', '"' . $hash . '"');
 
-        return $this->notModified($request, $response) ?? $response;
+        return $this->finish($request, $response);
     }
 
     /**
@@ -186,7 +211,7 @@ class PwaxController extends Controller
         $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
         $response->headers->set('X-Robots-Tag', 'noindex');
 
-        return $this->notModified($request, $response) ?? $response;
+        return $this->finish($request, $response);
     }
 
     /**
@@ -222,7 +247,7 @@ class PwaxController extends Controller
         $response->headers->set('Cache-Control', 'no-cache, must-revalidate');
         $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
 
-        return $this->notModified($request, $response) ?? $response;
+        return $this->finish($request, $response);
     }
 
     /**
@@ -264,7 +289,7 @@ class PwaxController extends Controller
         $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
         $response->headers->set('Vary', Pwax::VARY);
 
-        return $this->notModified($request, $response) ?? $response;
+        return $this->finish($request, $response);
     }
 
     /**
@@ -301,10 +326,37 @@ class PwaxController extends Controller
         return $notModified;
     }
 
-    private function plain(string $body, int $status, string $contentType): Response
+    private function plain(string $body, int $status, string $contentType): SymfonyResponse
     {
         $response = new Response($body, $status, ['Content-Type' => $contentType]);
         $response->headers->set('Cache-Control', 'no-store, private');
+
+        return $this->harden($response);
+    }
+
+    /**
+     * Answer a conditional request if we can, and harden whatever goes out.
+     *
+     * Every response this controller produces passes through here or through `plain()`,
+     * which is the point: a header that is meant to be on all of them should not depend on
+     * whoever adds the next endpoint remembering it.
+     */
+    private function finish(Request $request, SymfonyResponse $response): SymfonyResponse
+    {
+        return $this->harden($this->notModified($request, $response) ?? $response);
+    }
+
+    /**
+     * Headers every Pwax endpoint carries.
+     *
+     * Each response here already declares an accurate `Content-Type`, so `nosniff` is
+     * defence in depth rather than a fix — but these endpoints serve JavaScript that
+     * browsers execute, which is exactly where content-type sniffing is worth taking off
+     * the table.
+     */
+    private function harden(SymfonyResponse $response): SymfonyResponse
+    {
+        $response->headers->set('X-Content-Type-Options', 'nosniff');
 
         return $response;
     }

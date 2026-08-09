@@ -29,7 +29,7 @@ export function resolveGlobal(path, root = window) {
  * @param {{type: string, url?: string, export?: string, path?: string}} entry
  * @param {{load: (url: string, exportName?: string) => Promise<any>}} loader
  */
-export async function resolveExtension(entry, loader) {
+export async function resolveExtension(entry, loader, name = '') {
     if (!entry || typeof entry !== 'object') {
         return undefined;
     }
@@ -42,7 +42,13 @@ export async function resolveExtension(entry, loader) {
         const value = resolveGlobal(entry.path);
 
         if (value === undefined) {
-            console.warn(`pwax: global "${entry.path}" is not defined. Is its script tag present?`);
+            // Named, because the path alone does not say which entry to go and look at.
+            // An application with several globals configured gets one message that could
+            // have come from any of them.
+            console.warn(
+                `pwax: global "${entry.path}"${name ? ` (configured as "${name}")` : ''} is not defined. ` +
+                    'Is its script tag present, and does it come before pwax.js?'
+            );
         }
 
         return value;
@@ -63,7 +69,7 @@ export async function resolveExtensions(entries, loader) {
     const values = await Promise.all(
         names.map(async (name) => {
             try {
-                return await resolveExtension(entries[name], loader);
+                return await resolveExtension(entries[name], loader, name);
             } catch (error) {
                 console.error(`pwax: failed to resolve "${name}"`, error);
                 return undefined;

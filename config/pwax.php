@@ -34,9 +34,21 @@ return [
     | tokens into something the client runtime can act on.
     |
     | `routes.static_middleware` applies to the runtime bundle, the manifest and the
-    | service worker. These are identical for every visitor and never touch the
-    | session, so the default is deliberately empty: adding `web` here would start a
-    | session and set a cookie on requests that have no use for either.
+    | service worker. These are identical for every visitor and never touch the session,
+    | so `web` deliberately does not appear: adding it would start a session and set a
+    | cookie on requests that have no use for either.
+    |
+    | It is not empty, though. Being outside `web` also means being outside anything that
+    | would slow an unauthenticated caller down, and `/sw.json` is the expensive one —
+    | each build walks public/, every view root and every route. The manifest is memoised
+    | and builds under a lock, so a flood mostly meets a cache hit; the throttle is the
+    | backstop for the window where it does not.
+    |
+    | The rate is deliberately generous. These files are hard-cached, so one visitor costs
+    | about three requests on their first visit and none afterwards — but throttling is
+    | per IP address, and an office, a school or a mobile carrier is many visitors behind
+    | one. Too low a limit does not degrade anything gracefully: it 429s `/sw.js` and
+    | leaves those people without an installable app at all.
     |
     */
 
@@ -45,7 +57,7 @@ return [
     'routes' => [
         'register' => true,
         'domain' => null,
-        'static_middleware' => [],
+        'static_middleware' => ['throttle:300,1'],
     ],
 
     /*
@@ -66,8 +78,9 @@ return [
     |            your APP_KEY, so this is defence in depth rather than the primary
     |            control. Leave empty to allow any view you explicitly reference.
     |
-    | scoped_styles  Honour `<style scoped>` by rewriting selectors and stamping the
-    |                template, the way Vue's SFC compiler does at build time.
+    | scoped_styles  Honour `<style scoped>` by rewriting each selector and stamping the
+    |                template's elements to match, so a rule cannot reach outside the
+    |                component it was written in.
     |
     */
 
@@ -252,7 +265,73 @@ return [
     |--------------------------------------------------------------------------
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Navigation feedback
+    |--------------------------------------------------------------------------
+    |
+    | A client-side navigation has no address-bar spinner, so without something here a
+    | slow page gives no sign that anything is happening. The progress bar is that sign,
+    | and it is deliberately the only thing that moves: the page you are on stays
+    | rendered until its replacement is ready, then the two cross-fade.
+    |
+    | Navigations only. The first load is covered by `customization.init_spinner` below —
+    | a document arriving is a different wait, and the browser is already indicating it.
+    |
+    |   enabled   Set to false to remove the bar entirely — no element, no timers.
+    |   color     Defaults to `customization.init_spinner_color`, so an application that
+    |             set one has already set the other.
+    |   height    Pixels.
+    |   delay     Milliseconds of silence before the bar appears at all. Most navigations
+    |             finish well inside this, and a bar that flashes on and off for every
+    |             one of them reads as jitter rather than as feedback.
+    |   trickle   Ease towards a ceiling while waiting. Off means the bar appears and
+    |             then sits still until the page arrives.
+    |
+    | `window.pwax.progress` exposes `start()` and `done()` so the same indicator can
+    | cover your own long-running work — a form submission, a report.
+    |
+    */
+
+    'progress' => [
+        'enabled' => true,
+        'color' => null,
+        'height' => 3,
+        'delay' => 250,
+        'trickle' => true,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Page transition
+    |--------------------------------------------------------------------------
+    |
+    | The name of the Vue transition wrapping the routed page, and how long its CSS runs
+    | for. The bundled `pwax-page` fades, using opacity alone — anything that changes an
+    | element's size or position is a second kind of movement to follow, and the reason
+    | this exists is that navigation felt unsettled.
+    |
+    | `duration` must agree with whatever the CSS does; it is what the default stylesheet
+    | is written with. Name your own transition here and define its classes in your own
+    | stylesheet to replace it entirely. Both are ignored under `prefers-reduced-motion`.
+    |
+    */
+
+    'transition' => [
+        'name' => 'pwax-page',
+        'duration' => 150,
+    ],
+
     'customization' => [
+        /*
+        | The centred spinner covering the very first load, from the document arriving to
+        | the runtime mounting.
+        |
+        | That wait is the browser's own; the progress bar has no part in it and belongs
+        | to navigations, where nothing else would say a page is on its way. Turn this off
+        | for an application that renders its own skeleton into the mount element instead.
+        */
+        'init_spinner' => true,
         'init_spinner_color' => '#0c83ff',
         'init_spinner_bg' => '#f3f3f3',
         'init_background' => '#ffffff',
@@ -404,12 +483,7 @@ return [
     |             with `--tag=pwax-service-worker`.
     | version     Mixed into the manifest hash. Bump it to force every client to discard
     |             its caches even when no file changed.
-    | strategy    Applies to same-origin requests that are not in the manifest.
-    |             'network-first' favours freshness; 'stale-while-revalidate' favours
-    |             speed and serves the cached copy while refreshing in the background.
     | offline_url Page shown when a navigation fails. Defaults to the app shell.
-    | max_entries Cap on the *runtime* cache only. Precached entries are never evicted,
-    |             so ordinary browsing can no longer push the app shell out of storage.
     |
     */
 
@@ -420,10 +494,45 @@ return [
         'blade' => null,
         'version' => 'v1',
         'cache_name' => 'pwax',
-        'strategy' => 'network-first',
         'offline_url' => null,
-        'max_entries' => 60,
         'navigation_preload' => true,
+
+        /*
+        | What happens to a same-origin GET that nothing in the manifest claims.
+        |
+        | 'network-only'            pass it through and store nothing (default)
+        | 'network-first'           store a copy, and serve that copy when offline
+        | 'stale-while-revalidate'  serve the copy first and refresh behind it
+        |
+        | The default is the conservative one because the alternative kept everything: a
+        | one-off PDF, a CSV export, a file under /storage — URLs the application never
+        | declared, taking up someone's disk and never asked for offline. What an
+        | application genuinely needs offline belongs in an asset group or a data group,
+        | where it is listed, hashed and bounded.
+        |
+        | This governs the runtime cache only. Anything in the manifest is precached, and
+        | anything under Pwax's own prefixes is served from cache and revalidated,
+        | whatever this says.
+        */
+        'runtime_strategy' => 'network-only',
+
+        /*
+        | Ceilings on the runtime cache.
+        |
+        | `max_entries` counts entries and `max_entry_bytes` bounds each one, because the
+        | first without the second is not a bound on anything: sixty JSON payloads and
+        | sixty videos are very different amounts of a visitor's disk, and one large
+        | response can push the origin over its quota and have the browser evict the
+        | precache — taking the application's offline capability with it.
+        |
+        | Precached entries are never evicted by either, so ordinary browsing cannot push
+        | the app shell out of storage.
+        |
+        | A response with no Content-Length is kept: measuring it would mean buffering the
+        | very responses the ceiling exists to avoid buffering.
+        */
+        'max_entries' => 60,
+        'max_entry_bytes' => 5242880,
 
         /*
         | How a full page navigation is answered.
@@ -466,9 +575,12 @@ return [
         | serves when a navigation cannot reach the network, and the client runtime
         | takes over routing from there.
         |
-        | Precaching real application URLs instead would store one authenticated user's
-        | HTML on disk under a URL another user of the same device would then be served.
-        | The shell has nothing in it to leak, which is what makes precaching it safe.
+        | Application pages are precached too — see `pages` below — and the shell is what
+        | answers a navigation to one that is not. What makes both safe is the same thing:
+        | they are fetched without cookies, so each is the guest rendering or it is not
+        | stored. Precaching a page *with* the installing visitor's session would put one
+        | authenticated user's HTML on disk under a URL the next user of that device is
+        | served, which is why `pages.credentials` defaults to omitting them.
         */
         'shell' => [
             'enabled' => true,
@@ -656,18 +768,20 @@ return [
         | They are stored per signed-in identity and `no-store` is still honoured, but a
         | device shared between two people is a device with both their data on it. Do not
         | add an authenticated endpoint here without deciding that is acceptable.
+        |
+        | Written flat, like `pages` and `asset_groups`: `max_entries` here is the same
+        | quantity as `max_entries` there, and had no business being spelled differently
+        | one level further down.
         */
         'data_groups' => [
             // [
             //     'name' => 'posts',
             //     'urls' => ['/api/posts', '/api/posts/**'],
             //     'version' => 1,
-            //     'cache_config' => [
-            //         'strategy' => 'freshness',
-            //         'max_size' => 50,
-            //         'max_age' => 3600,
-            //         'timeout' => 3000,
-            //     ],
+            //     'strategy' => 'freshness',
+            //     'max_entries' => 50,
+            //     'max_age' => 3600,
+            //     'timeout' => 3000,
             // ],
         ],
 

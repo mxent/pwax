@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Mxent\Pwax\Data\Component;
 use Mxent\Pwax\Pwax;
+use Mxent\Pwax\Support\Shell;
 
 /**
  * Negotiates between the SPA shell and a JSON component payload.
@@ -170,7 +171,21 @@ class ComponentResponse implements Responsable
             $payload['title'] = $this->documentTitle();
         }
 
+        $identity = $this->identity();
+        $payload['identity'] = $identity;
+
         $response = new JsonResponse($payload, $this->status, $this->headers);
+
+        // The same value as a header, for the service worker.
+        //
+        // The worker has to decide which identity's cache a payload belongs in, and until
+        // now it read that from the *request*. That is wrong at exactly the moment it
+        // matters: signing in through the runtime is a client-side navigation by design,
+        // so the request that follows the sign-in still carries the guest identity, and
+        // the first authenticated page would be filed where every guest can read it. The
+        // response knows who was actually served. Sent even when null — an explicit
+        // `anon` beats a stale header.
+        $response->headers->set('X-Pwax-Identity', $identity ?? 'anon');
 
         if (! $this->storable) {
             // Read by the service worker, which honours it above everything else — a page
@@ -224,6 +239,18 @@ class ComponentResponse implements Responsable
         }
 
         return $response;
+    }
+
+    /**
+     * The opaque label for whoever this response was rendered for.
+     *
+     * Resolved from the container rather than injected, because a `ComponentResponse` is
+     * built by a route closure long before there is a response to attach it to, and the
+     * shell already knows how to derive it.
+     */
+    private function identity(): ?string
+    {
+        return app(Shell::class)->identity();
     }
 
     /**

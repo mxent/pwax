@@ -91,3 +91,26 @@ describe('resolveExtensions', () => {
         expect(await resolveExtensions(undefined, loader)).toEqual({});
     });
 });
+
+describe('reporting an extension that will not resolve', () => {
+    it('names the config key alongside the path', async () => {
+        const warnings = [];
+        const warn = console.warn;
+        console.warn = (message) => warnings.push(message);
+
+        try {
+            await resolveExtensions(
+                { toast: { type: 'global', path: 'Missing.plugin' } },
+                { load: async () => ({}) }
+            );
+        } finally {
+            console.warn = warn;
+        }
+
+        // The path alone does not say which entry to go and look at. An application with
+        // several globals configured gets one message that could have come from any.
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('Missing.plugin');
+        expect(warnings[0]).toContain('toast');
+    });
+});

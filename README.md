@@ -56,6 +56,7 @@ table in JavaScript.
 - [Blade and Vue together](#blade-and-vue-together)
 - [Passing data](#passing-data)
 - [Routing](#routing)
+- [Navigating](#navigating)
 - [Redirects and errors](#redirects-and-errors)
 - [Importing components](#importing-components)
 - [Scoped styles](#scoped-styles)
@@ -67,7 +68,7 @@ table in JavaScript.
 - [Configuration reference](#configuration-reference)
 - [Artisan commands](#artisan-commands)
 - [JavaScript API](#javascript-api)
-- [Upgrading from 1.x](#upgrading-from-1x)
+- [Upgrading](#upgrading)
 - [Testing](#testing)
 - [Contributing](#contributing)
 
@@ -114,22 +115,35 @@ at a stable signed URL, which makes it HTTP-cacheable and importable as a real m
 
 ## Is this the right tool?
 
-| | Pwax | [Inertia](https://inertiajs.com) | [Livewire](https://livewire.laravel.com) |
-| --- | --- | --- | --- |
-| Frontend build step | none | Vite required | none |
-| Component source | Blade views | `.vue` / `.jsx` files | Blade + PHP class |
-| Where components render | browser (Vue) | browser (Vue) | server (round trip per interaction) |
-| Client-side reactivity | full Vue | full Vue | server-driven |
-| Ships a compiler to the browser | yes (~50 kB of Vue) | no | no |
+Pwax makes one trade, and everything else follows from it: **templates are compiled in
+the browser instead of at build time.**
 
-Reach for Pwax when you want real client-side Vue but not a Node toolchain — internal
-tools, admin panels, prototypes, or apps that must be installable and work offline.
-Reach for **Inertia** if you are happy running Vite and want tree-shaking, TypeScript,
-and `<script setup>`. Reach for **Livewire** if you would rather not write JavaScript.
+What you get for it:
 
-The honest trade-off: Vue's in-browser compiler is about 50 kB gzipped more than the
-runtime-only build, and compiling templates in the browser requires
-`script-src 'unsafe-eval'` in your Content-Security-Policy. See [Security](#security).
+- **No build step.** No `npm install`, no Vite config, no `dist/` to deploy, no build
+  that can be out of date. Editing a Blade view is deploying a component.
+- **One language for the whole page.** A component is a Blade view, so `@if`, `@json`,
+  `auth()`, policies, translations and route helpers all work inside it — server-rendered
+  where it makes sense, reactive where it does not.
+- **One list of routes.** The Laravel route table is the application's route table; there
+  is no second one in JavaScript to keep in step with it.
+- **Installable and offline by default.** A service worker, an app manifest and a
+  precached shell come with the package rather than being assembled afterwards.
+
+What it costs:
+
+- **About 50 kB gzipped**, over and above the runtime-only build, for Vue's compiler.
+- **`script-src 'unsafe-eval'`** in your Content-Security-Policy, because compiling a
+  template in the browser means calling the `Function` constructor. See
+  [Security](#security).
+- **No `<script setup>`, no single-file-component TypeScript, no tree-shaking of your own
+  components** — all three are build-time features, and there is no build.
+
+That trade is a good one for internal tools, admin panels, dashboards, prototypes, and
+anything that has to be installable and work offline without a frontend pipeline. It is
+the wrong one if your policy forbids `unsafe-eval`, if you need every kilobyte on a
+first paint over a slow connection, or if your team already runs a frontend toolchain
+happily and wants what a build step buys.
 
 ## Requirements
 
@@ -350,6 +364,67 @@ Customise the error and loading markup by publishing the views, or by pointing
 
 `error` exposes `status`, `statusText` and `message`; `retry()` refetches the page.
 
+## Navigating
+
+A navigation does not unmount the page you are on. The current page stays rendered while
+the next one is fetched, compiled and has its styles applied; only then do the two swap,
+with a fade. Nothing collapses to a spinner in between, and a navigation that fails leaves
+you where you were.
+
+The one thing that moves while you wait is a progress bar across the top of the window.
+It waits 250 ms before appearing — most navigations finish well inside that, and a bar
+that flashes on and off for each of them reads as jitter — then eases towards a ceiling it
+never reaches, because the payload has no length the browser can know in advance. Claiming
+to be finished and then waiting is what makes a progress bar feel like a lie.
+
+There are two waits and they get different answers, because they are different waits:
+
+```
+first load    document arrives ─► spinner ─► app mounts ─► page appears
+navigation    bar starts       ─► payload ─► bar completes ─► page fades in
+```
+
+A document arriving is the browser's own wait — the address bar moves, the tab spins — and
+the shell's centred spinner covers the gap between the HTML landing and the runtime
+mounting. A navigation has none of that, which is what the bar is for. It is not rendered
+by the shell: the runtime creates it on the first navigation slow enough to need one, so an
+application whose navigations are all fast never puts it in the document.
+
+`customization.init_spinner => false` turns the spinner off, for an application that
+renders its own skeleton into the mount element instead.
+
+```php
+'progress' => [
+    'enabled' => true,
+    'color'   => null,   // defaults to customization.init_spinner_color
+    'height'  => 3,
+    'delay'   => 250,
+    'trickle' => true,
+],
+
+'transition' => [
+    'name'     => 'pwax-page',   // any Vue transition name
+    'duration' => 150,           // must agree with the CSS
+],
+```
+
+The bundled transition fades with opacity alone — anything that changes an element's size
+or position is a second kind of movement to follow. Name your own and define its classes
+in your stylesheet to replace it. Both defer to `prefers-reduced-motion`.
+
+Wrap your own slow work in the same indicator:
+
+```js
+window.pwax.progress.start();
+await fetch('/api/report');
+window.pwax.progress.done();
+```
+
+The loader view is now only for the case with nothing to keep — the first paint of an
+application whose landing page was not inlined. It ships silent, speaking only to screen
+readers, which have no progress bar to look at. Point `pwax.blade.loader` at a skeleton if
+you would rather show one.
+
 > Use `v-text`, not `v-html`. Part of `error` derives from the HTTP response, and
 > rendering that as HTML would make reflected content executable.
 
@@ -402,10 +477,10 @@ Backdrop: @pwaxImport('Backdrop from components.modal'),
 > lazy — the arrow adds nothing. If you do write it, Pwax renders an explanation on the
 > page instead of `[object Object]`.
 
-> The directive is `@pwax`, not `@import`. A Blade directive named `import` also matches
-> the CSS at-rule `@import url(...)` inside `<style>` blocks — see
-> [Upgrading from 1.x](#upgrading-from-1x). You can rename it with
-> `pwax.components.directive`; the name `import` is rejected.
+> The directive is `@pwaxImport`, and it can never be `@import`. A Blade directive named
+> `import` also matches the CSS at-rule `@import url(...)` inside every `<style>` block in
+> the application — see [Upgrading](#upgrading). You can rename it with
+> `pwax.components.directive`; the name `import` is rejected at boot.
 
 ## Scoped styles
 
@@ -423,10 +498,11 @@ Add `scoped` to a `<style>` block and its rules only apply to that component:
 ```
 
 Pwax rewrites the selectors to `.card[data-pwax-a1b2c3d4]` and stamps the template's
-elements with the matching attribute — the same approach Vue's SFC compiler takes at
-build time, done here at render time.
+elements with the matching attribute, so a rule can only ever reach the component it was
+written in. The scope id is derived from the view's contents, so it is stable between
+requests and changes when the component does.
 
-Two escape hatches, named as in Vue:
+Two escape hatches, keeping the names Vue authors already type:
 
 ```css
 .wrapper :deep(.child-component-class) { color: red; }  /* reach into a child */
@@ -625,8 +701,30 @@ which take globs:
 
 `**` crosses directories, `*` does not, `{a,b}` and `(a|b)` alternate, and a leading `!`
 excludes. `public/storage` is never walked — it is a symlink to user uploads — and `.php`
-files, dotfiles and source maps are never matched whatever the patterns say. `max_files`
-and `max_bytes` cap a runaway glob and report what they truncated.
+files, source maps and anything hidden are never matched whatever the patterns say
+(including files inside a hidden directory, so a stray `.git` under `public/` cannot be
+precached). `max_files` and `max_bytes` cap a runaway glob and report what they truncated.
+
+Requests to an API get their own groups, which are about responses rather than files:
+
+```php
+'service_worker' => [
+    'data_groups' => [
+        [
+            'name' => 'posts',
+            'urls' => ['/api/posts', '/api/posts/**'],
+            'strategy' => 'freshness',   // or 'performance' to serve the cache first
+            'max_entries' => 50,
+            'max_age' => 3600,           // seconds, for 'performance'
+            'timeout' => 3000,           // ms before 'freshness' falls back to the cache
+        ],
+    ],
+],
+```
+
+These hold one person's data, so they are stored per signed-in identity and `no-store` is
+still honoured — but a device two people share is a device with both their data on it.
+Adding an authenticated endpoint here is a decision, not a default.
 
 Only your own view paths are scanned. Package view namespaces are not — every package
 that calls `loadViewsFrom()` registers one, Laravel's own exception-page renderer
@@ -675,10 +773,15 @@ worker whose source never changed would leave clients on the build they first in
 
 ### The offline shell
 
-Navigations always go to the network, and their responses are **never stored**. The Cache
-API ignores HTTP cache directives, so a worker that cached what it fetched would persist
-to disk exactly the documents the server marked `no-store, private` — a signed-in user's
-rendered page, which the next person to use that device would be served offline.
+**A navigation's own response is never stored.** The Cache API ignores HTTP cache
+directives, so a worker that kept what it fetched would persist to disk exactly the
+documents the server marked `no-store, private` — a signed-in user's rendered page, which
+the next person to use that device would be served offline.
+
+Two documents *are* on disk, and neither was fetched during anyone's navigation. Both are
+fetched at install time **without cookies**, so each is the guest rendering or it is not
+there at all: the shell below, and the HTML of each discovered page, which is what lets an
+offline navigation paint the real page instead of a spinner.
 
 Instead Pwax precaches `/__pwax__/shell`: the same SPA shell rendered with no session, no
 CSRF token and no page component, identical for every visitor. When a navigation cannot
@@ -890,8 +993,10 @@ For defence in depth, restrict which views may be served at all:
 ### Content-Security-Policy
 
 Vue compiles templates in the browser with the `Function` constructor, so
-`script-src 'unsafe-eval'` is required. There is no way around it while templates are
-compiled client-side — if that is unacceptable in your environment, use Inertia instead.
+`script-src 'unsafe-eval'` is required. This is inherent to compiling templates on the
+client rather than at build time, and it is the one requirement Pwax cannot be configured
+out of. If your policy forbids `unsafe-eval`, this package is not usable in that
+environment — see [Is this the right tool?](#is-this-the-right-tool).
 
 Imported components are fetched from real same-origin URLs. A **page** component cannot
 be — it is rendered with controller data, so it ships its script inline and the runtime
@@ -923,25 +1028,42 @@ Supply the nonce for Pwax's inline `<style>` and JSON blocks:
 The Cache Storage API ignores HTTP cache directives, so a worker that stores whatever it
 fetches writes signed-in users' rendered pages to disk — where the next person to use that
 device is served them offline. Assets carrying `Cache-Control: no-store` are refused
-outright, and a navigation's HTML is never stored on any path: what is served offline is
-the session-free shell.
+outright, and **no response to a navigation is ever stored**, whoever made it.
+
+The HTML that answers an offline navigation was fetched separately at install, without
+cookies: the session-free shell, and the rendered document of each discovered page. Both
+are the guest rendering by construction — a route behind `auth` answers that cookieless
+request with a login screen, which is refused rather than stored.
 
 Page payloads are the deliberate exception, because a shell with nothing to render in it
 is not an offline app. Three things make storing them safe, and they are worth knowing:
 
 - **They are partitioned by identity.** A visited page goes in a cache named after an
   opaque HMAC of the signed-in user, so another session on the same device cannot reach
-  it — it is not cleared later, it was never addressable. Call
-  `pwax.sw.forgetIdentity(window.pwax.config.identity)` on sign-out to drop it at once.
+  it — it is not cleared later, it was never addressable. Reads are confined to the same
+  name; the precache is the one cache deliberately shared, and it holds only the
+  framework, the components and the session-free shell. Call `pwax.sw.forgetIdentity()`
+  on sign-out to drop the rest at once.
 - **Precached pages are fetched without cookies**, so what installs is the guest
   rendering. A route behind `auth` answers with a login screen and is refused.
 - **`->offline(false)` refuses outright**, for a page that must not reach disk under any
   circumstances — a one-time code, a recovery key. `service_worker.pages.runtime => false`
   turns the whole behaviour off.
 
-One thing this does not cover: **a component can still vary by user** — an admin-only
-branch, a localised string — and precached components are stored per browser profile, not
-per identity. On a shared device, call `pwax.sw.clearCaches()` when someone signs out.
+Two things this does not cover, and both are worth deciding about rather than discovering:
+
+- **Every signed-out visitor shares one partition.** There is no identity to name a cache
+  after before someone signs in, so a multi-step form that collects personal details
+  *before* authentication is cached where the next anonymous visitor on that device can be
+  served it. `->offline(false)` on those pages is the answer.
+- **A component can still vary by user** — an admin-only branch, a localised string — and
+  precached components are stored per browser profile, not per identity. On a shared
+  device, call `pwax.sw.clearCaches()` when someone signs out.
+
+One thing to avoid entirely: **never sign a view name that came from a request.**
+`pwaxRender($request->input('view'))` would mint a valid signed identifier for whatever it
+was handed, and signing is what the component endpoints trust. View names belong in your
+code.
 
 ### Your responsibilities
 
@@ -968,7 +1090,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `middleware` | `['web']` | Middleware for component routes |
 | `routes.register` | `true` | Register package routes automatically |
 | `routes.domain` | `null` | Restrict package routes to a domain |
-| `routes.static_middleware` | `[]` | Middleware for runtime/manifest/worker |
+| `routes.static_middleware` | `['throttle:300,1']` | Middleware for runtime/manifest/worker — outside `web`, so outside its rate limiting too |
 | `components.directive` | `'pwaxImport'` | Blade directive name (`import` is rejected) |
 | `components.allowed` | `[]` | Allowlist of servable view patterns |
 | `components.scoped_styles` | `true` | Honour `<style scoped>` |
@@ -984,7 +1106,12 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `cache.asset_ttl` | `3600` | `max-age` for component assets |
 | `cache.components` | `true` | Memoise compiled components |
 | `csp.nonce` | `null` | Nonce (or callable) for inline blocks |
+| `customization.init_spinner` | `true` | The centred spinner covering the first load |
 | `customization.*` | see config | Preloader colours |
+| `progress.enabled` | `true` | Navigation progress bar |
+| `progress.color`, `.height` | `null`, `3` | Colour falls back to the spinner's; height in px |
+| `progress.delay`, `.trickle` | `250`, `true` | Silence before it appears, and whether it eases while waiting |
+| `transition.name`, `.duration` | `pwax-page`, `150` | The page transition and how long its CSS runs |
 | `manifest_path`, `manifest` | see config | Web App Manifest (all spec members) |
 | `head.title`, `.title_template` | `null` | Document title and its wrapper |
 | `head.description`, `.icon` | `null` | Fall back to the manifest's |
@@ -998,8 +1125,9 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `service_worker.enabled` | `false` | Register and serve the worker |
 | `service_worker.path`, `.scope` | `/sw.js`, `/` | Where it lives and what it controls |
 | `service_worker.version` | `'v1'` | Mixed into the manifest hash; bump to discard everything |
-| `service_worker.strategy` | `network-first` | For requests not in the manifest |
+| `service_worker.runtime_strategy` | `network-only` | What happens to a same-origin GET nothing in the manifest claims |
 | `service_worker.max_entries` | `60` | Cap on the **runtime** cache; precached entries are never evicted |
+| `service_worker.max_entry_bytes` | `5 MB` | Largest single response the runtime cache will keep |
 | `service_worker.asset_manifest.path` | `/sw.json` | Where the asset manifest is served |
 | `service_worker.asset_manifest.ttl` | `60` | Seconds the built manifest is memoised |
 | `service_worker.shell.enabled`, `.path` | `true`, `/__pwax__/shell` | The session-free offline shell |
@@ -1062,26 +1190,30 @@ Events on `document`:
 | `pwax:update-available` | A new service worker is waiting |
 | `pwax:online`, `pwax:offline` | The connection came back or went away |
 
-## Upgrading from 1.x
+## Upgrading
 
-2.0 is a breaking release. See [UPGRADE.md](UPGRADE.md) for the full checklist.
+[UPGRADE.md](UPGRADE.md) has a checklist for each major version. `php artisan pwax:doctor`
+reads your published config and names any key that no longer does anything, along with
+what replaced it — start there.
 
-The change to make first, even if you upgrade nothing else: **1.x registered a Blade
-directive named `import`.** Blade matches a directive even with no arguments, so
-`@import url("fonts.css")` inside *any* `<style>` block in your application — not just in
-Pwax components — was replaced with JavaScript. If you have ever had a stylesheet
-mysteriously stop working, that was why. The directive is now `@pwax`.
+Where the API stands today, against every version that has shipped:
 
-Headlines:
-
-| 1.x | 2.0 |
+| Was | Now |
 | --- | --- |
-| `@import('view')` | `@pwaxImport('view')` |
-| `vue('view', $data)` | `pwaxRender('view', $data)` |
-| `router('name')` | `pwaxRoute('name')` |
+| `@import('view')`, `@pwax('view')` | `@pwaxImport('view')` |
+| `vue(...)`, `pwax_component(...)` | `pwaxRender($view, $data)` |
+| `router(...)`, `pwax_route(...)` | `pwaxRoute($name, $params)` |
 | `/__pwax__/{name}.json` | `/__pwax__/c/{signed-id}.js` |
-| Component routes had no middleware | run through `web` |
-| Vue 3.5.18 / Router 4 / Pinia 3 from unpkg | 3.5.41 / 5.2.0 / 4.0.2, self-hosted |
+| `/service-worker.js`, `/manifest.webmanifest` | `/sw.js`, `/manifest.json` |
+| `service_worker.files`, `.precache` | `service_worker.asset_groups`, `.pages` |
+| `service_worker.strategy` | `service_worker.runtime_strategy` |
+| `pwax.sw.registration` | `pwax.sw.controller`, `pwax.sw.registration()` |
+
+One from 1.x is worth repeating because it was silent: **1.x registered a Blade directive
+named `import`**, and Blade matches a directive even with no arguments — so
+`@import url("fonts.css")` inside *any* `<style>` block in the application, Pwax component
+or not, was replaced with JavaScript. If a stylesheet ever stopped working for no visible
+reason, that was why.
 
 ## Testing
 

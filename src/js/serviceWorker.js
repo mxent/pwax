@@ -153,12 +153,15 @@ export function createServiceWorkerApi() {
         },
 
         /**
-         * Delete every Pwax cache.
+         * Delete every Pwax cache, including the precache.
          *
-         * Worth calling on sign-out. The worker refuses to store anything the server
-         * marked `no-store`, so a signed-in user's pages never reach disk in the first
-         * place — but a component that renders differently for an administrator does,
-         * and on a shared device that is worth clearing.
+         * The blunt instrument. `forgetIdentity()` is almost always the one you want on
+         * sign-out: it drops what belonged to that person and leaves the framework, the
+         * components and the shell in place, so the next visitor gets an application that
+         * still works offline instead of one that downloads itself again.
+         *
+         * Reach for this when the device itself should be left with nothing — a shared
+         * terminal at the end of a shift, a kiosk being handed on.
          */
         clearCaches() {
             const controller = navigator.serviceWorker?.controller;
@@ -188,10 +191,17 @@ export function createServiceWorkerApi() {
          * device gets an application that still works offline rather than one that has to
          * download itself again.
          *
-         * @param {string} identity  `window.pwax.config.identity` for the user signing out.
+         * Called with no argument it uses the identity the runtime currently holds, which
+         * is the one you want and the one that is hard to get right by hand: reading
+         * `window.pwax.config.identity` into a variable early and passing it back later
+         * hands over whoever was signed in *then*. The runtime keeps its own copy in step
+         * with the server on every page load.
+         *
+         * @param {string} [identity]  Defaults to the current `window.pwax.config.identity`.
          */
         forgetIdentity(identity) {
             const controller = navigator.serviceWorker?.controller;
+            identity = identity || window.pwax?.config?.identity;
 
             if (!controller || !identity) {
                 return Promise.resolve(false);
@@ -217,8 +227,26 @@ export function createServiceWorkerApi() {
             return registration ? registration.unregister() : false;
         },
 
-        get registration() {
+        /**
+         * The worker currently controlling this page, or null.
+         *
+         * This used to be called `registration`, and returned exactly this — a
+         * `ServiceWorker`, not a `ServiceWorkerRegistration`. So `.waiting`, `.scope`,
+         * `.update()` and `.unregister()` were all `undefined` on the object the name
+         * promised would have them, and the failure looked like the worker not being
+         * ready rather than the property being wrong.
+         */
+        get controller() {
             return navigator.serviceWorker?.controller ?? null;
+        },
+
+        /**
+         * The registration, for real. Asynchronous, because the platform's is.
+         */
+        registration() {
+            return navigator.serviceWorker
+                ? navigator.serviceWorker.getRegistration().then((r) => r ?? null)
+                : Promise.resolve(null);
         },
     };
 }

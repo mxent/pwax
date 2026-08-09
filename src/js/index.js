@@ -12,6 +12,7 @@ import { resolveExtensions } from './extensions.js';
 import { createHttp } from './http.js';
 import { importModule } from './modules.js';
 import { createPageComponent } from './page.js';
+import { createProgress } from './progress.js';
 import { createRouter } from './router.js';
 import { createServiceWorkerApi, registerServiceWorker } from './serviceWorker.js';
 import { createStyleManager } from './styles.js';
@@ -26,6 +27,13 @@ async function boot() {
     const styles = createStyleManager(document);
     const loader = createComponentLoader({ styles, nonce: config.nonce });
 
+    // Null when the application turned it off, and every call site uses `?.` — a disabled
+    // progress bar should cost nothing at all, not an object that does nothing.
+    //
+    // It covers navigations only. This load is the browser's own wait, and the shell's
+    // spinner already says so.
+    const progressBar = config.progress === false ? null : createProgress(config.progress || {});
+
     // Published before anything is mounted, so component scripts can call it during
     // their own evaluation.
     window.pwax = {
@@ -37,6 +45,9 @@ async function boot() {
         load: loader.load,
         import: importModule,
         sw: createServiceWorkerApi(),
+        // Exposed so an application can wrap its own long-running work — a form
+        // submission, a report — in the same indicator its navigations use.
+        progress: progressBar,
     };
 
     if (typeof Vue === 'undefined') {
@@ -46,19 +57,29 @@ async function boot() {
         );
     }
 
-    const [plugins, directives, middleware] = await Promise.all([
-        resolveExtensions(config.plugins, loader),
-        resolveExtensions(config.directives, loader),
-        resolveExtensions(config.middleware, loader),
-    ]);
+    // Started together, awaited apart.
+    //
+    // Plugins and directives have to be registered before `mount()` — Vue offers no way to
+    // add either to a running application — so first paint genuinely waits for them.
+    // Middleware does not: it is read inside `runMiddleware()`, after a page's options are
+    // in hand. Awaiting it here made a configured module middleware delay the first paint
+    // of a page whose component was already inlined in the document and needed no network
+    // at all, which is the one thing this architecture exists to avoid.
+    const pluginsReady = resolveExtensions(config.plugins, loader);
+    const directivesReady = resolveExtensions(config.directives, loader);
+    const middlewareReady = resolveExtensions(config.middleware, loader);
+
+    const [plugins, directives] = await Promise.all([pluginsReady, directivesReady]);
 
     const page = createPageComponent({
         http,
         styles,
         config,
         initial,
-        middleware,
+        middleware: middlewareReady,
         templates: config.templates || {},
+        progress: progressBar,
+        transition: config.transition || 'pwax-page',
     });
 
     const app = Vue.createApp({
@@ -100,6 +121,16 @@ async function boot() {
 
     app.mount(mount);
     mount.classList.remove('pwax-preloader');
+
+    // Mounting replaces the spinner's markup, but a shell rendered by an older version of
+    // this package — or a published one an application has customised — may still put the
+    // loading semantics on the mount element itself. Left there they turn the application
+    // root into a live region for the rest of the session: every reactive text change
+    // announced, and the whole app labelled "Loading".
+    for (const attribute of ['role', 'aria-live', 'aria-label', 'aria-busy']) {
+        mount.removeAttribute(attribute);
+    }
+
     document.documentElement.classList.add('pwax-ready');
 
     document.dispatchEvent(new CustomEvent('pwax:ready', { detail: { app, router } }));

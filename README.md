@@ -334,13 +334,18 @@ does. If yours cannot, set `hash_route => true`.
 | `return redirect('/somewhere')` | SPA navigation, no page reload |
 | `return redirect()->away(...)` | full page navigation |
 | `auth` middleware rejects the request | full page load of your login screen |
-| `419` expired CSRF token | full page reload to pick up a fresh token |
+| `419` expired CSRF token | one full page reload to pick up a fresh token |
 | `404`, `403`, `401`, `5xx` | renders the error template |
 
 The first two are translated by Pwax's middleware. The next two cannot be — `auth` and
 `VerifyCsrfToken` *throw*, so their redirects are produced by the exception handler
 outside the middleware pipeline — so the client handles them instead, by treating a
 followed redirect that returns HTML as an instruction to reload.
+
+**One** reload for a `419`, per tab. The reload only helps if it returns a different
+document, and under `navigation_strategy => 'app-shell'` it does not: the worker answers
+that navigation from disk, so the same expired token comes back and the page would reload
+forever. A second `419` renders the error template instead.
 
 So this just works:
 
@@ -808,15 +813,20 @@ worker whose source never changed would leave clients on the build they first in
 
 ### The offline shell
 
-**A navigation's own response is never stored.** The Cache API ignores HTTP cache
-directives, so a worker that kept what it fetched would persist to disk exactly the
-documents the server marked `no-store, private` — a signed-in user's rendered page, which
-the next person to use that device would be served offline.
+**A navigation's response is stored only when it belongs to nobody.** The Cache API ignores
+HTTP cache directives, so a worker that kept what it fetched would persist to disk exactly
+the documents the server marked `no-store, private` — a signed-in user's rendered page,
+which the next person to use that device would be served offline. Every page response
+carries `X-Pwax-Identity`, and a document is kept only when it says `anon`; a response
+without the header counts as somebody's, not as anonymous.
 
-Two documents *are* on disk, and neither was fetched during anyone's navigation. Both are
-fetched at install time **without cookies**, so each is the guest rendering or it is not
-there at all: the shell below, and the HTML of each discovered page, which is what lets an
+The documents that install with the build are anonymous by construction: they are fetched
+at install time **without cookies**, so each is the guest rendering or it is not there at
+all. Those are the shell below, and the HTML of each discovered page, which is what lets an
 offline navigation paint the real page instead of a spinner.
+
+`service_worker.pages.runtime => false` turns off both halves of runtime page caching, the
+payload and the document alike.
 
 Instead Pwax precaches `/__pwax__/shell`: the same SPA shell rendered with no session, no
 CSRF token and no page component, identical for every visitor. When a navigation cannot
@@ -871,7 +881,7 @@ Route::get('/docs/{page}', fn ($page) => pwaxRender('pages.docs', [...])
 
 **Visited pages.** On by default, and what makes an authenticated application work
 offline rather than only its public routes: every page a visitor opens is cached as they
-go.
+go — the payload always, and the rendered HTML when the response declares itself anonymous.
 
 ```php
 'service_worker' => ['pages' => ['runtime' => true]],
@@ -1235,7 +1245,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `service_worker.exclude_files` | `[]` | Globs never precached |
 | `service_worker.pages.urls` | `[]` | Extra routes to precache, beyond the discovered ones |
 | `service_worker.pages.discover` | `true` | Find every route that renders a page, scoped by `components` |
-| `service_worker.pages.runtime` | `true` | Cache pages as they are visited |
+| `service_worker.pages.runtime` | `true` | Cache pages as they are visited — payload, and HTML when anonymous |
 | `service_worker.pages.strategy`, `.timeout` | `freshness`, `2000` | How a page payload is fetched |
 | `service_worker.pages.credentials` | `'omit'` | Precache the guest rendering, not one visitor's |
 | `service_worker.pages.as_components` | `false` | Also precache page views as importable modules |

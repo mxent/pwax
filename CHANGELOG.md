@@ -93,6 +93,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A `navigation_urls` pattern that will not compile is skipped with a warning instead of
   thrown, where it previously turned every navigation in the application into the offline
   page.
+- **An expired CSRF token could reload the page forever.** A `419` is answered by reloading
+  to pick up a fresh token, which assumes the reload reaches the server — and under
+  `navigation_strategy => 'app-shell'` it does not, because the worker answers navigations
+  from disk and returns the same expired token. One reload per tab now, re-armed whenever a
+  page loads successfully; a second `419` renders the error template.
+- `pwax.sw.applyUpdate()` no longer depends on `this`, so `const { applyUpdate } =
+  window.pwax.sw` works.
 
 ### Changed
 

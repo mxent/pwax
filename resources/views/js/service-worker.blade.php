@@ -1126,6 +1126,13 @@ async function navigate(event, manifest) {
  * document and served under its URL forever.
  */
 async function rememberDocument(response, manifest, path) {
+    // The same switch that governs the payload. `pages.runtime => false` is documented as
+    // the way to keep page content off disk entirely, and a document is page content —
+    // more of it than the payload, since the markup is rendered rather than described.
+    if (manifest.pageRuntime === false) {
+        return;
+    }
+
     if (
         !response ||
         !response.ok ||
@@ -1141,10 +1148,23 @@ async function rememberDocument(response, manifest, path) {
     // itself is being read by the browser at the same time, and a clone taken after it has
     // started is a locked stream.
     const copy = response.clone();
-    const cache = await caches.open(documentsName(manifest));
 
-    await cache.put(path, copy);
-    await trim(cache, manifest.maxEntries);
+    try {
+        const cache = await caches.open(documentsName(manifest));
+        const defaults = manifest.pageDefaults || {};
+
+        await cache.put(path, copy);
+
+        // Bounded by `pages.max_entries`, not the runtime cache's. A document is a page,
+        // and the setting that says how many pages to keep should govern both of its
+        // halves.
+        await trim(cache, defaults.maxEntries || manifest.maxEntries);
+    } catch {
+        // A full disk is the likely one, and this is the least important thing on it: the
+        // payload is already stored and is what offline correctness rests on. A document
+        // that could not be written costs a spinner. Swallowed rather than left to reject
+        // inside `waitUntil`, where it would be reported as the worker failing.
+    }
 }
 
 /**

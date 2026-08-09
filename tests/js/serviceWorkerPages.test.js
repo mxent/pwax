@@ -820,6 +820,19 @@ describe('documents cached as they are visited', () => {
         await expect(response.text()).resolves.toBe('<html>shell</html>');
     });
 
+    it('stores nothing when runtime page caching is off', async () => {
+        // `pages.runtime => false` is documented as the way to keep page content off disk
+        // entirely, and a document is more page content than the payload is — the markup
+        // rendered rather than described.
+        const current = manifest({ pageRuntime: false });
+        const caches = new FakeCaches();
+
+        const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
+        await worker.navigate(DASHBOARD);
+
+        expect(await caches.keys()).not.toContain('pwax-documents-v1-h1');
+    });
+
     it('drops the documents of a build that has been replaced', async () => {
         const caches = new FakeCaches();
         const first = manifest();

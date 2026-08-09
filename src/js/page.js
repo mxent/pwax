@@ -13,6 +13,43 @@ const PAGE_STYLE_KEY = 'pwax:page';
 const DEFAULT_LOADER = '<div class="pwax-loading" role="status">Loading…</div>';
 
 /**
+ * One reload per tab for an expired CSRF token.
+ *
+ * Reloading to pick up a fresh token assumes the reload reaches the server. It does not
+ * under `navigation_strategy => 'app-shell'`, where the worker answers navigations from
+ * disk — so the same stale token comes back and the page reloads in a loop. `sessionStorage`
+ * because the flag has to survive the reload it guards, and has to be gone in the next tab.
+ */
+const CSRF_RELOAD_KEY = 'pwax:csrf-reload';
+
+const csrfReload = {
+    /** True if a reload is still allowed, claiming it. */
+    take() {
+        try {
+            if (window.sessionStorage.getItem(CSRF_RELOAD_KEY)) {
+                return false;
+            }
+
+            window.sessionStorage.setItem(CSRF_RELOAD_KEY, '1');
+        } catch {
+            // Storage denied — a private window, a blocked third-party context. The
+            // reload is the better failure of the two, so it goes ahead unguarded.
+            return true;
+        }
+
+        return true;
+    },
+
+    clear() {
+        try {
+            window.sessionStorage.removeItem(CSRF_RELOAD_KEY);
+        } catch {
+            // Nothing was stored, so there is nothing to clear.
+        }
+    },
+};
+
+/**
  * The error screen, used when the server did not send one.
  *
  * A trimmed copy of `components/error.blade.php` — no home link, because this file cannot
@@ -168,6 +205,10 @@ export function createPageComponent({
 
                     this.currentPath = path;
 
+                    // A page arrived, so whatever token this document holds is being
+                    // accepted. Re-arms the one reload allowed for a 419 below.
+                    csrfReload.clear();
+
                     await this.mount(payload);
                 } catch (error) {
                     // An abort is the expected outcome of navigating away mid-flight,
@@ -181,7 +222,13 @@ export function createPageComponent({
                     // to get a fresh one. The server cannot translate this for us —
                     // VerifyCsrfToken throws rather than returning a response, so it
                     // never reaches Pwax's middleware.
-                    if (error instanceof HttpError && error.status === 419) {
+                    //
+                    // Once, though. The reload only helps if it returns a *different*
+                    // document, and under `navigation_strategy => 'app-shell'` it does
+                    // not: the worker answers that navigation from disk, the same stale
+                    // token comes back, and the page reloads forever. One attempt, then
+                    // the error is shown like any other.
+                    if (error instanceof HttpError && error.status === 419 && csrfReload.take()) {
                         window.location.reload();
                         return;
                     }

@@ -185,24 +185,19 @@
        One layout for all of them, because to a visitor they are the same event — something
        did not work — and three different-looking apologies read as three different bugs.
 
-       Everything is a custom property so an application can restyle these without
-       publishing the views: set --pwax-screen-fg and friends on :root in your own
-       stylesheet, which loads after this one. */
+       These take the application's own text colour and derive everything from it, rather
+       than picking colours of their own. That is not laziness — it is the only thing that
+       works. This screen paints inside your layout, on your background, and a rule that
+       switched on `prefers-color-scheme` would put near-white text on the light page of
+       an application that has no dark mode the moment the visitor's system had one. It
+       cannot know your background, so it must not assume one.
+
+       Every value is still overridable for an application that wants to: set
+       --pwax-screen-fg and friends on :root in your own stylesheet, which loads after
+       this one. */
     :root {
-        --pwax-screen-bg: transparent;
-        --pwax-screen-fg: #18181b;
-        --pwax-screen-muted: #71717a;
-        --pwax-screen-line: #e4e4e7;
         --pwax-screen-accent: {{ $progressColor }};
         --pwax-screen-accent-fg: #ffffff;
-    }
-
-    @media (prefers-color-scheme: dark) {
-        :root {
-            --pwax-screen-fg: #fafafa;
-            --pwax-screen-muted: #a1a1aa;
-            --pwax-screen-line: #3f3f46;
-        }
     }
 
     .pwax-screen {
@@ -211,8 +206,8 @@
         justify-content: center;
         min-height: 60dvh;
         padding: 2rem 1.5rem;
-        background: var(--pwax-screen-bg);
-        color: var(--pwax-screen-fg);
+        background: var(--pwax-screen-bg, transparent);
+        color: var(--pwax-screen-fg, inherit);
         font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
         line-height: 1.5;
         -webkit-font-smoothing: antialiased;
@@ -233,7 +228,10 @@
         font-weight: 600;
         letter-spacing: .1em;
         text-transform: uppercase;
-        color: var(--pwax-screen-muted);
+        color: var(--pwax-screen-muted, inherit);
+        /* Dimmed rather than greyed. A grey is a colour and would have to guess at the
+           background; transparency reads as "quieter than the text" against any of them. */
+        opacity: var(--pwax-screen-muted-opacity, .62);
     }
 
     .pwax-screen__code::after {
@@ -242,7 +240,8 @@
         width: 2.5rem;
         height: 1px;
         margin: .75rem auto 0;
-        background: var(--pwax-screen-line);
+        background: var(--pwax-screen-line, currentColor);
+        opacity: .45;
     }
 
     .pwax-screen__title {
@@ -254,7 +253,8 @@
 
     .pwax-screen__message {
         margin: 0;
-        color: var(--pwax-screen-muted);
+        color: var(--pwax-screen-muted, inherit);
+        opacity: var(--pwax-screen-muted-opacity, .72);
         overflow-wrap: anywhere;
     }
 
@@ -282,10 +282,12 @@
         cursor: pointer;
     }
 
+    /* Outlined in the text's own colour, so it is legible on whatever it is drawn over
+       without knowing what that is. */
     .pwax-button--quiet {
         background: transparent;
-        border-color: var(--pwax-screen-line);
-        color: var(--pwax-screen-fg);
+        border-color: var(--pwax-screen-line, currentColor);
+        color: inherit;
     }
 
     .pwax-button:hover {

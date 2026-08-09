@@ -369,17 +369,24 @@ start, and the service worker's offline document — because to a visitor they a
 event, and three different-looking apologies read as three different bugs. Each is
 centred, legible in light and dark, and offers the way out that applies.
 
-Restyle them without publishing anything by setting the custom properties in your own
-stylesheet, which loads after the shell's:
+**They take your colours, not their own.** The text inherits whatever your layout sets,
+and the quieter parts are the same colour at lower opacity. That is deliberate: these
+screens paint inside your page, on your background, so a rule that switched on
+`prefers-color-scheme` would put near-white text on the light page of an app that has no
+dark mode, the moment a visitor's system had one. They cannot know your background, so
+they do not guess at it.
+
+Override any of it in your own stylesheet, which loads after the shell's:
 
 ```css
 :root {
-    --pwax-screen-fg: #111;
-    --pwax-screen-muted: #666;
-    --pwax-screen-line: #e5e5e5;
-    --pwax-screen-accent: #0c83ff;      /* buttons and focus rings */
+    --pwax-screen-accent: #0c83ff;      /* buttons and focus rings; defaults to your spinner colour */
     --pwax-screen-accent-fg: #fff;
-    --pwax-screen-bg: transparent;      /* the app's own background shows through */
+    --pwax-screen-fg: #111;             /* only if inheriting is not what you want */
+    --pwax-screen-muted: #666;
+    --pwax-screen-muted-opacity: 1;     /* set alongside --pwax-screen-muted */
+    --pwax-screen-line: #e5e5e5;
+    --pwax-screen-bg: #fafafa;
 }
 ```
 

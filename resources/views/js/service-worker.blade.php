@@ -933,9 +933,13 @@ async function trimData(cache, maxSize) {
  * Storing them is the obvious thing to do and it is wrong here. The Cache API ignores
  * HTTP cache directives, so caching a navigation persists to disk exactly the documents
  * the server marked `no-store, private` — a signed-in user's rendered page, which the
- * next person to use that device would then be served offline. The offline shell exists
- * so that offline navigation does not require that trade: it is the same SPA shell with
- * no session and no page data, and the runtime routes from it as normal.
+ * next person to use that device would then be served offline.
+ *
+ * Offline navigation does not need that trade, because the documents it is answered with
+ * were fetched at install without cookies: this page's own precached HTML if there is
+ * some, and the session-free shell if there is not. Each is the guest rendering or it is
+ * not there at all. What is never on disk is a document produced for whoever happened to
+ * be signed in when they visited.
  */
 async function navigate(event, manifest) {
     const path = new URL(event.request.url).pathname;
@@ -1192,11 +1196,18 @@ async function staleWhileRevalidate(request, manifest, identity) {
  *      nothing, because there is nothing in it that belongs to anybody.
  */
 async function matchScoped(request, manifest, identity) {
-    const runtime = await caches.open(runtimeName(manifest, identity));
-    const mine = await runtime.match(request);
+    const name = runtimeName(manifest, identity);
 
-    if (mine) {
-        return mine;
+    // `has` before `open`, because `open` creates. A read has no business bringing a cache
+    // into existence: every visitor who merely looked at a page whose response could not
+    // be stored would leave an empty cache named after them, which is both litter and a
+    // list of who has used the device.
+    if (await caches.has(name)) {
+        const mine = await (await caches.open(name)).match(request);
+
+        if (mine) {
+            return mine;
+        }
     }
 
     const precache = await precacheFor(manifest);

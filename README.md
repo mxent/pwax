@@ -68,7 +68,7 @@ table in JavaScript.
 - [Configuration reference](#configuration-reference)
 - [Artisan commands](#artisan-commands)
 - [JavaScript API](#javascript-api)
-- [Upgrading from 1.x](#upgrading-from-1x)
+- [Upgrading](#upgrading)
 - [Testing](#testing)
 - [Contributing](#contributing)
 
@@ -477,10 +477,10 @@ Backdrop: @pwaxImport('Backdrop from components.modal'),
 > lazy — the arrow adds nothing. If you do write it, Pwax renders an explanation on the
 > page instead of `[object Object]`.
 
-> The directive is `@pwax`, not `@import`. A Blade directive named `import` also matches
-> the CSS at-rule `@import url(...)` inside `<style>` blocks — see
-> [Upgrading from 1.x](#upgrading-from-1x). You can rename it with
-> `pwax.components.directive`; the name `import` is rejected.
+> The directive is `@pwaxImport`, and it can never be `@import`. A Blade directive named
+> `import` also matches the CSS at-rule `@import url(...)` inside every `<style>` block in
+> the application — see [Upgrading](#upgrading). You can rename it with
+> `pwax.components.directive`; the name `import` is rejected at boot.
 
 ## Scoped styles
 
@@ -773,10 +773,15 @@ worker whose source never changed would leave clients on the build they first in
 
 ### The offline shell
 
-Navigations always go to the network, and their responses are **never stored**. The Cache
-API ignores HTTP cache directives, so a worker that cached what it fetched would persist
-to disk exactly the documents the server marked `no-store, private` — a signed-in user's
-rendered page, which the next person to use that device would be served offline.
+**A navigation's own response is never stored.** The Cache API ignores HTTP cache
+directives, so a worker that kept what it fetched would persist to disk exactly the
+documents the server marked `no-store, private` — a signed-in user's rendered page, which
+the next person to use that device would be served offline.
+
+Two documents *are* on disk, and neither was fetched during anyone's navigation. Both are
+fetched at install time **without cookies**, so each is the guest rendering or it is not
+there at all: the shell below, and the HTML of each discovered page, which is what lets an
+offline navigation paint the real page instead of a spinner.
 
 Instead Pwax precaches `/__pwax__/shell`: the same SPA shell rendered with no session, no
 CSRF token and no page component, identical for every visitor. When a navigation cannot
@@ -1023,8 +1028,12 @@ Supply the nonce for Pwax's inline `<style>` and JSON blocks:
 The Cache Storage API ignores HTTP cache directives, so a worker that stores whatever it
 fetches writes signed-in users' rendered pages to disk — where the next person to use that
 device is served them offline. Assets carrying `Cache-Control: no-store` are refused
-outright, and a navigation's HTML is never stored on any path: what is served offline is
-the session-free shell.
+outright, and **no response to a navigation is ever stored**, whoever made it.
+
+The HTML that answers an offline navigation was fetched separately at install, without
+cookies: the session-free shell, and the rendered document of each discovered page. Both
+are the guest rendering by construction — a route behind `auth` answers that cookieless
+request with a login screen, which is refused rather than stored.
 
 Page payloads are the deliberate exception, because a shell with nothing to render in it
 is not an offline app. Three things make storing them safe, and they are worth knowing:
@@ -1081,7 +1090,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `middleware` | `['web']` | Middleware for component routes |
 | `routes.register` | `true` | Register package routes automatically |
 | `routes.domain` | `null` | Restrict package routes to a domain |
-| `routes.static_middleware` | `['throttle:120,1']` | Middleware for runtime/manifest/worker — outside `web`, so outside its rate limiting too |
+| `routes.static_middleware` | `['throttle:300,1']` | Middleware for runtime/manifest/worker — outside `web`, so outside its rate limiting too |
 | `components.directive` | `'pwaxImport'` | Blade directive name (`import` is rejected) |
 | `components.allowed` | `[]` | Allowlist of servable view patterns |
 | `components.scoped_styles` | `true` | Honour `<style scoped>` |

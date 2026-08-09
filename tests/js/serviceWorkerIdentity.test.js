@@ -221,6 +221,28 @@ describe('cache partitioning between identities', () => {
         expect(guest ? await held(guest) : []).toEqual([]);
     });
 
+    it('does not mint a cache just because someone read', async () => {
+        const caches = new FakeCaches();
+        const current = manifest({ strategy: 'network-only' });
+
+        await install(caches, current);
+
+        // Bob asks for something nothing has stored, and the network answers. Scoping the
+        // read must not leave an empty cache named after him: that is litter, and on a
+        // shared device it is also a list of who has used it.
+        const bob = createWorker({
+            manifest: current,
+            caches,
+            routes: server(current),
+        });
+        await bob.dispatch('activate');
+        await bob.request(RUNTIME, asIdentity(BOB));
+
+        const names = await caches.keys();
+
+        expect(names.filter((name) => name.endsWith(`-${BOB}`))).toEqual([]);
+    });
+
     it('still serves the shared precache to every identity', async () => {
         const caches = new FakeCaches();
         const current = manifest();

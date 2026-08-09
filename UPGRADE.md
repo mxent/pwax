@@ -97,7 +97,7 @@ response can push the origin past its quota and have the browser evict the preca
 
 ```diff
 - 'static_middleware' => [],
-+ 'static_middleware' => ['throttle:120,1'],
++ 'static_middleware' => ['throttle:300,1'],
 ```
 
 These routes are outside `web` on purpose, which also puts them outside its rate limiting,

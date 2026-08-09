@@ -41,8 +41,14 @@ return [
     | It is not empty, though. Being outside `web` also means being outside anything that
     | would slow an unauthenticated caller down, and `/sw.json` is the expensive one —
     | each build walks public/, every view root and every route. The manifest is memoised
-    | and now builds under a lock, so a flood mostly meets a cache hit; the throttle is
-    | the backstop for the window where it does not.
+    | and builds under a lock, so a flood mostly meets a cache hit; the throttle is the
+    | backstop for the window where it does not.
+    |
+    | The rate is deliberately generous. These files are hard-cached, so one visitor costs
+    | about three requests on their first visit and none afterwards — but throttling is
+    | per IP address, and an office, a school or a mobile carrier is many visitors behind
+    | one. Too low a limit does not degrade anything gracefully: it 429s `/sw.js` and
+    | leaves those people without an installable app at all.
     |
     */
 
@@ -51,7 +57,7 @@ return [
     'routes' => [
         'register' => true,
         'domain' => null,
-        'static_middleware' => ['throttle:120,1'],
+        'static_middleware' => ['throttle:300,1'],
     ],
 
     /*
@@ -569,9 +575,12 @@ return [
         | serves when a navigation cannot reach the network, and the client runtime
         | takes over routing from there.
         |
-        | Precaching real application URLs instead would store one authenticated user's
-        | HTML on disk under a URL another user of the same device would then be served.
-        | The shell has nothing in it to leak, which is what makes precaching it safe.
+        | Application pages are precached too — see `pages` below — and the shell is what
+        | answers a navigation to one that is not. What makes both safe is the same thing:
+        | they are fetched without cookies, so each is the guest rendering or it is not
+        | stored. Precaching a page *with* the installing visitor's session would put one
+        | authenticated user's HTML on disk under a URL the next user of that device is
+        | served, which is why `pages.credentials` defaults to omitting them.
         */
         'shell' => [
             'enabled' => true,

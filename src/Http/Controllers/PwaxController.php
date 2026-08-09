@@ -341,7 +341,7 @@ class PwaxController extends Controller
      * which is the point: a header that is meant to be on all of them should not depend on
      * whoever adds the next endpoint remembering it.
      */
-    private function finish(Request $request, Response $response): SymfonyResponse
+    private function finish(Request $request, SymfonyResponse $response): SymfonyResponse
     {
         return $this->harden($this->notModified($request, $response) ?? $response);
     }

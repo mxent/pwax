@@ -7,6 +7,7 @@ use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Cache\Repository;
 use Illuminate\Contracts\View\Factory as ViewFactory;
 use Illuminate\Support\Facades\Log;
 use Mxent\Pwax\Pwax;
@@ -184,13 +185,14 @@ class AssetManifest
      * Asked of the *store*, not the repository. `LockProvider` is implemented by stores —
      * Redis, database, array, memcached — and file and null stores do not implement it at
      * all, so an application on either simply builds without coordination, as it did
-     * before.
+     * before. `Repository::lock()` looks like it exists only because `__call` forwards it,
+     * which is why this reaches for `getStore()` rather than testing the repository.
      */
     private function lock(): ?Lock
     {
         $cache = $this->cache;
 
-        if ($cache === null || ! method_exists($cache, 'getStore')) {
+        if (! $cache instanceof Repository) {
             return null;
         }
 

@@ -25,6 +25,8 @@ export function createPageComponent({
     styles,
     config,
     initial,
+    // A map, or a promise of one. `index.js` hands over the promise so that resolving
+    // module middleware does not hold up the first paint; `await` accepts both.
     middleware = {},
     templates = {},
 }) {
@@ -289,13 +291,30 @@ export function createPageComponent({
              */
             async runMiddleware(options) {
                 const names = options.middleware || [];
+
+                if (!names.length) {
+                    return false;
+                }
+
+                // Awaited here rather than before the application mounted. Middleware is
+                // only consulted once a page's options are in hand, so gating first paint
+                // on a module fetch it does not need was pure delay.
+                const registered = await middleware;
                 let redirected = false;
 
                 for (const name of names) {
-                    const fn = middleware[name];
+                    const fn = registered[name];
 
                     if (typeof fn !== 'function') {
-                        console.warn(`pwax: unknown middleware "${name}"`);
+                        // The name and where it was asked for. Reporting the name alone
+                        // points at `middleware_js` in config, which is usually correct
+                        // and occasionally a red herring — the entry can be present and
+                        // have failed to load, and then the only way to find which page
+                        // is affected is to guess.
+                        console.warn(
+                            `pwax: unknown middleware "${name}" on ${this.currentPath || 'this page'}. ` +
+                                'Check that it is listed in pwax.middleware_js and that its module loaded.'
+                        );
                         continue;
                     }
 

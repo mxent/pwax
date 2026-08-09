@@ -153,4 +153,21 @@ class ComponentRoutesTest extends TestCase
 
         $this->get('/__pwax__/pwax.js', ['If-None-Match' => $etag])->assertStatus(304);
     }
+
+    public function test_the_runtime_source_map_is_served(): void
+    {
+        // The bundle ends with a `sourceMappingURL` comment. Nothing answered it, so
+        // every developer who opened devtools got a 404 from the package and then read
+        // minified code.
+        $this->assertStringContainsString(
+            'sourceMappingURL=pwax.js.map',
+            (string) $this->get('/__pwax__/pwax.js')->getContent()
+        );
+
+        $response = $this->get('/__pwax__/pwax.js.map');
+
+        $response->assertOk();
+        $response->assertHeader('Content-Type', 'application/json; charset=utf-8');
+        $this->assertArrayHasKey('sources', (array) $response->json());
+    }
 }

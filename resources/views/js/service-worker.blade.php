@@ -259,19 +259,26 @@ async function install() {
     }
 
     const cacheName = precacheName(manifest);
-    const cache = await caches.open(cacheName);
-    const previous = await previousPrecaches(cacheName);
+
+    // Opened together. Nothing here depends on anything else here — the two caches are
+    // named from the manifest and the previous precaches are found by listing — so
+    // awaiting them in turn only added the storage layer's latency up.
+    //
+    // Pages go to their own cache, under the anonymous identity: what is fetched at
+    // install time is the guest rendering, and that is the only identity it may be served
+    // to. A signed-in visitor populates their own pages cache as they browse.
+    const [cache, pages, previous] = await Promise.all([
+        caches.open(cacheName),
+        caches.open(pagesName(manifest, 'anon')),
+        previousPrecaches(cacheName),
+    ]);
+
     const inherited = await inheritedHashes(previous);
 
     const entries = prefetchEntries(manifest);
     const urls = entries.map((entry) => entry.url);
     const critical = new Set(manifest.critical || []);
     const crossOrigin = new Set(manifest.crossOrigin || []);
-
-    // Pages go to their own cache, under the anonymous identity: what is fetched at
-    // install time is the guest rendering, and that is the only identity it may be served
-    // to. A signed-in visitor populates their own pages cache as they browse.
-    const pages = await caches.open(pagesName(manifest, 'anon'));
 
     // Individually, not with `cache.addAll`. `addAll` is atomic: one 404 anywhere in the
     // list rejects the whole thing, and the usual `.catch(console.warn)` around it then
@@ -760,7 +767,7 @@ function withTimeout(promise, ms) {
 }
 
 function matchesAny(patterns, key) {
-    return (patterns || []).some((pattern) => new RegExp(pattern).test(key));
+    return compiled(patterns).some((rule) => rule.pattern.test(key));
 }
 
 /** A lazy asset group claiming this path, if any. */
@@ -922,25 +929,36 @@ async function trimData(cache, maxSize) {
  */
 async function navigate(event, manifest) {
     const path = new URL(event.request.url).pathname;
+    const preload = manifest.navigationPreload !== false ? event.preloadResponse : null;
 
     // A path the application does not own goes straight to the network, untouched. This
     // is the escape hatch that keeps Horizon, Telescope, Nova, a Filament panel or a PDF
     // under /storage working on an origin where the app-shell strategy is switched on —
     // without it, every one of them would be answered with the SPA shell.
+    //
+    // The preload is used rather than ignored. The browser has already sent this request;
+    // calling `fetch` instead would send it a second time and throw the first away, so
+    // every navigation the worker declines to handle cost the server two.
     if (!matchesNavigationUrls(manifest, path)) {
-        return fetch(event.request);
+        return (await settled(preload)) || fetch(event.request);
     }
 
     if (manifest.navigationStrategy === 'app-shell') {
         const cached = (await pageDocument(manifest, path)) || (await shellDocument(manifest));
 
         if (cached) {
+            // Answered from disk, so the preload is not wanted — but it has to be settled
+            // all the same. Left dangling it logs "the navigation preload request was
+            // cancelled before preloadResponse settled" in the console of every
+            // application using this strategy, which reads like a bug and is not one.
+            await settled(preload);
+
             return cached;
         }
     }
 
     try {
-        const preloaded = manifest.navigationPreload !== false ? await event.preloadResponse : null;
+        const preloaded = await settled(preload);
 
         if (preloaded) {
             return preloaded;
@@ -1014,7 +1032,7 @@ async function shellDocument(manifest) {
  * before this was configurable.
  */
 function matchesNavigationUrls(manifest, path) {
-    const rules = manifest.navigationUrls || [];
+    const rules = compiled(manifest.navigationUrls);
 
     if (!rules.length) {
         return true;
@@ -1023,14 +1041,11 @@ function matchesNavigationUrls(manifest, path) {
     let included = false;
 
     for (const rule of rules) {
-        const negated = rule.startsWith('!');
-        const pattern = negated ? rule.slice(1) : rule;
-
-        if (!new RegExp(pattern).test(path)) {
+        if (!rule.pattern.test(path)) {
             continue;
         }
 
-        if (negated) {
+        if (rule.negated) {
             return false;
         }
 
@@ -1038,6 +1053,72 @@ function matchesNavigationUrls(manifest, path) {
     }
 
     return included;
+}
+
+/**
+ * Compiled rule lists, so a request does not pay to build the same regexes again.
+ *
+ * Weak, and keyed on the array itself rather than its contents. The manifest is read once
+ * and memoised, so every request sees the same array instances; a deploy brings new ones,
+ * misses, and lets the old entries go without anything having to remember to evict them.
+ */
+const compiledRules = new WeakMap();
+
+/**
+ * A rule list as compiled regexes, built once.
+ *
+ * `new RegExp()` per rule per request is small and entirely avoidable. These lists come
+ * from the manifest and do not change between requests, and they are consulted on the
+ * paths that decide whether a navigation is answered at all and which group claims a URL
+ * — which is to say, on everything the worker handles.
+ */
+function compiled(rules) {
+    if (!rules || !rules.length) {
+        return [];
+    }
+
+    let entries = compiledRules.get(rules);
+
+    if (!entries) {
+        entries = [];
+
+        for (const rule of rules) {
+            const negated = rule.startsWith('!');
+
+            try {
+                entries.push({ negated, pattern: new RegExp(negated ? rule.slice(1) : rule) });
+            } catch {
+                // One unusable pattern is not a reason to stop answering navigations.
+                // Uncaught, this throws out of `matchesNavigationUrls`, and every
+                // navigation in the application is answered with the offline page — an
+                // outage produced by a rule that was only ever meant to narrow a match.
+                console.warn('pwax sw: ignoring an asset pattern that will not compile', rule);
+            }
+        }
+
+        compiledRules.set(rules, entries);
+    }
+
+    return entries;
+}
+
+/**
+ * A navigation preload, resolved without letting its failure become the page's.
+ *
+ * The preload rejects for the ordinary reason any request does — there is no network —
+ * and on the app-shell path that is not an error at all, because the answer is already on
+ * disk. Returning null lets the caller decide.
+ */
+async function settled(preload) {
+    if (!preload) {
+        return null;
+    }
+
+    try {
+        return (await preload) || null;
+    } catch {
+        return null;
+    }
 }
 
 function offlineDocument() {

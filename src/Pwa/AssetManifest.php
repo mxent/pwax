@@ -149,6 +149,12 @@ class AssetManifest
 
         $this->warnings = [];
 
+        // The registry is a singleton and remembers its last walk, so the build declares
+        // when that answer stops being good enough. Everything below this line — the
+        // components group, and the page group scoping itself by the same selection —
+        // then shares one walk of the view tree instead of repeating it.
+        $this->registry->forget();
+
         $groups = array_merge(
             [$this->group('app', $this->appGroup($hashes, $crossOrigin, $critical))],
             [$this->group('components', $this->componentGroup($hashes))],

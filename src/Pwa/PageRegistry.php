@@ -51,6 +51,18 @@ class PageRegistry
      */
     private array $sources = [];
 
+    /**
+     * The discovered routes, held for the life of this instance.
+     *
+     * Safe to keep, unlike the component walk, because this is bound per resolution
+     * rather than shared — and because a build asks for it twice: once to know which
+     * views are pages, so the components group can leave them out, and once to decide
+     * which pages to precache.
+     *
+     * @var list<array{url: string, views: list<string>}>|null
+     */
+    private ?array $pages = null;
+
     public function __construct(
         private readonly Router $router,
         private readonly Config $config,
@@ -64,6 +76,10 @@ class PageRegistry
      */
     public function all(): array
     {
+        if ($this->pages !== null) {
+            return $this->pages;
+        }
+
         $pages = [];
 
         foreach ($this->router->getRoutes()->getRoutes() as $route) {
@@ -89,7 +105,7 @@ class PageRegistry
 
         ksort($pages);
 
-        return array_values($pages);
+        return $this->pages = array_values($pages);
     }
 
     /**

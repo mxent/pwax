@@ -36,6 +36,26 @@ class ComponentRegistry
      */
     private const SNIFF_BYTES = 65536;
 
+    /**
+     * The last walk's result, held until someone says it may be out of date.
+     *
+     * The walk is not cheap — every view root, every `.blade.php` sniffed for a component
+     * block, `hash_file()` over each match — and it was being repeated within a single
+     * answer. `AssetManifest::build()` asks once for the components group, and
+     * `PageRegistry` asks again because it scopes routes by the same selection; then
+     * `pwax:doctor` and `pwax:precache` ask a third and fourth time for their summary
+     * lines. Four full walks to produce one manifest, over a view tree that cannot have
+     * changed in between.
+     *
+     * Deliberately not a per-request or per-instance lifetime. This is a singleton, and a
+     * memo that outlived a build would be wrong in the one situation that matters: adding
+     * a component and rebuilding must find it. `AssetManifest::build()` calls `forget()`
+     * before it starts, so the answer is exactly as old as the build using it.
+     *
+     * @var list<array{view: string, path: string, hash: string}>|null
+     */
+    private ?array $components = null;
+
     public function __construct(
         private readonly ViewFactory $views,
         private readonly Config $config,
@@ -49,6 +69,10 @@ class ComponentRegistry
      */
     public function all(): array
     {
+        if ($this->components !== null) {
+            return $this->components;
+        }
+
         $found = [];
 
         foreach ($this->searchPaths() as $namespace => $roots) {
@@ -75,7 +99,18 @@ class ComponentRegistry
             $components[] = ['view' => $view, 'path' => $path, 'hash' => substr($hash, 0, 16)];
         }
 
-        return $components;
+        return $this->components = $components;
+    }
+
+    /**
+     * Discard the remembered walk.
+     *
+     * Called at the start of a manifest build, which is what bounds how stale the answer
+     * may be. Also worth calling from a long-lived process that has just written a view.
+     */
+    public function forget(): void
+    {
+        $this->components = null;
     }
 
     /**

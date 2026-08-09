@@ -95,6 +95,31 @@ class PwaxController extends Controller
     }
 
     /**
+     * Serve the runtime's source map.
+     *
+     * The bundle ends with a `sourceMappingURL` comment and nothing answered it, so every
+     * developer who opened devtools on a Pwax application got a 404 from the package —
+     * and, having no map, stepped through minified code. The sources it contains are the
+     * package's own, published and MIT licensed, so there is nothing here to withhold.
+     */
+    public function sourceMap(Request $request): SymfonyResponse
+    {
+        $path = dirname(__DIR__, 3) . '/dist/pwax.js.map';
+
+        if (! is_file($path)) {
+            return $this->plain('{}', 404, 'application/json; charset=utf-8');
+        }
+
+        $body = (string) file_get_contents($path);
+
+        $response = new Response($body, 200, ['Content-Type' => 'application/json; charset=utf-8']);
+        $response->headers->set('Cache-Control', 'public, max-age=31536000, immutable');
+        $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
+
+        return $this->notModified($request, $response) ?? $response;
+    }
+
+    /**
      * Serve the Web App Manifest, rendered from configuration.
      */
     public function manifest(Request $request, WebManifest $manifest): SymfonyResponse

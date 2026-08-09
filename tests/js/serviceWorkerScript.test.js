@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FakeCaches, createWorker } from './helpers/serviceWorkerHarness.js';
+import { FakeCaches, createWorker, navigation } from './helpers/serviceWorkerHarness.js';
 
 const SHELL = '/__pwax__/shell';
 const RUNTIME = '/__pwax__/pwax.js';
@@ -401,5 +401,109 @@ describe('being a good citizen of the dev server', () => {
         expect(peak).toBeLessThanOrEqual(6);
         // …and still fetched everything.
         expect(worker.fetches.length).toBeGreaterThanOrEqual(urls.length);
+    });
+});
+
+describe('navigation preload', () => {
+    /** A navigation the browser has already started fetching for us. */
+    const withPreload = (worker, path, response) =>
+        worker.dispatch('fetch', {
+            request: navigation(path),
+            preloadResponse: Promise.resolve(response),
+        });
+
+    it('uses the preloaded response instead of fetching again', async () => {
+        const current = manifest({ overrides: { navigationUrls: [] } });
+        const worker = await boot(current);
+        const before = worker.fetches.length;
+
+        const response = await withPreload(
+            worker,
+            '/dashboard',
+            new Response('<html>preloaded</html>')
+        );
+
+        expect(await response.text()).toBe('<html>preloaded</html>');
+        expect(worker.fetches.length).toBe(before);
+    });
+
+    it('uses it for a path the application does not own', async () => {
+        // Navigation preload is enabled for the whole scope, so the browser has already
+        // sent this request. Answering it with `fetch` would send it a second time and
+        // discard the first — every declined navigation costing the server two.
+        // Already compiled by the server: `navigationUrls` reaches the worker as regular
+        // expressions, not as the globs written in config.
+        const current = manifest({ overrides: { navigationUrls: ['^/app/.*$'] } });
+        const worker = await boot(current);
+        const before = worker.fetches.length;
+
+        const response = await withPreload(
+            worker,
+            '/horizon/dashboard',
+            new Response('<html>horizon</html>')
+        );
+
+        expect(await response.text()).toBe('<html>horizon</html>');
+        expect(worker.fetches.length).toBe(before);
+    });
+
+    it('settles the preload it does not use', async () => {
+        const current = manifest({
+            overrides: { navigationStrategy: 'app-shell', navigationUrls: [] },
+        });
+        const worker = await boot(current);
+
+        let settled = false;
+        const preload = Promise.resolve(new Response('<html>ignored</html>')).then((r) => {
+            settled = true;
+            return r;
+        });
+
+        const response = await worker.dispatch('fetch', {
+            request: navigation('/dashboard'),
+            preloadResponse: preload,
+        });
+
+        // The shell answers, but the preload is still awaited. Left dangling it logs
+        // "the navigation preload request was cancelled before preloadResponse settled"
+        // in the console of every app on this strategy, which reads like a bug.
+        expect(await response.text()).toBe('<html>shell</html>');
+        expect(settled).toBe(true);
+    });
+
+    it('falls back to the network when the preload fails', async () => {
+        const current = manifest({ overrides: { navigationUrls: [] } });
+        const worker = await boot(current);
+
+        const response = await worker.dispatch('fetch', {
+            request: navigation('/dashboard'),
+            preloadResponse: Promise.reject(new TypeError('Failed to fetch')),
+        });
+
+        // A preload can fail for reasons other than the network being gone, so a
+        // rejection is not on its own an offline signal.
+        expect(await response.text()).toBe('body:/dashboard');
+    });
+});
+
+describe('a manifest with a bad pattern', () => {
+    it('ignores the pattern rather than the whole navigation list', async () => {
+        // An unusable pattern used to throw out of the match, which `route()` caught and
+        // answered with the offline page — so one bad rule took every navigation in the
+        // application down with it.
+        const current = manifest({ overrides: { navigationUrls: ['^/app/.*$', '/broken/**'] } });
+        const worker = await boot(current);
+
+        const response = await worker.dispatch('fetch', {
+            request: navigation('/app/dashboard'),
+            preloadResponse: Promise.resolve(null),
+        });
+
+        expect(await response.text()).toBe('body:/app/dashboard');
+        expect(worker.log).toContainEqual([
+            'warn',
+            'pwax sw: ignoring an asset pattern that will not compile',
+            '/broken/**',
+        ]);
     });
 });

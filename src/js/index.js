@@ -46,18 +46,26 @@ async function boot() {
         );
     }
 
-    const [plugins, directives, middleware] = await Promise.all([
-        resolveExtensions(config.plugins, loader),
-        resolveExtensions(config.directives, loader),
-        resolveExtensions(config.middleware, loader),
-    ]);
+    // Started together, awaited apart.
+    //
+    // Plugins and directives have to be registered before `mount()` — Vue offers no way to
+    // add either to a running application — so first paint genuinely waits for them.
+    // Middleware does not: it is read inside `runMiddleware()`, after a page's options are
+    // in hand. Awaiting it here made a configured module middleware delay the first paint
+    // of a page whose component was already inlined in the document and needed no network
+    // at all, which is the one thing this architecture exists to avoid.
+    const pluginsReady = resolveExtensions(config.plugins, loader);
+    const directivesReady = resolveExtensions(config.directives, loader);
+    const middlewareReady = resolveExtensions(config.middleware, loader);
+
+    const [plugins, directives] = await Promise.all([pluginsReady, directivesReady]);
 
     const page = createPageComponent({
         http,
         styles,
         config,
         initial,
-        middleware,
+        middleware: middlewareReady,
         templates: config.templates || {},
     });
 

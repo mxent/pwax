@@ -227,8 +227,26 @@ export function createServiceWorkerApi() {
             return registration ? registration.unregister() : false;
         },
 
-        get registration() {
+        /**
+         * The worker currently controlling this page, or null.
+         *
+         * This used to be called `registration`, and returned exactly this — a
+         * `ServiceWorker`, not a `ServiceWorkerRegistration`. So `.waiting`, `.scope`,
+         * `.update()` and `.unregister()` were all `undefined` on the object the name
+         * promised would have them, and the failure looked like the worker not being
+         * ready rather than the property being wrong.
+         */
+        get controller() {
             return navigator.serviceWorker?.controller ?? null;
+        },
+
+        /**
+         * The registration, for real. Asynchronous, because the platform's is.
+         */
+        registration() {
+            return navigator.serviceWorker
+                ? navigator.serviceWorker.getRegistration().then((r) => r ?? null)
+                : Promise.resolve(null);
         },
     };
 }

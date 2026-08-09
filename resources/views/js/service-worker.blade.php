@@ -396,7 +396,7 @@ async function install() {
 
 async function activate() {
     const manifest = installed || (await readManifest(PENDING_KEY)) || (await readManifest(STATE_KEY)) || CONFIG;
-    const keep = new Set([precacheName(manifest), STATE_CACHE]);
+    const keep = new Set([precacheName(manifest), documentsName(manifest), STATE_CACHE]);
 
     // Promoted before the sweep, so a worker terminated midway through cannot come back
     // and mistake the cache it is activating for a stale one.
@@ -1028,18 +1028,26 @@ async function trimData(cache, maxSize) {
 }
 
 /**
- * Navigations go to the network, and their responses are never stored.
+ * Navigations go to the network, and a guest rendering of one is kept.
  *
- * Storing them is the obvious thing to do and it is wrong here. The Cache API ignores
- * HTTP cache directives, so caching a navigation persists to disk exactly the documents
- * the server marked `no-store, private` — a signed-in user's rendered page, which the
- * next person to use that device would then be served offline.
+ * A page has two representations. The runtime asks for the payload and gets JSON; a
+ * reload, a bookmark, a link from outside the app is a navigation and gets HTML with the
+ * component inlined. Only the first was ever stored after install, so a route the build
+ * did not precache — a dynamic one, or anything route discovery could not reach — had no
+ * document at all, and reloading it offline fell all the way back to the shell.
  *
- * Offline navigation does not need that trade, because the documents it is answered with
- * were fetched at install without cookies: this page's own precached HTML if there is
- * some, and the session-free shell if there is not. Each is the guest rendering or it is
- * not there at all. What is never on disk is a document produced for whoever happened to
- * be signed in when they visited.
+ * What is stored is deliberately narrow: only a response that *says* it was rendered for
+ * a signed-out visitor, by carrying `X-Pwax-Identity: anon`. Not a response that merely
+ * looks anonymous, and not one with no header at all — an unknown identity is treated as
+ * somebody's, so a server that does not send it stores nothing.
+ *
+ * The reason for that narrowness is that a navigation is the one request whose sender the
+ * worker cannot identify. The runtime's fetches carry an identity header; a document
+ * request made by the browser carries cookies, which a worker cannot read. So there is no
+ * way to decide *whose* document to hand back, and the only document that is safe to hand
+ * to anybody is the one that belongs to nobody. Signed-in pages keep working offline the
+ * way they already did: the shell boots and the runtime asks for the payload, and that
+ * request does carry an identity.
  */
 async function navigate(event, manifest) {
     const path = new URL(event.request.url).pathname;
@@ -1058,7 +1066,7 @@ async function navigate(event, manifest) {
     }
 
     if (manifest.navigationStrategy === 'app-shell') {
-        const cached = (await pageDocument(manifest, path)) || (await shellDocument(manifest));
+        const cached = (await storedDocument(manifest, path)) || (await shellDocument(manifest));
 
         if (cached) {
             // Answered from disk, so the preload is not wanted — but it has to be settled
@@ -1074,6 +1082,11 @@ async function navigate(event, manifest) {
     try {
         const response = (await settled(preload)) || (await fetch(event.request));
 
+        // Off the critical path. The document is already on its way to the browser while
+        // this writes; a navigation is the one response where waiting on a cache write
+        // would be paid for in first paint.
+        event.waitUntil(rememberDocument(response, manifest, path));
+
         // The same rule a page payload follows: a 5xx is a reply, not an answer. An origin
         // that is deploying, overloaded or behind a proxy having a bad minute would
         // otherwise replace an application that is installed on the device with whatever
@@ -1081,7 +1094,7 @@ async function navigate(event, manifest) {
         // sat in the precache. Only 5xx: a 404 or a 403 is the server working, and a
         // redirect has to reach the runtime.
         if (response.status >= 500) {
-            const stored = (await pageDocument(manifest, path)) || (await shellDocument(manifest));
+            const stored = (await storedDocument(manifest, path)) || (await shellDocument(manifest));
 
             if (stored) {
                 return stored;
@@ -1094,9 +1107,92 @@ async function navigate(event, manifest) {
         // correct answer but a worse one: it paints a spinner and waits for the runtime to
         // fetch a payload, where the document already has the component inlined.
         return (
-            (await pageDocument(manifest, path)) || (await shellDocument(manifest)) || offlineDocument()
+            (await storedDocument(manifest, path)) || (await shellDocument(manifest)) || offlineDocument()
         );
     }
+}
+
+/**
+ * Keep a navigation's HTML, when it is safe to hand back to anyone.
+ *
+ * `X-Pwax-Identity: anon`, present and explicit. A response with no header is not treated
+ * as anonymous — an application that does not send one, or a route that is not a Pwax page
+ * at all, would otherwise have a signed-in document filed where every visitor can read it.
+ * Missing means unknown, and unknown means no.
+ *
+ * `redirected` is the HTML counterpart of the payload path's JSON check. A route behind
+ * `auth` answers a signed-out navigation by redirecting to the login screen, and `fetch`
+ * follows it silently — so without this the login page would be stored as that route's
+ * document and served under its URL forever.
+ */
+async function rememberDocument(response, manifest, path) {
+    if (
+        !response ||
+        !response.ok ||
+        response.redirected ||
+        !isHtml(response) ||
+        !storablePage(response) ||
+        (response.headers.get('X-Pwax-Identity') || '') !== 'anon'
+    ) {
+        return;
+    }
+
+    // Cloned before the first `await`, while the body is still untouched. The response
+    // itself is being read by the browser at the same time, and a clone taken after it has
+    // started is a locked stream.
+    const copy = response.clone();
+    const cache = await caches.open(documentsName(manifest));
+
+    await cache.put(path, copy);
+    await trim(cache, manifest.maxEntries);
+}
+
+/**
+ * The stored HTML for a path: what this device saw, then what the build shipped.
+ *
+ * Withheld once anyone has signed in on this device, and that is the whole of "use them
+ * according to the request". Every document here is a signed-out rendering — the precached
+ * ones were fetched at install without cookies, the runtime ones said so themselves — and
+ * a signed-out rendering is the wrong answer for a signed-in visitor. It is not a leak:
+ * nothing personal is in these caches. It is the page telling someone they are logged out
+ * when they are not, and unlike a slow paint it does not correct itself, because the
+ * document carries its own inlined payload and the runtime has no reason to refetch it.
+ *
+ * So a device with a signed-in bucket gets the shell instead, and the runtime's own
+ * request — which carries an identity — decides what to render. That costs a spinner and
+ * buys the right page. `pwax.sw.forgetIdentity()` on sign-out clears the bucket and the
+ * fast path comes back.
+ */
+async function storedDocument(manifest, path) {
+    if (await signedInHere(manifest)) {
+        return null;
+    }
+
+    const name = documentsName(manifest);
+
+    // `has` before `open`: a read must not bring a cache into existence.
+    if (await caches.has(name)) {
+        const mine = await (await caches.open(name)).match(path, { ignoreVary: true });
+
+        if (mine) {
+            return mine;
+        }
+    }
+
+    return pageDocument(manifest, path);
+}
+
+/** Has anybody signed in on this device under this build? */
+async function signedInHere(manifest) {
+    const prefix = pagesPrefix(manifest);
+
+    return (await caches.keys()).some(
+        (key) => key.startsWith(prefix) && !reserved(key.slice(prefix.length))
+    );
+}
+
+function isHtml(response) {
+    return (response.headers.get('Content-Type') || '').includes('html');
 }
 
 /**
@@ -1477,6 +1573,18 @@ function pagesPrefix(manifest) {
  */
 function pagesName(manifest, identity) {
     return pagesPrefix(manifest) + identity;
+}
+
+/**
+ * Where navigation HTML lives. One cache, no identity suffix, and both are the point.
+ *
+ * Everything in here is a signed-out rendering, so there is no partition to draw: there is
+ * nobody it belongs to. Keyed by the build like the pages caches, because a document has
+ * the compiled component inlined and one kept across a deploy would paint last week's
+ * markup into this week's shell.
+ */
+function documentsName(manifest) {
+    return `${PREFIX}-documents-${manifest.version || 'v1'}-${manifest.hash}`;
 }
 
 function runtimePrefix(manifest) {

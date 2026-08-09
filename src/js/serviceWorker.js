@@ -161,6 +161,20 @@ function watchConnectivity() {
 }
 
 /**
+ * The registration, or null where service workers are unavailable.
+ *
+ * A free function rather than a method, so nothing here depends on `this`. These are
+ * published on `window.pwax.sw`, and `const { applyUpdate } = window.pwax.sw` is a
+ * perfectly ordinary thing to write — it must not be the difference between working and
+ * throwing.
+ */
+function currentRegistration() {
+    return navigator.serviceWorker
+        ? navigator.serviceWorker.getRegistration().then((r) => r ?? null)
+        : Promise.resolve(null);
+}
+
+/**
  * The programmatic side of the worker, published as `window.pwax.sw`.
  */
 export function createServiceWorkerApi() {
@@ -174,19 +188,23 @@ export function createServiceWorkerApi() {
          * @returns {Promise<boolean>} false when there was nothing waiting.
          */
         async applyUpdate() {
-            const waiting = pendingUpdate || (await this.registration())?.waiting;
+            // `pendingUpdate` first, because it carries the flag that permits the reload.
+            if (pendingUpdate) {
+                pendingUpdate.activate();
+
+                return true;
+            }
+
+            // Nothing was announced to this page — the worker was already waiting when it
+            // loaded, or another tab took the announcement. The message still gets through;
+            // the reload is then the browser's, on `controllerchange`.
+            const waiting = (await currentRegistration())?.waiting;
 
             if (!waiting) {
                 return false;
             }
 
-            // `pendingUpdate` carries the flag that permits the reload; a registration
-            // found cold does not, so it gets the message and the browser's own reload.
-            if (pendingUpdate) {
-                pendingUpdate.activate();
-            } else {
-                waiting.postMessage({ type: 'PWAX_SKIP_WAITING' });
-            }
+            waiting.postMessage({ type: 'PWAX_SKIP_WAITING' });
 
             return true;
         },
@@ -295,9 +313,7 @@ export function createServiceWorkerApi() {
          * The registration, for real. Asynchronous, because the platform's is.
          */
         registration() {
-            return navigator.serviceWorker
-                ? navigator.serviceWorker.getRegistration().then((r) => r ?? null)
-                : Promise.resolve(null);
+            return currentRegistration();
         },
     };
 }

@@ -1073,12 +1073,33 @@ Supply the nonce for Pwax's inline `<style>` and JSON blocks:
 The Cache Storage API ignores HTTP cache directives, so a worker that stores whatever it
 fetches writes signed-in users' rendered pages to disk — where the next person to use that
 device is served them offline. Assets carrying `Cache-Control: no-store` are refused
-outright, and **no response to a navigation is ever stored**, whoever made it.
+outright.
 
-The HTML that answers an offline navigation was fetched separately at install, without
-cookies: the session-free shell, and the rendered document of each discovered page. Both
-are the guest rendering by construction — a route behind `auth` answers that cookieless
-request with a login screen, which is refused rather than stored.
+A page has two representations and both are stored, under different rules. The runtime
+asks for the payload and gets JSON; a reload, a bookmark or a link from outside the app is
+a navigation and gets HTML with the component already inlined.
+
+**A navigation's HTML is stored only when the response declares itself anonymous.** Every
+page response carries `X-Pwax-Identity`, and the worker keeps a document only when it says
+`anon`. Not one that merely looks anonymous, and not one with no header at all — an unknown
+identity is treated as somebody's, so an application that does not send it stores nothing.
+
+The reason is that a navigation is the one request whose sender the worker cannot identify.
+The runtime's fetches carry an identity header; a document request made by the browser
+carries cookies, which a worker cannot read. There is no way to decide *whose* document to
+hand back, so the only document safe to hand to anybody is the one that belongs to nobody.
+
+For the same reason, stored documents are **withheld entirely once anyone has signed in on
+the device**. They are all signed-out renderings, and showing one to a signed-in visitor
+tells them they are logged out when they are not — and unlike a slow paint it does not
+correct itself, because the document carries its own inlined payload. Those visitors get the
+shell instead, and the runtime's own request, which does carry an identity, decides what to
+render. That costs a spinner and buys the right page; `pwax.sw.forgetIdentity()` on sign-out
+clears the bucket and the fast path returns.
+
+The documents installed with the build follow the same principle by construction: they are
+fetched without cookies, so a route behind `auth` answers that request with a login screen,
+which is refused rather than stored.
 
 Page payloads are the deliberate exception, because a shell with nothing to render in it
 is not an offline app. Three things make storing them safe, and they are worth knowing:
@@ -1109,10 +1130,10 @@ device unread. A `404` or `403` is never answered from a copy, because the serve
 working correctly and saying something true.
 
 The same rule holds for a full page load, not only for a navigation inside the app: a
-reload while the origin is failing is answered from the precached document for that route,
-so an application installed on the device stays the thing on screen. It holds for data
-groups and for the runtime cache too — anywhere there is a stored copy to prefer over an
-error nobody asked for.
+reload while the origin is failing is answered from the stored document for that route —
+the one visited earlier, or the one installed with the build — so an application installed
+on the device stays the thing on screen. It holds for data groups and for the runtime cache
+too, anywhere there is a stored copy to prefer over an error nobody asked for.
 
 To prefer the stored copy even when the network is fine, make pages cache-first:
 

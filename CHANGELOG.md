@@ -38,6 +38,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `public/` covers hidden *directories* rather than only hidden files.
 - Configured preloader colours are validated before being interpolated into the shell's
   inline `<style>`, where Blade's HTML escaping does not apply.
+- **A stored document is withheld once anyone has signed in on the device.** Every document
+  the worker holds is a signed-out rendering, and one handed to a signed-in visitor tells
+  them they are logged out when they are not — permanently, since the document carries its
+  own inlined payload and the runtime has no reason to refetch it. Those visitors are given
+  the shell, and the runtime's own request, which carries an identity, decides what to
+  render. `pwax.sw.forgetIdentity()` on sign-out restores the fast path.
+
+### Added
+
+- **A page's HTML is cached as it is visited, not only at install.** A page answers two
+  ways — JSON to the runtime, HTML with the component inlined to a navigation — and only
+  the JSON was stored after install. A route the build never precached, a dynamic one or
+  anything route discovery could not reach, had no document at all, so reloading it offline
+  fell back to the shell and a spinner. Documents are now kept as they are visited, and only
+  when the response declares `X-Pwax-Identity: anon`: a missing header is treated as
+  somebody's, because a navigation is the one request whose sender a worker cannot identify.
+  `ComponentResponse`'s HTML representation sends that header alongside the payload's.
 
 ### Fixed
 

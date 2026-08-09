@@ -234,6 +234,16 @@ class ComponentResponse implements Responsable
         $response->headers->set('Cache-Control', 'no-store, private');
         $response->headers->set('Vary', Pwax::VARY);
 
+        // Who this document was rendered for, exactly as the payload declares it.
+        //
+        // A navigation is the one request whose sender the service worker cannot identify:
+        // the runtime's fetches carry this header, but a document request made by the
+        // browser carries cookies, and a worker cannot read those. So the worker keeps a
+        // navigation's HTML only when the response says `anon` — a page belonging to
+        // nobody, which is therefore safe to hand to anybody. A missing header means
+        // unknown, and the worker stores nothing.
+        $response->headers->set('X-Pwax-Identity', $this->identity() ?? 'anon');
+
         if (! $this->storable) {
             $response->headers->set('X-Pwax-Cache', 'none');
         }

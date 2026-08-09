@@ -41,6 +41,36 @@ class PageIdentityTest extends TestCase
         $this->assertSame($identity, $response->headers->get('X-Pwax-Identity'));
     }
 
+    /**
+     * The HTML representation says it too, and the worker depends on it saying so.
+     *
+     * A navigation is the one request whose sender the worker cannot identify: the
+     * runtime's fetches carry the header, but a document request made by the browser
+     * carries cookies, which a worker cannot read. So it keeps a navigation's HTML only
+     * when the response declares `anon` — a page belonging to nobody, and therefore safe to
+     * hand to anybody. Without this header nothing is stored and every reload of a route
+     * the build never precached falls back to the shell.
+     */
+    public function test_a_guest_document_reports_no_identity(): void
+    {
+        $response = $this->get('/identity-page');
+
+        $response->assertHeader('Content-Type', 'text/html; charset=utf-8');
+        $this->assertSame('anon', $response->headers->get('X-Pwax-Identity'));
+    }
+
+    public function test_a_signed_in_document_reports_the_identity(): void
+    {
+        $user = $this->user();
+
+        // The same value the payload carries, because the worker uses it to tell one from
+        // the other: a document rendered for somebody is never stored.
+        $this->assertSame(
+            $this->actingAs($user)->get('/identity-page', $this->componentHeaders())->json('identity'),
+            $this->actingAs($user)->get('/identity-page')->headers->get('X-Pwax-Identity'),
+        );
+    }
+
     public function test_the_identity_is_opaque(): void
     {
         // Long and distinctive on purpose. A single-digit id is a substring of most

@@ -704,6 +704,11 @@ return [
         | payload, which is refused and reported — so listing one is harmless, it just
         | will not be there before sign-in.
         |
+        | Those copies are shared: every identity falls back to them, and a visitor's own
+        | cache is preferred when it has the page. That is what makes an offline link to a
+        | page you have not opened this session work at all — it is the same content a
+        | reload of that URL is already answered with.
+        |
         | `discover` finds them for you. Every GET route whose action hands a literal
         | view name to pwaxRender() is precached, so installing from the home page and
         | then opening Settings offline works without either page having been visited.

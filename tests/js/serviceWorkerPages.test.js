@@ -190,7 +190,7 @@ describe('page payloads offline', () => {
 
         await boot(current, { caches });
 
-        const pages = await caches.open(`pwax-pages-v1-h1-anon`);
+        const pages = await caches.open(`pwax-pages-v1-h1-install`);
 
         // The mechanism, not the outcome: a bare lookup must miss, because the stored key
         // carries headers the bare request does not. This is the assertion that fails if
@@ -220,7 +220,7 @@ describe('page payloads offline', () => {
         await worker.dispatch('install');
         await worker.dispatch('activate');
 
-        const pages = await caches.open('pwax-pages-v1-h1-anon');
+        const pages = await caches.open('pwax-pages-v1-h1-install');
 
         await expect(pages.match(asRuntime(ABOUT))).resolves.toBeUndefined();
     });
@@ -353,16 +353,22 @@ describe('page payloads offline', () => {
         await expectNetworkError(visit(offline(current, caches), DASHBOARD, 'bob'));
     });
 
-    it('keeps a signed-in visitor out of the anonymous precache of a page', async () => {
+    it('serves what the build precached to a signed-in visitor too', async () => {
         const current = manifest();
         const caches = new FakeCaches();
 
         await boot(current, { caches });
 
-        // What was precached was fetched without cookies, so it is the guest rendering
-        // and belongs to the guest. A signed-in visitor gets it from the network or not
-        // at all — never from a cache that was filled on someone else's behalf.
-        await expectNetworkError(visit(offline(current, caches), ABOUT, 'alice'));
+        // This used to be refused, on the reasoning that a cookieless rendering belongs
+        // to the guest it was rendered for. The reasoning does not survive contact with
+        // the rest of the worker: the precached *document* for this same URL is already
+        // served to whoever asks, so a signed-in visitor offline could reload `/about`
+        // and see it, but could not click a link to it. Refusing the payload withheld
+        // nothing and broke the feature precaching exists for.
+        const response = await visit(offline(current, caches), ABOUT, 'alice');
+
+        expect(response.type).not.toBe('error');
+        expect((await response.json()).template).toContain('about');
     });
 
     it('forgets one identity without touching the precache or another identity', async () => {
@@ -416,7 +422,7 @@ describe('page payloads offline', () => {
 
         await boot(current, { caches, cacheable: [] });
 
-        const pages = await caches.open('pwax-pages-v1-h1-anon');
+        const pages = await caches.open('pwax-pages-v1-h1-install');
 
         await expect(pages.match(asRuntime(ABOUT), { ignoreVary: true })).resolves.toBeDefined();
     });
@@ -587,5 +593,56 @@ describe('page payloads offline', () => {
         });
 
         await expect((await response).json()).resolves.toEqual({ template: '<p>/about</p>' });
+    });
+});
+
+describe('a precached page and a signed-in visitor', () => {
+    /** Whatever `Shell::identity()` mints. Sixteen hex characters, opaque to the worker. */
+    const ALICE = 'a1b2c3d4e5f60718';
+
+    const signedIn = { headers: { ...PAGE_HEADERS, 'X-Pwax-Identity': ALICE } };
+
+    it('serves the precached payload offline', async () => {
+        // Reported: sign in, browse online, go offline, click a link to a page you have
+        // not opened this session — and it errors, while *reloading* that same URL works.
+        //
+        // Reloading worked because a navigation is answered from the precache, which is
+        // shared. The payload was precached too, but under `anon`, and a signed-in
+        // visitor's requests name their own cache — so the one thing precaching exists to
+        // provide was the one thing they could not reach.
+        const caches = new FakeCaches();
+
+        await boot(manifest(), { caches });
+
+        const offline = createWorker({
+            manifest: manifest(),
+            caches,
+            routes: server(manifest(), { down: new Set([ABOUT]) }),
+        });
+        await offline.dispatch('activate');
+
+        const response = await offline.request(ABOUT, signedIn);
+
+        expect(response.type).not.toBe('error');
+        expect((await response.json()).template).toContain('about');
+    });
+
+    it('still prefers the visitor\'s own copy when they have one', async () => {
+        const caches = new FakeCaches();
+
+        const online = await boot(manifest(), { caches });
+        await online.request(DASHBOARD, signedIn);
+
+        const offline = createWorker({
+            manifest: manifest(),
+            caches,
+            routes: server(manifest(), { down: new Set([DASHBOARD]) }),
+        });
+        await offline.dispatch('activate');
+
+        // Theirs, rendered with their session, not the guest copy.
+        expect((await (await offline.request(DASHBOARD, signedIn)).json()).template).toContain(
+            'dashboard'
+        );
     });
 });

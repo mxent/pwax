@@ -41,6 +41,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A signed-in visitor could not open a precached page offline.** Go offline mid-session
+  and click a link to a page you have not already opened, and it failed — while *reloading*
+  that same URL worked. A navigation is answered from the shared precache; the payload a
+  link needs was precached under `anon`, and a signed-in visitor's requests name their own
+  cache. So the one thing precaching exists to provide was the one thing they could not
+  reach. Install-time payloads now live in a bucket every identity reads and none writes
+  to, with the visitor's own copy still preferred when they have one.
 - **The whole application was announced as "Loading".** The mount element carried
   `role="status"`, `aria-live="polite"` and `aria-label="Loading"` for the spinner, and the
   runtime removed only the class on mount — so for the rest of the session every reactive

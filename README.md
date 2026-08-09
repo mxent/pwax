@@ -1045,7 +1045,11 @@ is not an offline app. Three things make storing them safe, and they are worth k
   framework, the components and the session-free shell. Call `pwax.sw.forgetIdentity()`
   on sign-out to drop the rest at once.
 - **Precached pages are fetched without cookies**, so what installs is the guest
-  rendering. A route behind `auth` answers with a login screen and is refused.
+  rendering. A route behind `auth` answers with a login screen and is refused. Those
+  copies sit in a bucket of their own that every identity reads and none writes to — the
+  same content, from the same fetch, as the precached document a navigation to that page
+  is answered with, so withholding it from a signed-in visitor would protect nobody and
+  cost them the page.
 - **`->offline(false)` refuses outright**, for a page that must not reach disk under any
   circumstances — a one-time code, a recovery key. `service_worker.pages.runtime => false`
   turns the whole behaviour off.

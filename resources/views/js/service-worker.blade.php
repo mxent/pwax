@@ -112,6 +112,20 @@ function identityOf(request) {
 }
 
 /**
+ * Where install-time page payloads live.
+ *
+ * Not an identity, and it cannot be mistaken for one: an identity is sixteen hex
+ * characters. Everything in here was fetched at install without cookies, so it is the
+ * guest rendering of a page — the same content, from the same fetch, as the precached
+ * document that a navigation to that page is already answered with.
+ *
+ * It is separate from `anon` on purpose. `anon` is where signed-out *visitors* accumulate
+ * the pages they browse, which can include a form they were part-way through; this holds
+ * only what the build put there. Any identity may read it, and none may write to it.
+ */
+const INSTALLED = 'install';
+
+/**
  * Who a page payload was actually rendered for.
  *
  * The request cannot answer this on its own. Signing in through the runtime is a
@@ -264,12 +278,14 @@ async function install() {
     // named from the manifest and the previous precaches are found by listing — so
     // awaiting them in turn only added the storage layer's latency up.
     //
-    // Pages go to their own cache, under the anonymous identity: what is fetched at
-    // install time is the guest rendering, and that is the only identity it may be served
-    // to. A signed-in visitor populates their own pages cache as they browse.
+    // Page payloads go to their own cache, which every identity can read and none can
+    // write to. What is fetched here is the guest rendering — cookieless, the same fetch
+    // that produces the precached document — so withholding it from a signed-in visitor
+    // protected nobody and broke the feature for them: offline, a page they had not
+    // already opened this session was the one page precaching could not give them.
     const [cache, pages, previous] = await Promise.all([
         caches.open(cacheName),
-        caches.open(pagesName(manifest, 'anon')),
+        caches.open(pagesName(manifest, INSTALLED)),
         previousPrecaches(cacheName),
     ]);
 
@@ -716,7 +732,7 @@ async function page(request, manifest, group, identity) {
     const cache = await caches.open(pagesName(manifest, identity));
 
     if (group.strategy === 'performance') {
-        const hit = await cache.match(request, { ignoreVary: true });
+        const hit = await storedPage(request, manifest, cache);
 
         if (hit) {
             return hit;
@@ -744,7 +760,7 @@ async function page(request, manifest, group, identity) {
 
         return response;
     } catch (error) {
-        const hit = await cache.match(request, { ignoreVary: true });
+        const hit = await storedPage(request, manifest, cache);
 
         if (hit) {
             return hit;
@@ -752,6 +768,32 @@ async function page(request, manifest, group, identity) {
 
         throw error;
     }
+}
+
+/**
+ * This page as it was last stored: the visitor's own copy, then the one the build shipped.
+ *
+ * The same shape as `matchScoped()`, and for the same reason. Their own copy first,
+ * because it was rendered for them and the build's was not. The build's as a fallback,
+ * because it is cookieless and shared by construction — it is what a navigation to this
+ * URL is already answered with offline, so refusing it to the runtime only meant a link
+ * failed where a reload of the same URL succeeded.
+ */
+async function storedPage(request, manifest, cache) {
+    const mine = await cache.match(request, { ignoreVary: true });
+
+    if (mine) {
+        return mine;
+    }
+
+    const name = pagesName(manifest, INSTALLED);
+
+    // `has` before `open`: a read must not bring a cache into existence.
+    if (!(await caches.has(name))) {
+        return undefined;
+    }
+
+    return (await caches.open(name)).match(request, { ignoreVary: true });
 }
 
 /** Reject a promise that takes too long, so a dead connection is not an indefinite wait. */
@@ -1390,19 +1432,39 @@ async function trimIdentities(manifest) {
 
     const doomed = keys.slice(0, keys.length - limit).map((key) => key.slice(prefix.length));
 
-    await Promise.all(doomed.filter((identity) => identity !== 'anon').map((identity) => forget(manifest, identity)));
+    // Neither reserved label is a person who signed in here. `anon` is every signed-out
+    // visitor at once, and dropping it would evict a shared bucket to make room for one
+    // individual; `install` is the build's own copies, which nothing on this device put
+    // there and every identity falls back to.
+    await Promise.all(
+        doomed.filter((identity) => !reserved(identity)).map((identity) => forget(manifest, identity))
+    );
 }
 
 /** Drop everything held for one identity, leaving every other identity untouched. */
 async function forget(manifest, identity) {
+    if (reserved(identity)) {
+        return;
+    }
+
     const keys = await caches.keys();
     const suffix = `-${identity}`;
 
     await Promise.all(
         keys
-            .filter((key) => key.startsWith(`${PREFIX}-`) && key.endsWith(suffix) && !key.endsWith('-anon'))
+            .filter((key) => key.startsWith(`${PREFIX}-`) && key.endsWith(suffix) && !reservedName(key))
             .map((key) => caches.delete(key))
     );
+}
+
+/** A label that names something other than one signed-in visitor. */
+function reserved(identity) {
+    return identity === 'anon' || identity === INSTALLED;
+}
+
+/** The same test, applied to a whole cache name. */
+function reservedName(key) {
+    return key.endsWith('-anon') || key.endsWith(`-${INSTALLED}`);
 }
 
 async function precacheFor(manifest) {

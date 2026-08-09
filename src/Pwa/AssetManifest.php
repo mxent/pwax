@@ -179,16 +179,29 @@ class AssetManifest
     }
 
     /**
-     * The build lock, or null when the store cannot provide one.
+     * The build lock, or null when it could not be taken.
+     *
+     * Asked of the *store*, not the repository. `LockProvider` is implemented by stores —
+     * Redis, database, array, memcached — and file and null stores do not implement it at
+     * all, so an application on either simply builds without coordination, as it did
+     * before.
      */
     private function lock(): ?Lock
     {
-        if (! $this->cache instanceof LockProvider) {
+        $cache = $this->cache;
+
+        if ($cache === null || ! method_exists($cache, 'getStore')) {
             return null;
         }
 
         try {
-            $lock = $this->cache->lock(self::CACHE_KEY . ':build', 10);
+            $store = $cache->getStore();
+
+            if (! $store instanceof LockProvider) {
+                return null;
+            }
+
+            $lock = $store->lock(self::CACHE_KEY . ':build', 10);
 
             return $lock->get() ? $lock : null;
         } catch (Throwable) {

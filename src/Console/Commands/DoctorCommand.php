@@ -79,6 +79,7 @@ class DoctorCommand extends Command
             'pwax.service_worker.files' => 'service_worker.asset_groups, which takes globs',
             'pwax.helpers.global' => 'nothing — vue() and router() were removed in 3.0',
             'pwax.service_worker.strategy' => 'service_worker.runtime_strategy, which now defaults to network-only',
+            'pwax.service_worker.identity_cache_limit' => 'nothing — one cache holds the visitor’s pages now, emptied when the signed-in visitor changes, so there is no per-person set left to bound',
         ];
 
         foreach ($replacements as $key => $replacement) {

@@ -728,9 +728,11 @@ return [
         | what was found.
         |
         | `runtime` caches pages as they are visited, which covers what discovery
-        | cannot — a `/posts/{post}` someone actually opened. Payloads go in a cache
-        | named for the signed-in identity, so one visitor's pages are unreachable
-        | from another's session on the same device; see `identity_cache_limit` below.
+        | cannot — a `/posts/{post}` someone actually opened. One cache holds them,
+        | whoever is signed in, and the worker empties it the moment the server says
+        | it is answering somebody else — so one visitor's pages are never served to
+        | the next on a shared device. What the build installed is kept separately and
+        | survives that, so a sign-in never re-downloads the application.
         |
         | A page's rendered HTML is kept too, so reloading such a route offline paints
         | it rather than a spinner — but only when the response says it was rendered
@@ -803,14 +805,6 @@ return [
             // ],
         ],
 
-        /*
-        | How many signed-in identities keep caches on one device.
-        |
-        | Every person who signs in leaves a set behind. On a shared machine that grows
-        | until the browser evicts storage on its own, which takes the application's
-        | offline capability with it. Oldest go first.
-        */
-        'identity_cache_limit' => 2,
     ],
 
 ];

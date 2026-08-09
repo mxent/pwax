@@ -10,14 +10,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Security
 
 - **Cached responses could be read across signed-in identities.** Pages, API responses and
-  runtime entries are stored in caches named after the signed-in visitor, which the
-  package documents as making a cross-user read impossible rather than merely unlikely.
-  That held for writes and not for reads: the offline fallback used a lookup that names no
+  runtime entries were stored in caches named after the signed-in visitor, and the package
+  documented that as making a cross-user read impossible rather than merely unlikely. It
+  held for writes and not for reads: the offline fallback used a lookup that names no
   cache, and by specification such a lookup searches *every* cache on the origin. Two
   people sharing a device — the second one offline — and the worker served the first one's
-  responses. Reads are now confined to the reading identity's own cache and the precache,
-  which is shared on purpose and holds only the framework, the components and the
-  session-free shell.
+  responses. Reads are confined to one cache now, which is emptied whenever the visitor
+  changes; see **Changed**.
+- **An empty cache was created by reading.** `caches.open()` creates, and the page and data
+  paths opened theirs before knowing whether anything would be stored — so every visitor
+  left behind an empty cache per group, on a device that had stored nothing. Reads go
+  through `caches.has()` first throughout.
 - **The client identity could be a whole session out of date.** It was read once from the
   document, and Pwax turns a post-login `redirect()` into a client-side navigation on
   purpose — so a visitor who signed in through the runtime kept sending the guest label,
@@ -44,6 +47,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   own inlined payload and the runtime has no reason to refetch it. Those visitors are given
   the shell, and the runtime's own request, which carries an identity, decides what to
   render. `pwax.sw.forgetIdentity()` on sign-out restores the fast path.
+
+### Changed
+
+- **One set of caches, kept to one visitor at a time.** The signed-in identity used to be
+  part of every cache *name*, which made a cross-user read impossible by construction — and
+  cost a fresh set of caches per person, an empty one minted on every sign-in, and
+  everything re-fetched under the new name each time the name changed. Names are now fixed:
+  `pwax-pages-v1-<build>`, `pwax-runtime-v1`, `pwax-data-<group>-<v>`. The separation is
+  kept by *emptying* the visitor caches the moment the worker learns it is serving somebody
+  else — from the identity a response declares, and from the identity a request claims,
+  which is what covers a visitor offline from their first request. The precache, the
+  build's own guest page payloads and the documents cache are never emptied that way, so a
+  sign-in never re-downloads the application.
+
+  This is weaker than being unaddressable, and it loses the previous person's offline pages
+  rather than parking them. `service_worker.identity_cache_limit` is gone with the per-person
+  sets it bounded; `pwax:doctor` names it.
+- Every request the runtime makes now carries `X-Pwax-Identity`, `anon` included. It was
+  omitted for a signed-out visitor, which made an absent header mean both "a guest is
+  asking" and "this is not a Pwax request" — and the worker has to tell those apart, since
+  one is a signal to empty the caches and the other must never be.
 
 ### Added
 
@@ -73,11 +97,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cache. So the one thing precaching exists to provide was the one thing they could not
   reach. Install-time payloads now live in a bucket every identity reads and none writes
   to, with the visitor's own copy still preferred when they have one.
-- **`identity_cache_limit` counted buckets that were not people.** It names how many
-  signed-in identities keep caches on a device, but the sweep counted the shared ones too
-  — and since those are also the oldest, an eviction that picked one skipped it and
-  deleted nothing. The setting did not begin to bite until there were several more
-  identities than it names.
 - **The whole application was announced as "Loading".** The mount element carried
   `role="status"`, `aria-live="polite"` and `aria-label="Loading"` for the spinner, and the
   runtime removed only the class on mount — so for the rest of the session every reactive

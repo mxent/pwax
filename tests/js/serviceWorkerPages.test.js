@@ -377,24 +377,57 @@ describe('page payloads offline', () => {
         expect((await response.json()).template).toContain('about');
     });
 
-    it('forgets one identity without touching the precache or another identity', async () => {
+    it('empties what the visitor left, and keeps what the build installed', async () => {
         const current = manifest();
         const caches = new FakeCaches();
 
         const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
 
-        for (const who of ['alice', 'bob']) {
-            await worker.dispatch('fetch', {
-                request: asRuntime(DASHBOARD, who),
-                preloadResponse: Promise.resolve(null),
-            });
-        }
+        await visit(worker, DASHBOARD, 'alice');
+        expect(await (await caches.open('pwax-pages-v1-h1')).match(asRuntime(DASHBOARD))).toBeTruthy();
 
-        await worker.dispatch('message', { data: { type: 'PWAX_FORGET_IDENTITY', identity: 'alice' } });
+        await worker.dispatch('message', { data: { type: 'PWAX_FORGET_IDENTITY' } });
 
-        expect(await caches.has('pwax-pages-v1-h1-alice')).toBe(false);
-        expect(await caches.has('pwax-pages-v1-h1-bob')).toBe(true);
+        // The pages they visited go. The precache and the build's own guest payloads stay,
+        // so the next person gets an application that still works offline rather than one
+        // that has to download itself again.
+        expect(await caches.has('pwax-pages-v1-h1')).toBe(false);
+        expect(await caches.has('pwax-pages-v1-h1-install')).toBe(true);
         expect(await caches.has('pwax-precache-v1-h1')).toBe(true);
+    });
+
+    it('empties the last visitor when the server says it is serving somebody else', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
+
+        await visit(worker, DASHBOARD, 'alice');
+
+        const pages = await caches.open('pwax-pages-v1-h1');
+        expect(await pages.match(asRuntime(DASHBOARD))).toBeTruthy();
+
+        // One cache holds them all, so the partition is kept by emptying it rather than by
+        // naming it after somebody. This is the moment that has to happen.
+        await visit(worker, ABOUT, 'bob');
+
+        expect(await (await caches.open('pwax-pages-v1-h1')).match(asRuntime(DASHBOARD))).toBeFalsy();
+        expect(await (await caches.open('pwax-pages-v1-h1')).match(asRuntime(ABOUT))).toBeTruthy();
+    });
+
+    it('does not empty anything for a request that claims nothing', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
+
+        await visit(worker, DASHBOARD, 'alice');
+
+        // A browser fetching an image sends no identity header, and reading that as a
+        // sign-out would empty the cache on the next asset the page loads.
+        await worker.request('/images/logo.svg');
+
+        expect(await (await caches.open('pwax-pages-v1-h1')).match(asRuntime(DASHBOARD))).toBeTruthy();
     });
 
     /**

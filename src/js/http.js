@@ -39,13 +39,16 @@ export function createHttp(config) {
         }
 
         // Read by the service worker, not by the server, which is why it is deliberately
-        // absent from `Pwax::VARY`: the response does not depend on it, and varying on it
-        // would split every shared cache per user for no gain. The worker uses it to name
-        // the caches it stores page payloads in, so one person's cached page cannot be
-        // served to the next on a shared device.
-        if (config.identity) {
-            base[IDENTITY_HEADER] = config.identity;
-        }
+        // absent from `Pwax::VARY`: the response does not depend on it, so varying on it
+        // would split every shared cache for no gain.
+        //
+        // Always sent, `anon` included. It used to be omitted for a signed-out visitor,
+        // which made an absent header mean two things — "a guest is asking" and "this is
+        // not a Pwax request" — and the worker cannot tell them apart. It needs to: with
+        // one cache per kind rather than one per person, the header is what tells it the
+        // person has changed and the last one's pages have to go. A guest arriving after
+        // somebody signed out has to be able to say so.
+        base[IDENTITY_HEADER] = config.identity || 'anon';
 
         return { ...base, ...extra };
     }

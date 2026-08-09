@@ -888,12 +888,11 @@ go — the payload always, and the rendered HTML when the response declares itse
 'service_worker' => ['pages' => ['runtime' => true]],
 ```
 
-Storing a signed-in user's page is only safe because of where it is stored. The Cache API
-is scoped to the origin, not to a user, so these go into a cache named after an opaque
-HMAC of the signed-in identity — one person's cached page is not merely cleared when
-somebody else signs in, it was never reachable under their name. Call
-`pwax.sw.forgetIdentity(window.pwax.config.identity)` on sign-out to drop it immediately,
-and mark anything that must never reach disk at all:
+Storing a signed-in user's page is only safe because of when it is thrown away. The Cache
+API is scoped to the origin, not to a user, so the worker empties this cache the moment the
+server tells it a different person is being served — before the new person's first page
+lands in it. Call `pwax.sw.forgetIdentity()` on sign-out to do it immediately rather than on
+the next request, and mark anything that must never reach disk at all:
 
 ```php
 Route::get('/recovery-codes', fn () => pwaxRender('pages.codes')->offline(false));
@@ -1120,14 +1119,27 @@ which is refused rather than stored.
 Page payloads are the deliberate exception, because a shell with nothing to render in it
 is not an offline app. Three things make storing them safe, and they are worth knowing:
 
-- **They are partitioned by identity.** A visited page goes in a cache named after an
-  opaque HMAC of the signed-in user, so another session on the same device cannot reach
-  it — it is not cleared later, it was never addressable. Reads are confined to the same
-  name. Three caches are deliberately shared, and none of them can hold anything of one
-  visitor's: the precache (framework, components, session-free shell), the install bucket
-  of guest page payloads, and the documents cache, which stores only responses that
-  declared themselves anonymous. Call `pwax.sw.forgetIdentity()` on sign-out to drop the
-  rest at once.
+- **One visitor at a time.** A visited page goes into a single cache, whoever is signed
+  in — and that cache is **emptied the moment the worker learns it is serving somebody
+  else**, before the new person's first page is written into it. So one session's pages
+  are never served to the next on a shared device.
+
+  The worker learns of the change twice over: from the identity a response declares, which
+  is the authority, and from the identity a request claims, which is what covers a visitor
+  who is offline from their very first request and for whom no response ever arrives. Both
+  are the `X-Pwax-Identity` header. Call `pwax.sw.forgetIdentity()` on sign-out to empty it
+  immediately rather than on the next request.
+
+  Three caches are never emptied this way, and none can hold anything of one visitor's: the
+  precache (framework, components, session-free shell), the build's own guest page payloads,
+  and the documents cache, which stores only responses that declared themselves anonymous.
+  That is what stops a sign-in re-downloading the application.
+
+  This is weaker than naming each cache after its owner, which is what earlier versions
+  did: the separation is now enforced by deleting rather than by being unaddressable. It is
+  also why the previous person's offline pages are gone rather than parked — and why there
+  is no longer a per-person set of caches to bound, an empty one minted on every sign-in, or
+  a re-download each time the name changed.
 - **Precached pages are fetched without cookies**, so what installs is the guest
   rendering. A route behind `auth` answers with a login screen and is refused. Those
   copies sit in a bucket of their own that every identity reads and none writes to — the
@@ -1279,7 +1291,6 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `service_worker.data_groups` | `[]` | API response caching |
 | `service_worker.navigation_strategy` | `network-first` | Or `app-shell` for zero-round-trip navigation |
 | `service_worker.navigation_urls` | see config | Which navigations the worker claims |
-| `service_worker.identity_cache_limit` | `2` | Signed-in identities keeping caches on one device |
 | `service_worker.offline_url` | `null` | Page shown offline; defaults to the shell |
 | `service_worker.navigation_preload` | `true` | Start the network request before the worker boots |
 

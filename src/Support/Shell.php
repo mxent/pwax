@@ -316,9 +316,10 @@ class Shell
      *
      * The service worker stores page payloads and API responses, and the Cache API is
      * scoped to the origin, not to a user. On a shared device that would let one person's
-     * cached page be served to the next. This value is what the worker names those caches
-     * after, so a request from one identity cannot reach another's entries at all — the
-     * separation is structural rather than a matter of clearing things in time.
+     * cached page be served to the next. This value is what the worker compares to notice
+     * that it is answering somebody else, at which point it empties what it holds for the
+     * last one — travelling on every page response as `X-Pwax-Identity`, and on every
+     * request the runtime makes.
      *
      * It is an HMAC rather than the user id itself. The id would be published in a JSON
      * island on every page for no benefit, and it is the same id in every other system

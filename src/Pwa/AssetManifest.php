@@ -278,7 +278,6 @@ class AssetManifest
             'pageHeaders' => self::PAGE_HEADERS,
             'pageRuntime' => (bool) $this->config->get('pwax.service_worker.pages.runtime', true),
             'pageDefaults' => $this->pageDefaults(),
-            'identityCacheLimit' => (int) $this->config->get('pwax.service_worker.identity_cache_limit', 2),
             'assetGroups' => $groups,
             'dataGroups' => $this->dataGroups(),
             'hashTable' => $hashes,

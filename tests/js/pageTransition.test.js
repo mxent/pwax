@@ -140,9 +140,8 @@ describe('what stays on screen during a navigation', () => {
         expect(state.renderedPath).toBe('/one');
     });
 
-    it('starts the bar for a fetch, and finishes the one the shell started', async () => {
+    it('runs the bar for a fetch and not for the inlined landing page', async () => {
         const start = vi.fn();
-        const done = vi.fn();
 
         const state = bind(
             createPageComponent({
@@ -150,16 +149,14 @@ describe('what stays on screen during a navigation', () => {
                 styles: noStyles,
                 config: {},
                 initial: { url: '/one', component: payloadFor('/one') },
-                progress: { start, done },
+                progress: { start, done: vi.fn() },
             })
         );
 
-        // The landing page is already in the document, so there is no request to
-        // indicate — but the shell rendered the bar already running for the load that
-        // delivered it, and mounting is what that bar was waiting for.
+        // The landing page is already in the document. There is no request to indicate,
+        // and the shell's spinner has covered the load that delivered it.
         await state.visit('/one');
         expect(start).not.toHaveBeenCalled();
-        expect(done).toHaveBeenCalledTimes(1);
 
         await state.visit('/two');
         expect(start).toHaveBeenCalledTimes(1);

@@ -269,6 +269,9 @@ return [
     | and it is deliberately the only thing that moves: the page you are on stays
     | rendered until its replacement is ready, then the two cross-fade.
     |
+    | Navigations only. The first load is covered by `customization.init_spinner` below —
+    | a document arriving is a different wait, and the browser is already indicating it.
+    |
     |   enabled   Set to false to remove the bar entirely — no element, no timers.
     |   color     Defaults to `customization.init_spinner_color`, so an application that
     |             set one has already set the other.
@@ -315,14 +318,14 @@ return [
 
     'customization' => [
         /*
-        | The centred spinner on the very first load, before the runtime mounts.
+        | The centred spinner covering the very first load, from the document arriving to
+        | the runtime mounting.
         |
-        | Off, because the progress bar now covers that load — the shell renders it
-        | already running and the runtime completes it on mount — and one indicator shown
-        | twice is not twice as clear. Turn it on for an application that would rather
-        | have the centred one; the two colours below are its.
+        | That wait is the browser's own; the progress bar has no part in it and belongs
+        | to navigations, where nothing else would say a page is on its way. Turn this off
+        | for an application that renders its own skeleton into the mount element instead.
         */
-        'init_spinner' => false,
+        'init_spinner' => true,
         'init_spinner_color' => '#0c83ff',
         'init_spinner_bg' => '#f3f3f3',
         'init_background' => '#ffffff',

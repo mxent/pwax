@@ -83,13 +83,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a single line, twice. A failed navigation now leaves you where you were.
 - **A navigation progress bar**, which is the only thing that moves while you wait. It
   waits 250 ms before appearing, eases towards a ceiling it never reaches, and completes
-  before the page swaps rather than alongside it. The shell renders it already running for
-  the first load — advanced by CSS, because that load has to be indicated before `pwax.js`
-  exists — and the runtime adopts it on boot, so arriving and navigating look the same.
-  `pwax.progress`; `window.pwax.progress` exposes `start()` and `done()` for an
-  application's own slow work.
-- `customization.init_spinner` now defaults to `false`: the progress bar covers the first
-  load, and one indicator shown twice is not twice as clear.
+  before the page swaps rather than alongside it. Navigations only — a document arriving is
+  the browser's own wait, and the shell's spinner already covers it. `pwax.progress`;
+  `window.pwax.progress` exposes `start()` and `done()` for an application's own slow work.
+- `customization.init_spinner` turns the first-load spinner off, for an application that
+  renders its own skeleton into the mount element.
 - `pwax.transition` names the page transition and its duration. The bundled one fades with
   opacity alone; both it and the progress bar defer to `prefers-reduced-motion`.
 - `service_worker.max_entry_bytes`, bounding a single runtime-cache entry. `max_entries`

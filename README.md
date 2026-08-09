@@ -377,19 +377,21 @@ that flashes on and off for each of them reads as jitter — then eases towards 
 never reaches, because the payload has no length the browser can know in advance. Claiming
 to be finished and then waiting is what makes a progress bar feel like a lie.
 
-The same bar covers the **first** load. The shell renders it already running, advanced by
-CSS so it moves while the document is still being parsed and before `pwax.js` exists; the
-runtime adopts it on boot and completes it on mount. So the sequence is the same whether
-you arrived or navigated:
+There are two waits and they get different answers, because they are different waits:
 
 ```
-first load        bar starts (server) ─► app mounts ─► bar completes ─► page fades in
-navigation        bar starts (250ms)  ─► payload    ─► bar completes ─► page fades in
+first load    document arrives ─► spinner ─► app mounts ─► page appears
+navigation    bar starts       ─► payload ─► bar completes ─► page fades in
 ```
 
-The centred spinner that used to cover the first load is off by default for that reason —
-one indicator shown twice is not twice as clear. `customization.init_spinner => true`
-brings it back.
+A document arriving is the browser's own wait — the address bar moves, the tab spins — and
+the shell's centred spinner covers the gap between the HTML landing and the runtime
+mounting. A navigation has none of that, which is what the bar is for. It is not rendered
+by the shell: the runtime creates it on the first navigation slow enough to need one, so an
+application whose navigations are all fast never puts it in the document.
+
+`customization.init_spinner => false` turns the spinner off, for an application that
+renders its own skeleton into the mount element instead.
 
 ```php
 'progress' => [
@@ -1095,7 +1097,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `cache.asset_ttl` | `3600` | `max-age` for component assets |
 | `cache.components` | `true` | Memoise compiled components |
 | `csp.nonce` | `null` | Nonce (or callable) for inline blocks |
-| `customization.init_spinner` | `false` | The centred first-load spinner; the progress bar covers that load now |
+| `customization.init_spinner` | `true` | The centred spinner covering the first load |
 | `customization.*` | see config | Preloader colours |
 | `progress.enabled` | `true` | Navigation progress bar |
 | `progress.color`, `.height` | `null`, `3` | Colour falls back to the spinner's; height in px |

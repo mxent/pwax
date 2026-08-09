@@ -28,46 +28,36 @@ class NavigationFeedbackTest extends TestCase
         });
     }
 
-    public function test_the_bar_is_rendered_already_running(): void
+    public function test_the_first_load_is_covered_by_the_spinner(): void
     {
         $html = (string) $this->get('/page')->getContent();
 
-        // The one load the runtime cannot indicate for itself: the bar has to be moving
-        // while the document is still being parsed, which is before pwax.js exists. So the
-        // server renders it visible and CSS advances it; the runtime adopts it on boot.
-        $this->assertStringContainsString('id="pwax-progress"', $html);
-        $this->assertStringContainsString('pwax-progress-visible pwax-progress-boot', $html);
-        $this->assertStringContainsString('@keyframes pwax-progress-advance', $html);
+        // A document arriving is the browser's own wait, and the gap between it and the
+        // runtime mounting is what the spinner covers.
+        $this->assertStringContainsString('@keyframes pwax-spin', $html);
+        $this->assertStringContainsString('border-top-color: #0c83ff', $html);
     }
 
-    public function test_nothing_is_rendered_when_the_bar_is_off(): void
+    public function test_the_spinner_can_be_turned_off(): void
     {
-        config()->set('pwax.progress.enabled', false);
+        config()->set('pwax.customization.init_spinner', false);
 
+        // For an application that renders its own skeleton into the mount element.
+        $this->assertStringNotContainsString(
+            '@keyframes pwax-spin',
+            (string) $this->get('/page')->getContent()
+        );
+    }
+
+    public function test_the_bar_is_not_rendered_by_the_shell(): void
+    {
+        // It belongs to navigations, and the runtime creates it on the first one slow
+        // enough to need it — so an application whose navigations are all fast never puts
+        // it in the document at all.
         $this->assertStringNotContainsString(
             'id="pwax-progress"',
             (string) $this->get('/page')->getContent()
         );
-    }
-
-    public function test_the_centred_spinner_is_off_by_default(): void
-    {
-        // The bar covers the first load now, and one indicator shown twice is not twice
-        // as clear.
-        $this->assertStringNotContainsString(
-            'pwax-spin',
-            (string) $this->get('/page')->getContent()
-        );
-    }
-
-    public function test_the_centred_spinner_can_be_brought_back(): void
-    {
-        config()->set('pwax.customization.init_spinner', true);
-
-        $html = (string) $this->get('/page')->getContent();
-
-        $this->assertStringContainsString('@keyframes pwax-spin', $html);
-        $this->assertStringContainsString('border-top-color: #0c83ff', $html);
     }
 
     public function test_the_progress_bar_is_styled_in_the_shell(): void

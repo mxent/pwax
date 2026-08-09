@@ -150,9 +150,25 @@ function fail(error) {
     }
 
     mount.classList.remove('pwax-preloader');
+
+    // Built by hand rather than through the page component, because whatever failed may be
+    // the page component. Nothing here is interpolated: the error goes to the console for
+    // whoever is debugging and is deliberately not shown, since a runtime failure message
+    // says more about the application than a visitor should be told.
     mount.innerHTML =
-        '<div class="pwax-error" role="alert"><h1>This app could not start</h1>' +
-        '<p>Please reload the page. If the problem continues, contact the site administrator.</p></div>';
+        '<div class="pwax-screen pwax-error" role="alert"><div class="pwax-screen__panel">' +
+        '<p class="pwax-screen__code">Application</p>' +
+        '<h1 class="pwax-screen__title">This app could not start</h1>' +
+        '<p class="pwax-screen__message">Please reload the page. If the problem continues, ' +
+        'contact the site administrator.</p>' +
+        '<div class="pwax-screen__actions">' +
+        '<button type="button" class="pwax-button pwax-reload">Reload</button>' +
+        '</div></div></div>';
+
+    // Bound, not written as an `onclick` attribute: the Content-Security-Policy this
+    // package documents has no `unsafe-inline`, and an inline handler would be dropped —
+    // leaving a button that looks like the way out and does nothing.
+    mount.querySelector('.pwax-reload')?.addEventListener('click', () => window.location.reload());
 }
 
 function start() {

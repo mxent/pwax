@@ -41,6 +41,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A signed-in visitor could not open a precached page offline.** Go offline mid-session
+  and click a link to a page you have not already opened, and it failed — while *reloading*
+  that same URL worked. A navigation is answered from the shared precache; the payload a
+  link needs was precached under `anon`, and a signed-in visitor's requests name their own
+  cache. So the one thing precaching exists to provide was the one thing they could not
+  reach. Install-time payloads now live in a bucket every identity reads and none writes
+  to, with the visitor's own copy still preferred when they have one.
+- **`identity_cache_limit` counted buckets that were not people.** It names how many
+  signed-in identities keep caches on a device, but the sweep counted the shared ones too
+  — and since those are also the oldest, an eviction that picked one skipped it and
+  deleted nothing. The setting did not begin to bite until there were several more
+  identities than it names.
 - **The whole application was announced as "Loading".** The mount element carried
   `role="status"`, `aria-live="polite"` and `aria-label="Loading"` for the spinner, and the
   runtime removed only the class on mount — so for the rest of the session every reactive
@@ -88,6 +100,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `window.pwax.progress` exposes `start()` and `done()` for an application's own slow work.
 - `customization.init_spinner` turns the first-load spinner off, for an application that
   renders its own skeleton into the mount element.
+- **The screens have a design.** The page that would not load, the runtime that would not
+  start and the worker's offline document were unstyled text on a white page; they now
+  share one centred layout that works in light and dark, and each offers the way out that
+  applies. Restyle them with the `--pwax-screen-*` custom properties without publishing a
+  view. The offline document carries its own copy of the styles, since it answers a
+  navigation to a page whose stylesheet never loaded.
 - `pwax.transition` names the page transition and its duration. The bundled one fades with
   opacity alone; both it and the progress bar defer to `prefers-reduced-motion`.
 - `service_worker.max_entry_bytes`, bounding a single runtime-cache entry. `max_entries`

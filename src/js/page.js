@@ -12,11 +12,23 @@ const PAGE_STYLE_KEY = 'pwax:page';
 
 const DEFAULT_LOADER = '<div class="pwax-loading" role="status">Loading…</div>';
 
+/**
+ * The error screen, used when the server did not send one.
+ *
+ * A trimmed copy of `components/error.blade.php` — no home link, because this file cannot
+ * know where home is. Keep the two in step: an application that publishes the view should
+ * not get a visibly different screen from one that does not.
+ */
 const DEFAULT_ERROR = `
-    <div class="pwax-error" role="alert">
-        <h1 v-text="error.statusText"></h1>
-        <p v-text="error.message"></p>
-        <button type="button" class="pwax-retry" @click="retry">Try again</button>
+    <div class="pwax-screen pwax-error" role="alert">
+        <div class="pwax-screen__panel">
+            <p class="pwax-screen__code" v-text="error.status"></p>
+            <h1 class="pwax-screen__title" v-text="error.statusText"></h1>
+            <p class="pwax-screen__message" v-text="error.message"></p>
+            <div class="pwax-screen__actions">
+                <button type="button" class="pwax-button pwax-retry" @click="retry">Try again</button>
+            </div>
+        </div>
     </div>
 `;
 

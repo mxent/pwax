@@ -179,27 +179,124 @@
     }
     @endif
 
-    .pwax-error {
-        padding: 1.5rem;
-        font-family: system-ui, sans-serif;
-        color: #b91c1c;
+    /* Screens.
+       The three states an application can be in with nothing of its own to show: a page
+       that would not load, a runtime that would not start, and a URL with no offline copy.
+       One layout for all of them, because to a visitor they are the same event — something
+       did not work — and three different-looking apologies read as three different bugs.
+
+       Everything is a custom property so an application can restyle these without
+       publishing the views: set --pwax-screen-fg and friends on :root in your own
+       stylesheet, which loads after this one. */
+    :root {
+        --pwax-screen-bg: transparent;
+        --pwax-screen-fg: #18181b;
+        --pwax-screen-muted: #71717a;
+        --pwax-screen-line: #e4e4e7;
+        --pwax-screen-accent: {{ $progressColor }};
+        --pwax-screen-accent-fg: #ffffff;
     }
 
-    .pwax-error h1 {
-        font-size: 1.25rem;
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --pwax-screen-fg: #fafafa;
+            --pwax-screen-muted: #a1a1aa;
+            --pwax-screen-line: #3f3f46;
+        }
+    }
+
+    .pwax-screen {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 60dvh;
+        padding: 2rem 1.5rem;
+        background: var(--pwax-screen-bg);
+        color: var(--pwax-screen-fg);
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+    }
+
+    .pwax-screen__panel {
+        width: 100%;
+        max-width: 32rem;
+        text-align: center;
+    }
+
+    /* The status, set apart rather than shouted. A large number is the house style of a
+       server error page, and this is not the server — it is the application still running,
+       telling you one page did not arrive. */
+    .pwax-screen__code {
+        margin: 0 0 1rem;
+        font-size: .75rem;
+        font-weight: 600;
+        letter-spacing: .1em;
+        text-transform: uppercase;
+        color: var(--pwax-screen-muted);
+    }
+
+    .pwax-screen__code::after {
+        content: '';
+        display: block;
+        width: 2.5rem;
+        height: 1px;
+        margin: .75rem auto 0;
+        background: var(--pwax-screen-line);
+    }
+
+    .pwax-screen__title {
         margin: 0 0 .5rem;
+        font-size: 1.375rem;
+        font-weight: 600;
+        letter-spacing: -.01em;
     }
 
-    .pwax-retry {
-        margin-top: 1rem;
-        padding: .5rem 1rem;
+    .pwax-screen__message {
+        margin: 0;
+        color: var(--pwax-screen-muted);
+        overflow-wrap: anywhere;
+    }
+
+    .pwax-screen__actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .625rem;
+        justify-content: center;
+        margin-top: 1.75rem;
+    }
+
+    .pwax-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 2.5rem;
+        padding: 0 1.125rem;
+        border: 1px solid transparent;
+        border-radius: .5rem;
+        background: var(--pwax-screen-accent);
+        color: var(--pwax-screen-accent-fg);
         font: inherit;
+        font-weight: 500;
+        text-decoration: none;
         cursor: pointer;
     }
 
-    .pwax-loading {
-        padding: 1.5rem;
-        font-family: system-ui, sans-serif;
+    .pwax-button--quiet {
+        background: transparent;
+        border-color: var(--pwax-screen-line);
+        color: var(--pwax-screen-fg);
+    }
+
+    .pwax-button:hover {
+        opacity: .9;
+    }
+
+    /* Never removed, only replaced. A keyboard user who cannot see the focus ring cannot
+       find the retry button, which on this screen is the only way forward. */
+    .pwax-button:focus-visible {
+        outline: 2px solid var(--pwax-screen-accent);
+        outline-offset: 2px;
     }
 
     /* The navigation progress bar.

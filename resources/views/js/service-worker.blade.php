@@ -84,12 +84,38 @@ const CONFIG = @json($swConfig, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
 /** Third-party URLs this build precached, and the only ones we answer off-origin. */
 const CROSS_ORIGIN = new Set(CONFIG.crossOrigin || []);
 
+/**
+ * The last resort: a navigation with no network and nothing stored for that URL.
+ *
+ * A whole document, so it carries its own styles — the shell's stylesheet belongs to a
+ * page that never loaded. It is written to match the application's other screens rather
+ * than to stand out: a visitor who has already seen the in-app error should recognise this
+ * as the same thing said by something further down the stack, not as a second, worse
+ * failure.
+ *
+ * No script, and no reload button that reloads on its own. Reloading is exactly what will
+ * fail again; the browser's own control is the honest place for that.
+ */
 const OFFLINE_HTML =
     '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' +
-    '<title>Offline</title></head><body style="font-family:system-ui,sans-serif;padding:2rem">' +
-    '<h1>You are offline</h1><p>This page has not been stored for offline use.</p>' +
-    '</body></html>';
+    '<meta name="color-scheme" content="light dark"><title>Offline</title><style>' +
+    ':root{--fg:#18181b;--muted:#71717a;--line:#e4e4e7;--bg:#ffffff}' +
+    '@media(prefers-color-scheme:dark){:root{--fg:#fafafa;--muted:#a1a1aa;--line:#3f3f46;--bg:#09090b}}' +
+    'html,body{margin:0;height:100%}' +
+    'body{display:flex;align-items:center;justify-content:center;padding:2rem 1.5rem;' +
+    'background:var(--bg);color:var(--fg);line-height:1.5;' +
+    'font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}' +
+    'div{width:100%;max-width:32rem;text-align:center}' +
+    'p.c{margin:0 0 1rem;font-size:.75rem;font-weight:600;letter-spacing:.1em;' +
+    'text-transform:uppercase;color:var(--muted)}' +
+    'p.c::after{content:"";display:block;width:2.5rem;height:1px;margin:.75rem auto 0;background:var(--line)}' +
+    'h1{margin:0 0 .5rem;font-size:1.375rem;font-weight:600;letter-spacing:-.01em}' +
+    'p.m{margin:0;color:var(--muted)}' +
+    '</style></head><body><div role="alert">' +
+    '<p class="c">Offline</p><h1>This page is not available offline</h1>' +
+    '<p class="m">It has not been stored on this device. Reconnect and try again.</p>' +
+    '</div></body></html>';
 
 /**
  * The label a request carries for whoever is signed in, or `anon`.
@@ -110,6 +136,20 @@ const OFFLINE_HTML =
 function identityOf(request) {
     return (request && request.headers && request.headers.get('X-Pwax-Identity')) || 'anon';
 }
+
+/**
+ * Where install-time page payloads live.
+ *
+ * Not an identity, and it cannot be mistaken for one: an identity is sixteen hex
+ * characters. Everything in here was fetched at install without cookies, so it is the
+ * guest rendering of a page — the same content, from the same fetch, as the precached
+ * document that a navigation to that page is already answered with.
+ *
+ * It is separate from `anon` on purpose. `anon` is where signed-out *visitors* accumulate
+ * the pages they browse, which can include a form they were part-way through; this holds
+ * only what the build put there. Any identity may read it, and none may write to it.
+ */
+const INSTALLED = 'install';
 
 /**
  * Who a page payload was actually rendered for.
@@ -264,12 +304,14 @@ async function install() {
     // named from the manifest and the previous precaches are found by listing — so
     // awaiting them in turn only added the storage layer's latency up.
     //
-    // Pages go to their own cache, under the anonymous identity: what is fetched at
-    // install time is the guest rendering, and that is the only identity it may be served
-    // to. A signed-in visitor populates their own pages cache as they browse.
+    // Page payloads go to their own cache, which every identity can read and none can
+    // write to. What is fetched here is the guest rendering — cookieless, the same fetch
+    // that produces the precached document — so withholding it from a signed-in visitor
+    // protected nobody and broke the feature for them: offline, a page they had not
+    // already opened this session was the one page precaching could not give them.
     const [cache, pages, previous] = await Promise.all([
         caches.open(cacheName),
-        caches.open(pagesName(manifest, 'anon')),
+        caches.open(pagesName(manifest, INSTALLED)),
         previousPrecaches(cacheName),
     ]);
 
@@ -716,7 +758,7 @@ async function page(request, manifest, group, identity) {
     const cache = await caches.open(pagesName(manifest, identity));
 
     if (group.strategy === 'performance') {
-        const hit = await cache.match(request, { ignoreVary: true });
+        const hit = await storedPage(request, manifest, cache);
 
         if (hit) {
             return hit;
@@ -744,7 +786,7 @@ async function page(request, manifest, group, identity) {
 
         return response;
     } catch (error) {
-        const hit = await cache.match(request, { ignoreVary: true });
+        const hit = await storedPage(request, manifest, cache);
 
         if (hit) {
             return hit;
@@ -752,6 +794,32 @@ async function page(request, manifest, group, identity) {
 
         throw error;
     }
+}
+
+/**
+ * This page as it was last stored: the visitor's own copy, then the one the build shipped.
+ *
+ * The same shape as `matchScoped()`, and for the same reason. Their own copy first,
+ * because it was rendered for them and the build's was not. The build's as a fallback,
+ * because it is cookieless and shared by construction — it is what a navigation to this
+ * URL is already answered with offline, so refusing it to the runtime only meant a link
+ * failed where a reload of the same URL succeeded.
+ */
+async function storedPage(request, manifest, cache) {
+    const mine = await cache.match(request, { ignoreVary: true });
+
+    if (mine) {
+        return mine;
+    }
+
+    const name = pagesName(manifest, INSTALLED);
+
+    // `has` before `open`: a read must not bring a cache into existence.
+    if (!(await caches.has(name))) {
+        return undefined;
+    }
+
+    return (await caches.open(name)).match(request, { ignoreVary: true });
 }
 
 /** Reject a promise that takes too long, so a dead connection is not an indefinite wait. */
@@ -1382,27 +1450,52 @@ function dataName(manifest, group, identity) {
 async function trimIdentities(manifest) {
     const limit = manifest.identityCacheLimit || 2;
     const prefix = pagesPrefix(manifest);
-    const keys = (await caches.keys()).filter((key) => key.startsWith(prefix));
 
-    if (keys.length <= limit) {
+    // Reserved labels are filtered out *before* counting, not after choosing. They are not
+    // people: `anon` is every signed-out visitor at once, and `install` is the build's own
+    // copies that every identity falls back to. Counting them spends the budget on buckets
+    // nobody signed into — and because they are also the oldest, an eviction that picked
+    // them simply did nothing, so the setting did not begin to bite until there were
+    // several more identities than it names.
+    const identities = (await caches.keys())
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => key.slice(prefix.length))
+        .filter((identity) => !reserved(identity));
+
+    if (identities.length <= limit) {
         return;
     }
 
-    const doomed = keys.slice(0, keys.length - limit).map((key) => key.slice(prefix.length));
-
-    await Promise.all(doomed.filter((identity) => identity !== 'anon').map((identity) => forget(manifest, identity)));
+    // Oldest first, approximated by insertion order, which is what `caches.keys()` gives.
+    await Promise.all(
+        identities.slice(0, identities.length - limit).map((identity) => forget(manifest, identity))
+    );
 }
 
 /** Drop everything held for one identity, leaving every other identity untouched. */
 async function forget(manifest, identity) {
+    if (reserved(identity)) {
+        return;
+    }
+
     const keys = await caches.keys();
     const suffix = `-${identity}`;
 
     await Promise.all(
         keys
-            .filter((key) => key.startsWith(`${PREFIX}-`) && key.endsWith(suffix) && !key.endsWith('-anon'))
+            .filter((key) => key.startsWith(`${PREFIX}-`) && key.endsWith(suffix) && !reservedName(key))
             .map((key) => caches.delete(key))
     );
+}
+
+/** A label that names something other than one signed-in visitor. */
+function reserved(identity) {
+    return identity === 'anon' || identity === INSTALLED;
+}
+
+/** The same test, applied to a whole cache name. */
+function reservedName(key) {
+    return key.endsWith('-anon') || key.endsWith(`-${INSTALLED}`);
 }
 
 async function precacheFor(manifest) {

@@ -22,13 +22,13 @@ anything, so it is the checklist. There are no code changes to make unless you c
 
 ### 1. Cached pages could be read across identities
 
-Pages, API responses and runtime entries are stored in caches named after the signed-in
-visitor, so one person's pages are unreachable from another's session. That held for
+Pages, API responses and runtime entries were stored in caches named after the signed-in
+visitor, so one person's pages were unreachable from another's session. That held for
 writes and not for reads: the offline fallback used a lookup that searches *every* cache on
 the origin, so two people sharing a device — the second one offline — could be served the
 first one's cached responses.
 
-Nothing to change. Upgrading is the fix.
+Nothing to change. Upgrading is the fix. See §10 for the scheme that replaced the naming.
 
 ### 2. The identity could be a session out of date
 
@@ -154,16 +154,47 @@ application strips response headers it does not recognise, nothing is stored and
 the previous behaviour — correct, just slower. Allow the header through.
 
 **`forgetIdentity()` on sign-out now buys speed as well as privacy.** Stored documents are
-all signed-out renderings, so they are withheld entirely once any identity has a cache on
-the device — otherwise a signed-in visitor reloading offline would be told they are logged
-out, and the document carries its own payload so nothing corrects it. Clearing the bucket
-on sign-out restores the fast path for the next visitor.
+all signed-out renderings, so they are withheld entirely while somebody is signed in —
+otherwise a signed-in visitor reloading offline would be told they are logged out, and the
+document carries its own payload so nothing corrects it. Signing out puts the worker back
+to `anon` and restores the fast path for the next visitor.
 
 `service_worker.pages.runtime => false` turns off both halves, as before.
+
+### 10. Cache names no longer carry the signed-in identity
+
+Names were `pwax-pages-v1-<build>-<identity>`, one set per person who signed in on the
+device. That made a cross-user read impossible by construction — and meant a fresh empty
+cache on every sign-in, a set left behind per person, and everything re-fetched under the
+new name each time it changed.
+
+They are fixed now: `pwax-pages-v1-<build>`, `pwax-runtime-v1`, `pwax-data-<group>-<v>`.
+The separation is kept by emptying the visitor caches the moment the worker learns it is
+answering somebody else, which it learns from the `X-Pwax-Identity` header on both requests
+and responses.
+
+**`service_worker.identity_cache_limit` is gone.** It bounded how many per-person cache sets
+a device kept, and there are none. Remove it; `pwax:doctor` names it if you forget.
+
+```diff
+  'service_worker' => [
+-     'identity_cache_limit' => 2,
+  ],
+```
+
+**Two consequences worth knowing.** The separation is enforced by deleting rather than by
+being unaddressable, so it is weaker: a device that is switched off between one person
+signing out and the next signing in still has the last person's pages on disk until the
+next request. And the previous person's offline pages are now *gone* on a switch rather
+than parked — on a genuinely shared device, each person re-caches as they browse.
+
+Existing caches from 4.0.x are swept on the first activate of the new worker, so there is
+nothing to clear by hand.
 
 ### Checklist
 
 - [ ] `service_worker.strategy` → `service_worker.runtime_strategy`, and decided on its value
+- [ ] `service_worker.identity_cache_limit` removed
 - [ ] Data groups flattened; `max_size` → `max_entries`
 - [ ] `forgetIdentity()` called with no argument
 - [ ] `pwax.sw.registration` → `.controller` or `.registration()`
@@ -298,10 +329,10 @@ guest rendering; a route behind `auth` answers with a login screen instead of a 
 is refused, which `php artisan pwax:precache --verify` reports.
 
 **`runtime` is new, defaults to true, and is worth a decision.** With it on, every page a
-visitor opens is cached so that everywhere they have been works offline. Those pages are
-stored in a cache named after the signed-in identity, so one person's cached page cannot
-be served to another on a shared device, and `->offline(false)` marks a page that must
-never reach disk at all. Set `runtime` to false if that trade is not one you want.
+visitor opens is cached so that everywhere they have been works offline. The worker empties
+that cache when the signed-in visitor changes, so one person's cached page is not served to
+another on a shared device, and `->offline(false)` marks a page that must never reach disk
+at all. Set `runtime` to false if that trade is not one you want.
 
 ### 7. `service_worker.files` is now `service_worker.asset_groups`
 

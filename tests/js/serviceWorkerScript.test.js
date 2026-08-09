@@ -538,7 +538,7 @@ describe('the runtime strategy', () => {
 
         await worker.request('/exports/report.csv');
 
-        const runtime = await worker.caches.open('pwax-runtime-v1-anon');
+        const runtime = await worker.caches.open('pwax-runtime-v1');
         expect(await runtime.match('/exports/report.csv')).toBeTruthy();
     });
 
@@ -567,7 +567,7 @@ describe('the runtime strategy', () => {
         // can crowd out everything the cap was meant to protect.
         expect(await (await worker.request('/big.bin')).text()).toBe('x');
 
-        const runtime = await caches.open('pwax-runtime-v1-anon');
+        const runtime = await caches.open('pwax-runtime-v1');
         expect(await runtime.match('/big.bin')).toBeFalsy();
     });
 
@@ -631,7 +631,7 @@ describe('the runtime strategy', () => {
 
         await worker.request('/streamed');
 
-        const runtime = await worker.caches.open('pwax-runtime-v1-anon');
+        const runtime = await worker.caches.open('pwax-runtime-v1');
         expect(await runtime.match('/streamed')).toBeTruthy();
     });
 });

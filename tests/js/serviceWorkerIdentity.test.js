@@ -1,20 +1,18 @@
 /**
- * Cache partitioning between signed-in identities.
+ * One set of caches, kept to one visitor at a time.
  *
- * The package makes an unusually strong claim about this — `identityOf()`'s own docblock
- * says a cross-user read is *impossible*, "because they were never reachable under this
- * name to begin with", and the README repeats it as the reason storing page payloads at
- * all is safe. That claim is about a pair of properties, and only one of them was tested:
+ * The identity used to be part of every cache *name*, which made a cross-user read
+ * impossible by construction — and cost a fresh set of caches per person, an empty one
+ * minted on every sign-in, and everything re-fetched under the new name each time.
  *
- *   - **Writes** go into a cache named for the identity that made the request. Covered
- *     since identity partitioning shipped.
- *   - **Reads** must be confined to the same name. They were not. `networkFirst()` and
- *     `staleWhileRevalidate()` both called the global `caches.match(request)`, which by
- *     specification walks *every* cache on the origin — so the offline fallback would
- *     happily answer one visitor with the entry another had left behind.
+ * The names are now fixed. The property is kept instead by emptying the visitor caches the
+ * moment the worker learns it is serving somebody else, which it learns twice over: from
+ * the identity a response declares, and from the one a request claims. The first is the
+ * authority — the request that signs somebody in still carries who they were — and the
+ * second is what covers a visitor who is offline from their very first request, where no
+ * response ever arrives to announce the change.
  *
- * Partitioning that only holds on the way in is not partitioning. These tests exercise
- * the way out.
+ * These tests are about the seam between those two.
  */
 import { describe, expect, it } from 'vitest';
 import { FakeCaches, ORIGIN, PAGE_HEADERS, createWorker } from './helpers/serviceWorkerHarness.js';
@@ -53,8 +51,8 @@ function manifest(overrides = {}) {
 /**
  * A server that answers `/reports/summary` with whoever asked for it.
  *
- * `down` cuts the network, which is the only condition under which the fallback that
- * leaked could run.
+ * `down` cuts the network, which is the condition the fallback exists for and the one
+ * under which a stale copy could reach the wrong person.
  */
 function server(current, { down = new Set() } = {}) {
     return (path, request) => {
@@ -82,7 +80,11 @@ function server(current, { down = new Set() } = {}) {
             const who = (request && request.headers.get('X-Pwax-Identity')) || 'nobody';
 
             return new Response(`salary report for ${who}`, {
-                headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'private' },
+                headers: {
+                    'Content-Type': 'text/plain',
+                    'Cache-Control': 'private',
+                    'X-Pwax-Identity': who,
+                },
             });
         }
 
@@ -99,20 +101,22 @@ async function install(caches, current, options) {
     return worker;
 }
 
-/** The same URL, asked for by a particular signed-in visitor. */
+/** The same URL, asked for by a particular visitor. `anon` is a claim, not an absence. */
 const asIdentity = (identity) => ({ headers: { 'X-Pwax-Identity': identity } });
 
-describe('cache partitioning between identities', () => {
+describe('one visitor at a time', () => {
     it('does not serve one identity a response cached by another', async () => {
         const caches = new FakeCaches();
         const current = manifest();
 
-        // Alice visits while online. Her copy lands in a cache named for her.
+        // Alice visits while online.
         const alice = await install(caches, current);
-        const warm = await alice.request(PRIVATE, asIdentity(ALICE));
-        expect(await warm.text()).toBe(`salary report for ${ALICE}`);
+        expect(await (await alice.request(PRIVATE, asIdentity(ALICE))).text()).toBe(
+            `salary report for ${ALICE}`
+        );
 
-        // Bob signs in on the same device and the network is gone.
+        // Bob signs in on the same device and the network is gone, so no response ever
+        // arrives to announce him. His *request* says who he is, and that is enough.
         const bob = createWorker({
             manifest: current,
             caches,
@@ -133,7 +137,8 @@ describe('cache partitioning between identities', () => {
         const alice = await install(caches, current);
         await alice.request(PRIVATE, asIdentity(ALICE));
 
-        // No identity header at all — a signed-out visitor on a shared machine.
+        // `anon`, explicitly. The runtime sends the header for a signed-out visitor too,
+        // precisely so this case is a claim the worker can act on rather than a silence.
         const guest = createWorker({
             manifest: current,
             caches,
@@ -141,9 +146,7 @@ describe('cache partitioning between identities', () => {
         });
         await guest.dispatch('activate');
 
-        const response = await guest.request(PRIVATE);
-
-        expect(response.type).toBe('error');
+        expect((await guest.request(PRIVATE, asIdentity('anon'))).type).toBe('error');
     });
 
     it('still serves an identity its own cached response', async () => {
@@ -160,13 +163,14 @@ describe('cache partitioning between identities', () => {
         });
         await offline.dispatch('activate');
 
-        const response = await offline.request(PRIVATE, asIdentity(ALICE));
-
-        // The point of caching at all. Scoping reads must not cost the owner their copy.
-        expect(await response.text()).toBe(`salary report for ${ALICE}`);
+        // The point of caching at all. Keeping one visitor at a time must not cost the
+        // visitor their own copy.
+        expect(await (await offline.request(PRIVATE, asIdentity(ALICE))).text()).toBe(
+            `salary report for ${ALICE}`
+        );
     });
 
-    it('files a page by the identity the response reports, not the request', async () => {
+    it('empties on the identity a response reports, not the one the request claims', async () => {
         const caches = new FakeCaches();
         const current = manifest({
             assetGroups: [
@@ -204,21 +208,16 @@ describe('cache partitioning between identities', () => {
         await worker.dispatch('install');
         await worker.dispatch('activate');
 
-        // Sent as a guest — no identity header at all.
-        await worker.request('/dashboard', { headers: PAGE_HEADERS });
+        // Sent as a guest; answered as Alice.
+        await worker.request('/dashboard', {
+            headers: { ...PAGE_HEADERS, 'X-Pwax-Identity': 'anon' },
+        });
 
-        // `install()` opens the anon pages cache whether or not it stores anything, so
-        // the question is what is *in* each — not which names exist.
         const held = async (name) => (await (await caches.open(name)).keys()).map((key) => key.url);
 
-        const names = await caches.keys();
-        const pages = names.filter((name) => name.startsWith('pwax-pages-'));
-        const mine = pages.find((name) => name.endsWith(`-${ALICE}`));
-        const guest = pages.find((name) => name.endsWith('-anon'));
-
-        expect(mine).toBeDefined();
-        expect(await held(mine)).toEqual([`${ORIGIN}/dashboard`]);
-        expect(guest ? await held(guest) : []).toEqual([]);
+        // Stored, and stored once. The wipe that the change triggers runs before the write,
+        // so the page that announced the new visitor is not thrown away with the last one's.
+        expect(await held('pwax-pages-v1-h1')).toEqual([`${ORIGIN}/dashboard`]);
     });
 
     it('does not mint a cache just because someone read', async () => {
@@ -227,31 +226,27 @@ describe('cache partitioning between identities', () => {
 
         await install(caches, current);
 
-        // Bob asks for something nothing has stored, and the network answers. Scoping the
-        // read must not leave an empty cache named after him: that is litter, and on a
-        // shared device it is also a list of who has used it.
-        const bob = createWorker({
-            manifest: current,
-            caches,
-            routes: server(current),
-        });
+        const before = await caches.keys();
+
+        // Nothing has stored this and the network answers. A read must not bring a cache
+        // into existence: `caches.open` creates, and an empty cache left behind by a
+        // lookup makes the worker look as though it holds something when it holds nothing.
+        const bob = createWorker({ manifest: current, caches, routes: server(current) });
         await bob.dispatch('activate');
         await bob.request(RUNTIME, asIdentity(BOB));
 
-        const names = await caches.keys();
-
-        expect(names.filter((name) => name.endsWith(`-${BOB}`))).toEqual([]);
+        expect(await caches.keys()).toEqual(before);
     });
 
-    it('still serves the shared precache to every identity', async () => {
+    it('still serves the shared precache whoever is asking', async () => {
         const caches = new FakeCaches();
         const current = manifest();
 
         await install(caches, current);
 
         // The framework, the shell and the components are the application itself — the
-        // same bytes for everyone, precached once. Scoping reads must not partition them,
-        // or every visitor re-downloads the app.
+        // same bytes for everyone, and never emptied by a sign-in. Otherwise every
+        // sign-in re-downloads the app.
         const bob = createWorker({
             manifest: current,
             caches,
@@ -259,17 +254,14 @@ describe('cache partitioning between identities', () => {
         });
         await bob.dispatch('activate');
 
-        const response = await bob.request(RUNTIME, asIdentity(BOB));
-
-        expect(await response.text()).toBe('// runtime');
+        expect(await (await bob.request(RUNTIME, asIdentity(BOB))).text()).toBe('// runtime');
     });
 });
 
 describe('the build’s own page copies', () => {
-    it('survive a sweep of the oldest identities', async () => {
+    it('survive an identity change', async () => {
         const caches = new FakeCaches();
         const current = manifest({
-            identityCacheLimit: 1,
             assetGroups: [
                 { name: 'app', installMode: 'prefetch', urls: [RUNTIME, SHELL] },
                 { name: 'pages', installMode: 'prefetch', kind: 'page', urls: [] },
@@ -278,66 +270,25 @@ describe('the build’s own page copies', () => {
 
         const worker = await install(caches, current);
 
-        // Two people sign in, past the limit of one, so the sweep runs.
-        for (const who of [ALICE, BOB]) {
-            await caches.open(`pwax-pages-v1-h1-${who}`);
-        }
+        await worker.request(PRIVATE, asIdentity(ALICE));
+        await worker.request(PRIVATE, asIdentity(BOB));
 
-        await worker.dispatch('activate');
-
-        const names = await caches.keys();
-
-        // Neither reserved label is a person. `install` is the build's own copies, which
-        // every identity falls back to; evicting it to make room for one visitor would
-        // take the application offline for everyone else.
-        expect(names).toContain('pwax-pages-v1-h1-install');
+        // Not a person: this is what the build fetched without cookies, the copies every
+        // visitor falls back to. Emptying it on a sign-in would take the application
+        // offline for the person who just arrived.
+        expect(await caches.keys()).toContain('pwax-pages-v1-h1-install');
     });
 
-    it('do not spend the identity budget', async () => {
+    it('are not dropped by forgetting the visitor', async () => {
         const caches = new FakeCaches();
-        const current = manifest({
-            identityCacheLimit: 2,
-            assetGroups: [
-                { name: 'app', installMode: 'prefetch', urls: [RUNTIME, SHELL] },
-                { name: 'pages', installMode: 'prefetch', kind: 'page', urls: [] },
-            ],
-        });
-
-        const worker = await install(caches, current);
-
-        // `install` and `anon` exist alongside three people. The setting says how many
-        // signed-in identities keep caches here, so it is the three that are counted —
-        // and because the reserved two are also the oldest, counting them meant the
-        // eviction picked one of those, skipped it, and deleted nothing at all.
-        await caches.open(`pwax-pages-v1-h1-anon`);
-        for (const who of [ALICE, BOB, 'c1c2c3c4c5c6c7c8']) {
-            await caches.open(`pwax-pages-v1-h1-${who}`);
-        }
-
-        await worker.dispatch('activate');
-
-        const names = await caches.keys();
-
-        expect(names).toContain('pwax-pages-v1-h1-install');
-        expect(names).toContain('pwax-pages-v1-h1-anon');
-        // The oldest person goes; the two most recent stay.
-        expect(names).not.toContain(`pwax-pages-v1-h1-${ALICE}`);
-        expect(names).toContain(`pwax-pages-v1-h1-${BOB}`);
-        expect(names).toContain('pwax-pages-v1-h1-c1c2c3c4c5c6c7c8');
-    });
-
-    it('are not dropped by forgetting an identity', async () => {
-        const caches = new FakeCaches();
-        const current = manifest();
-
-        const worker = await install(caches, current);
-        await caches.open('pwax-pages-v1-h1-install');
+        const worker = await install(caches, manifest());
 
         await worker.dispatch('message', {
-            data: { type: 'PWAX_FORGET_IDENTITY', identity: 'install' },
+            data: { type: 'PWAX_FORGET_IDENTITY' },
             ports: [{ postMessage: () => {} }],
         });
 
         expect(await caches.keys()).toContain('pwax-pages-v1-h1-install');
+        expect(await caches.keys()).toContain('pwax-precache-v1-h1');
     });
 });

@@ -188,10 +188,17 @@ export function createServiceWorkerApi() {
          * device gets an application that still works offline rather than one that has to
          * download itself again.
          *
-         * @param {string} identity  `window.pwax.config.identity` for the user signing out.
+         * Called with no argument it uses the identity the runtime currently holds, which
+         * is the one you want and the one that is hard to get right by hand: reading
+         * `window.pwax.config.identity` into a variable early and passing it back later
+         * hands over whoever was signed in *then*. The runtime keeps its own copy in step
+         * with the server on every page load.
+         *
+         * @param {string} [identity]  Defaults to the current `window.pwax.config.identity`.
          */
         forgetIdentity(identity) {
             const controller = navigator.serviceWorker?.controller;
+            identity = identity || window.pwax?.config?.identity;
 
             if (!controller || !identity) {
                 return Promise.resolve(false);

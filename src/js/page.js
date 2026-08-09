@@ -106,6 +106,8 @@ export function createPageComponent({
                         return;
                     }
 
+                    this.adoptIdentity(payload);
+
                     if (payload && payload.__location) {
                         window.location.href = payload.__location;
                         return;
@@ -142,6 +144,44 @@ export function createPageComponent({
                         this.controller = null;
                     }
                 }
+            },
+
+            /**
+             * Follow the server's view of who is signed in.
+             *
+             * `config.identity` is read once from the shell's JSON island, and a Pwax
+             * application can change who is signed in without ever loading another
+             * document: `return redirect('/dashboard')` from a login controller is
+             * translated into a client-side navigation on purpose, and that is the
+             * documented behaviour.
+             *
+             * So the identity the runtime sends can be a whole session out of date — the
+             * guest label, still attached to every request an authenticated user makes.
+             * The service worker names its caches from it, which means those pages were
+             * being filed in the bucket every guest on the device can read. Worse, the
+             * documented sign-out call, `forgetIdentity(window.pwax.config.identity)`,
+             * read the same stale value and quietly cleared nothing.
+             *
+             * Every page payload now carries the identity it was actually rendered for, so
+             * the correction costs no extra request. `http.headers()` reads `config` per
+             * call, so assigning here is all the plumbing there is.
+             */
+            adoptIdentity(payload) {
+                if (!payload || !Object.prototype.hasOwnProperty.call(payload, 'identity')) {
+                    return;
+                }
+
+                const identity = payload.identity || null;
+
+                if (identity === config.identity) {
+                    return;
+                }
+
+                config.identity = identity;
+
+                // Anything the previous identity accumulated is now unreachable under the
+                // new name anyway, but a sign-out should not leave it on the device.
+                document.dispatchEvent(new CustomEvent('pwax:identity', { detail: { identity } }));
             },
 
             /**

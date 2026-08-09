@@ -17,7 +17,7 @@
  * the way out.
  */
 import { describe, expect, it } from 'vitest';
-import { FakeCaches, PAGE_HEADERS, createWorker } from './helpers/serviceWorkerHarness.js';
+import { FakeCaches, ORIGIN, PAGE_HEADERS, createWorker } from './helpers/serviceWorkerHarness.js';
 
 const SHELL = '/__pwax__/shell';
 const RUNTIME = '/__pwax__/pwax.js';
@@ -164,6 +164,61 @@ describe('cache partitioning between identities', () => {
 
         // The point of caching at all. Scoping reads must not cost the owner their copy.
         expect(await response.text()).toBe(`salary report for ${ALICE}`);
+    });
+
+    it('files a page by the identity the response reports, not the request', async () => {
+        const caches = new FakeCaches();
+        const current = manifest({
+            assetGroups: [
+                { name: 'app', installMode: 'prefetch', urls: [RUNTIME, SHELL] },
+                { name: 'pages', installMode: 'prefetch', kind: 'page', urls: [] },
+            ],
+        });
+
+        // The request that carries someone into their account still holds the identity
+        // they had before it: signing in is a client-side navigation, so nothing has
+        // reloaded to refresh the header. The response is the only thing that knows.
+        const worker = createWorker({
+            manifest: current,
+            caches,
+            routes: (path) => {
+                if (path === '/sw.json') {
+                    return Response.json(current);
+                }
+
+                if (path === '/dashboard') {
+                    return new Response(JSON.stringify({ template: '<p>hello</p>' }), {
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Cache-Control': 'no-store, private',
+                            'X-Pwax-Identity': ALICE,
+                            Vary: 'X-Pwax-Component, X-Requested-With, Accept',
+                        },
+                    });
+                }
+
+                return null;
+            },
+        });
+
+        await worker.dispatch('install');
+        await worker.dispatch('activate');
+
+        // Sent as a guest — no identity header at all.
+        await worker.request('/dashboard', { headers: PAGE_HEADERS });
+
+        // `install()` opens the anon pages cache whether or not it stores anything, so
+        // the question is what is *in* each — not which names exist.
+        const held = async (name) => (await (await caches.open(name)).keys()).map((key) => key.url);
+
+        const names = await caches.keys();
+        const pages = names.filter((name) => name.startsWith('pwax-pages-'));
+        const mine = pages.find((name) => name.endsWith(`-${ALICE}`));
+        const guest = pages.find((name) => name.endsWith('-anon'));
+
+        expect(mine).toBeDefined();
+        expect(await held(mine)).toEqual([`${ORIGIN}/dashboard`]);
+        expect(guest ? await held(guest) : []).toEqual([]);
     });
 
     it('still serves the shared precache to every identity', async () => {

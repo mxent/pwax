@@ -112,6 +112,23 @@ function identityOf(request) {
 }
 
 /**
+ * Who a page payload was actually rendered for.
+ *
+ * The request cannot answer this on its own. Signing in through the runtime is a
+ * client-side navigation by design, so the request that carries a visitor into their
+ * account still holds the identity they had before it — and filing that response by the
+ * request would put the first authenticated page in the bucket every guest can read.
+ *
+ * The response knows. `ComponentResponse` sends the identity it rendered for, so the write
+ * follows the server's answer and falls back to the request's only when there is none.
+ */
+function identityFor(request, response) {
+    const declared = response && response.headers && response.headers.get('X-Pwax-Identity');
+
+    return declared || identityOf(request);
+}
+
+/**
  * The request the client runtime would make for a page — and therefore the cache key.
  *
  * Page responses carry `Vary: X-Pwax-Component, X-Requested-With, Accept`, so an entry
@@ -695,8 +712,17 @@ async function page(request, manifest, group, identity) {
         // Not a payload — a login screen, a maintenance page, a captive portal. Hand it
         // back so the runtime can act on it, but do not remember it as this page.
         if (isJson(response) && storablePage(response)) {
-            await cache.put(pageKey(new URL(request.url).pathname + new URL(request.url).search), response.clone());
-            await trim(cache, group.maxEntries || manifest.maxEntries);
+            const url = new URL(request.url);
+
+            // Written by the response's identity, not the request's. The two differ for
+            // exactly one request — the one that signs someone in — and that is the
+            // request whose answer must not land in the guest bucket.
+            const owner = identityFor(request, response);
+            const destination =
+                owner === identity ? cache : await caches.open(pagesName(manifest, owner));
+
+            await destination.put(pageKey(url.pathname + url.search), response.clone());
+            await trim(destination, group.maxEntries || manifest.maxEntries);
         }
 
         return response;
@@ -1094,7 +1120,9 @@ async function put(request, response, manifest, identity) {
         return;
     }
 
-    const cache = await caches.open(runtimeName(manifest, identity));
+    // The response's identity wins over the request's, for the same reason it does on the
+    // page path: the request that signs someone in still carries who they were.
+    const cache = await caches.open(runtimeName(manifest, identityFor(request, response)));
     await cache.put(request, response);
     await trim(cache, manifest.maxEntries);
 }

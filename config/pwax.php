@@ -268,6 +268,54 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Security headers
+    |--------------------------------------------------------------------------
+    |
+    | Headers applied to every response Pwax itself serves — the runtime bundle, the
+    | source map, the manifests, the offline shell, the per-component module.
+    |
+    | They are set by the package, not by your global middleware, for a reason: a PWA
+    | shell and a piece of JavaScript want different things. The shell wants to be
+    | framed (when the application embeds itself) and to be cross-origin-isolated (for
+    | SharedArrayBuffer and high-resolution timers); a script wants neither. One blanket
+    | header set on the application would be wrong on one of them.
+    |
+    | Every value is overridable. Set any of them to `null` or `''` to drop the
+    | corresponding header.
+    |
+    |   referrer_policy   `Referrer-Policy`. The default `no-referrer` is what a PWA
+    |                     shell wants: nothing leaks to third parties the page
+    |                     happens to load assets from.
+    |   frame_options     `X-Frame-Options` for the HTML shell. `SAMEORIGIN` lets the
+    |                     application frame itself; `DENY` blocks that too.
+    |   permissions_policy `Permissions-Policy` for the shell. The default denies
+    |                      every powerful feature the application is not asking for
+    |                      (`camera`, `microphone`, `geolocation`, `payment`, etc.).
+    |                      Add features back as a comma-separated list of feature=value
+    |                      pairs, where `()` denies, `*` allows all origins, and
+    |                      `self` allows the application's own origin.
+    |   cross_origin_opener_policy  `Cross-Origin-Opener-Policy` for the shell.
+    |                               `same-origin` is the standard hardening value:
+    |                               it isolates the document from any other origin
+    |                               that might open or frame it.
+    |   cross_origin_embedder_policy `Cross-Origin-Embedder-Policy` for the shell.
+    |                               `require-corp` is the standard value, and every
+    |                               cross-origin asset then needs an explicit
+    |                               `crossorigin` attribute. Same-origin assets do not,
+    |                               so this does not affect the PWA's own imports.
+    |
+    */
+
+    'security' => [
+        'referrer_policy' => 'no-referrer',
+        'frame_options' => 'SAMEORIGIN',
+        'permissions_policy' => 'accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()',
+        'cross_origin_opener_policy' => 'same-origin',
+        'cross_origin_embedder_policy' => 'require-corp',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Visual customization
     |--------------------------------------------------------------------------
     */
@@ -583,11 +631,9 @@ return [
         | takes over routing from there.
         |
         | Application pages are precached too — see `pages` below — and the shell is what
-        | answers a navigation to one that is not. What makes both safe is the same thing:
-        | they are fetched without cookies, so each is the guest rendering or it is not
-        | stored. Precaching a page *with* the installing visitor's session would put one
-        | authenticated user's HTML on disk under a URL the next user of that device is
-        | served, which is why `pages.credentials` defaults to omitting them.
+        | answers a navigation to one that is not. Caches are shared across visitors, so
+        | the page or document the worker serves is whatever the server returned for
+        | the URL — there is no "anonymous-only" precache.
         */
         'shell' => [
             'enabled' => true,
@@ -706,15 +752,16 @@ return [
         | why an offline navigation paints the page immediately instead of showing the
         | shell's spinner while the runtime fetches a payload it already has.
         |
-        | They are fetched without cookies, so what is stored is the guest rendering.
-        | A route behind auth answers that request with a login screen rather than a
-        | payload, which is refused and reported — so listing one is harmless, it just
-        | will not be there before sign-in.
+        | They are cached normally, with cookies if the request carries them. Caches
+        | are shared across visitors, so the page the worker stores is the one the
+        | server returned — whatever that is. A route behind auth that answers a
+        | signed-out navigation with a login screen is detected and refused (a payload
+        | is JSON; a login screen is not), so the page never ends up as a login page.
         |
-        | Those copies are shared: every identity falls back to them, and a visitor's own
-        | cache is preferred when it has the page. That is what makes an offline link to a
-        | page you have not opened this session work at all — it is the same content a
-        | reload of that URL is already answered with.
+        | Those copies are shared: every visitor gets the same ones, and a visitor's own
+        | cache is preferred when it has the page. That is what makes an offline link
+        | to a page you have not opened this session work at all — it is the same
+        | content a reload of that URL is already answered with.
         |
         | `discover` finds them for you. Every GET route whose action hands a literal
         | view name to pwaxRender() is precached, so installing from the home page and
@@ -728,17 +775,13 @@ return [
         | what was found.
         |
         | `runtime` caches pages as they are visited, which covers what discovery
-        | cannot — a `/posts/{post}` someone actually opened. One cache holds them,
-        | whoever is signed in, and the worker empties it the moment the server says
-        | it is answering somebody else — so one visitor's pages are never served to
-        | the next on a shared device. What the build installed is kept separately and
-        | survives that, so a sign-in never re-downloads the application.
+        | cannot — a `/posts/{post}` someone actually opened. Caches are shared across
+        | visitors: the page the server returned for the URL is what the next visitor
+        | gets on this device. What the build installed is kept separately and
+        | survives a deploy, so a deploy never re-downloads the application.
         |
         | A page's rendered HTML is kept too, so reloading such a route offline paints
-        | it rather than a spinner — but only when the response says it was rendered
-        | for nobody. A navigation carries cookies, which a service worker cannot
-        | read, so it cannot tell whose document it would be handing back; the only
-        | one safe to hand to anybody is the anonymous one.
+        | it rather than a spinner.
         |
         | Between them these decide whether page content reaches disk at all. Turn
         | `runtime` off if none of it may; for a single page, ->offline(false) refuses
@@ -765,12 +808,12 @@ return [
             'max_entries' => 60,
 
             /*
-            | Fetched without cookies at install, so what is precached is the guest
-            | rendering — which is what "renders the same for everyone" means. Set this
-            | to 'include' only if the page genuinely needs the session, and understand
-            | that it then stores whichever visitor triggered the install.
+            | Cookies are passed through by default. Caches are shared across visitors,
+            | so what is stored is the response for whoever fetched the page last —
+            | for a page that renders the same for everyone this is irrelevant, and for
+            | a page that does not it is what `->offline(false)` exists to refuse.
             */
-            'credentials' => 'omit',
+            'credentials' => 'include',
         ],
 
         /*
@@ -785,13 +828,10 @@ return [
         |   performance  serve the cache while it is younger than `max_age`
         |
         | SECURITY: these are responses, not files, and they can hold one person's data.
-        | They are stored per signed-in identity and `no-store` is still honoured, but a
-        | device shared between two people is a device with both their data on it. Do not
-        | add an authenticated endpoint here without deciding that is acceptable.
-        |
-        | Written flat, like `pages` and `asset_groups`: `max_entries` here is the same
-        | quantity as `max_entries` there, and had no business being spelled differently
-        | one level further down.
+        | They are cached normally, and caches are shared across visitors — anyone with
+        | the device sees the same API responses as the last user. Do not add an
+        | authenticated endpoint here without deciding that is acceptable, or guarding
+        | the response with `X-Pwax-Cache: none` server-side.
         */
         'data_groups' => [
             // [

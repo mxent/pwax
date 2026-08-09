@@ -81,7 +81,7 @@ function offline(current, caches) {
 describe('installing', () => {
     it('caches the whole application, not just the pages that were visited', async () => {
         const worker = await boot();
-        const cache = await worker.caches.open('pwax-precache-v1-h1');
+        const cache = await worker.caches.open('pwax-precache-h1');
 
         for (const url of [VUE, RUNTIME, SHELL, MODAL, HOME]) {
             expect(await cache.match(url), `${url} was not precached`).toBeTruthy();
@@ -92,7 +92,7 @@ describe('installing', () => {
         // `cache.addAll` is atomic: a single 404 rejected the whole install, and the
         // surrounding catch then activated a worker with an empty cache.
         const worker = await boot(manifest(), { down: new Set([MODAL]) });
-        const cache = await worker.caches.open('pwax-precache-v1-h1');
+        const cache = await worker.caches.open('pwax-precache-h1');
 
         expect(await cache.match(RUNTIME)).toBeTruthy();
         expect(await cache.match(MODAL)).toBeFalsy();
@@ -111,7 +111,7 @@ describe('installing', () => {
         // Keeping a worker that works beats replacing it with one that answers every
         // offline navigation with an error.
         expect(worker.failed()).toBe(true);
-        expect(await caches.has('pwax-precache-v1-h1')).toBe(false);
+        expect(await caches.has('pwax-precache-h1')).toBe(false);
     });
 
     it('refuses to install without a manifest', async () => {
@@ -140,7 +140,7 @@ describe('installing', () => {
         expect(messages.some((m) => m.includes('no-store'))).toBe(true);
 
         // …and it genuinely is not stored.
-        const cache = await worker.caches.open('pwax-precache-v1-h1');
+        const cache = await worker.caches.open('pwax-precache-h1');
         expect(await cache.match('/settings')).toBeFalsy();
     });
 
@@ -195,8 +195,8 @@ describe('updating', () => {
         await worker.dispatch('install');
         await worker.dispatch('activate');
 
-        expect(await caches.has('pwax-precache-v1-h2')).toBe(true);
-        expect(await caches.has('pwax-precache-v1-h1')).toBe(false);
+        expect(await caches.has('pwax-precache-h2')).toBe(true);
+        expect(await caches.has('pwax-precache-h1')).toBe(false);
     });
 
     it('keeps the new cache when the worker is restarted between install and activate', async () => {
@@ -210,7 +210,7 @@ describe('updating', () => {
         await createWorker({ manifest: next, caches, routes: server(next) }).dispatch('install');
         await createWorker({ manifest: next, caches, routes: server(next) }).dispatch('activate');
 
-        const cache = await caches.open('pwax-precache-v1-h2');
+        const cache = await caches.open('pwax-precache-h2');
         expect(await cache.match(RUNTIME), 'activate deleted the cache install built').toBeTruthy();
     });
 
@@ -235,7 +235,7 @@ describe('what it will and will not store', () => {
 
         // Cache Storage ignores HTTP cache directives, so a worker that stores whatever it
         // fetches writes signed-in users' pages to disk for the next user of the device.
-        const runtime = await worker.caches.open('pwax-runtime-v1');
+        const runtime = await worker.caches.open('pwax-runtime');
         expect(await runtime.match('/settings')).toBeFalsy();
     });
 
@@ -267,7 +267,7 @@ describe('what it will and will not store', () => {
             await worker.request(`/img/${i}.png`);
         }
 
-        const runtime = await worker.caches.open('pwax-runtime-v1');
+        const runtime = await worker.caches.open('pwax-runtime');
         expect((await runtime.keys()).length).toBeLessThanOrEqual(3);
     });
 
@@ -280,7 +280,7 @@ describe('what it will and will not store', () => {
 
         // Sharing one bounded cache meant ordinary browsing could evict the app shell and
         // silently take offline capability away.
-        const cache = await worker.caches.open('pwax-precache-v1-h1');
+        const cache = await worker.caches.open('pwax-precache-h1');
         expect(await cache.match(SHELL), 'browsing evicted the app shell').toBeTruthy();
         expect(await cache.match(RUNTIME), 'browsing evicted the runtime').toBeTruthy();
     });
@@ -297,7 +297,7 @@ describe('what it will and will not store', () => {
         });
 
         expect(replied, 'the page was never told the caches were gone').toBe(true);
-        expect(await caches.has('pwax-precache-v1-h1')).toBe(false);
+        expect(await caches.has('pwax-precache-h1')).toBe(false);
         expect(await caches.has('other-app-cache')).toBe(true);
     });
 });
@@ -529,7 +529,7 @@ describe('the runtime strategy', () => {
         expect(await response.text()).toBe('body:/exports/report.csv');
 
         const names = await worker.caches.keys();
-        expect(names.filter((name) => name.startsWith('pwax-runtime-'))).toEqual([]);
+        expect(names.filter((name) => name.startsWith('pwax-runtime'))).toEqual([]);
     });
 
     it('keeps them when asked to', async () => {
@@ -538,7 +538,7 @@ describe('the runtime strategy', () => {
 
         await worker.request('/exports/report.csv');
 
-        const runtime = await worker.caches.open('pwax-runtime-v1');
+        const runtime = await worker.caches.open('pwax-runtime');
         expect(await runtime.match('/exports/report.csv')).toBeTruthy();
     });
 
@@ -567,7 +567,7 @@ describe('the runtime strategy', () => {
         // can crowd out everything the cap was meant to protect.
         expect(await (await worker.request('/big.bin')).text()).toBe('x');
 
-        const runtime = await caches.open('pwax-runtime-v1');
+        const runtime = await caches.open('pwax-runtime');
         expect(await runtime.match('/big.bin')).toBeFalsy();
     });
 
@@ -631,7 +631,7 @@ describe('the runtime strategy', () => {
 
         await worker.request('/streamed');
 
-        const runtime = await worker.caches.open('pwax-runtime-v1');
+        const runtime = await worker.caches.open('pwax-runtime');
         expect(await runtime.match('/streamed')).toBeTruthy();
     });
 });

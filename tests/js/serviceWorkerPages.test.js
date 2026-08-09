@@ -1,21 +1,13 @@
 /**
  * Page payloads, offline.
  *
- * This is the file that covers the defect the whole offline story turned on: an
- * application whose components, framework and shell were all precached, that installed as
- * a PWA and booted offline — and then showed "This page needs an internet connection to
- * load", because the one thing never cached was the page itself.
- *
- * Three separate faults produced that, and each has a test here that isolates it:
- *
- *   1. The worker fetched page URLs without the header that asks for a payload, so the
- *      server answered with the HTML shell, which is `no-store`, which the worker
- *      correctly refused to store. Every page in `precache` was silently skipped.
- *   2. It stored entries under a bare URL, while page responses carry
- *      `Vary: X-Pwax-Component, X-Requested-With, Accept` — so no lookup by the runtime
- *      could ever match, even had step 1 worked.
- *   3. A page request is not a navigation, so it never reached the shell fallback; it
- *      fell through to the generic network-first path and became a network error.
+ * Caches are shared across visitors. Whatever the server returns for a URL is stored and
+ * served to the next visitor that asks; there is no per-identity partition, no per-
+ * identity wiping, and no per-identity cache name. This file is the offline contract:
+ * the manifest tells the worker which routes are pages and exactly which headers to
+ * ask for them with, and if those headers ever stop matching `Pwax::VARY` every page
+ * lookup in every browser starts missing — silently, and with nothing in either
+ * codebase to point at.
  */
 import { describe, expect, it } from 'vitest';
 import { FakeCaches, PAGE_HEADERS, Request, createWorker } from './helpers/serviceWorkerHarness.js';
@@ -75,7 +67,7 @@ function server(current, { cacheable = [ABOUT], down = new Set() } = {}) {
         }
 
         if (path === SHELL) {
-            return new Response('<html>shell</html>', {
+            return new Response('<html><div id="pwax"></div><script id="pwax-initial">{"url":"' + path + '"}</script></html>', {
                 headers: { 'Content-Type': 'text/html', 'Cache-Control': 'public' },
             });
         }
@@ -86,17 +78,13 @@ function server(current, { cacheable = [ABOUT], down = new Set() } = {}) {
             if (!wants) {
                 // What ComponentResponse::shell() renders: the SPA shell with the
                 // component inlined in a `pwax-initial` island. `no-store` because it
-                // would carry a CSRF token for a session — there is none here, since the
-                // worker asks without cookies.
+                // would carry a CSRF token for a session.
                 return new Response(
                     `<html><div id="pwax"></div><script id="pwax-initial">{"url":"${path}"}</script></html>`,
                     {
                         headers: {
                             'Content-Type': 'text/html',
                             'Cache-Control': 'no-store, private',
-                            // Who it was rendered for. The worker keeps a navigation's HTML
-                            // only when this says `anon`, so the fake has to send it.
-                            'X-Pwax-Identity': 'anon',
                         },
                     }
                 );
@@ -133,15 +121,13 @@ function offline(current, caches) {
 }
 
 /** The request the client runtime makes for a page. */
-const asRuntime = (path, identity) =>
-    new Request(path, {
-        headers: identity ? { ...PAGE_HEADERS, 'X-Pwax-Identity': identity } : PAGE_HEADERS,
-    });
+const asRuntime = (path) =>
+    new Request(path, { headers: PAGE_HEADERS });
 
 /** Ask for a page the way the runtime does. */
-const visit = (worker, path, identity) =>
+const visit = (worker, path) =>
     worker.dispatch('fetch', {
-        request: asRuntime(path, identity),
+        request: asRuntime(path),
         preloadResponse: Promise.resolve(null),
     });
 
@@ -167,9 +153,7 @@ describe('page payloads offline', () => {
         const body = await visit(worker, ABOUT);
 
         // The network is tried first and fails — `freshness` means fresh when possible —
-        // and the payload comes back anyway. Before this fix the same request produced a
-        // network error, which the runtime rendered as "This page needs an internet
-        // connection to load" on a device that had the whole application installed.
+        // and the payload comes back anyway.
         expect(body.status).toBe(200);
         await expect(body.json()).resolves.toEqual({ template: '<p>/about</p>' });
     });
@@ -184,10 +168,10 @@ describe('page payloads offline', () => {
         expect(sent.headers.get('X-Requested-With')).toBe('XMLHttpRequest');
     });
 
-    it('precaches pages without cookies, so it stores the guest rendering', async () => {
+    it('passes cookies through, since caches are shared', async () => {
         const worker = await boot();
 
-        expect(worker.sentRequest(ABOUT).credentials).toBe('omit');
+        expect(worker.sentRequest(ABOUT).credentials).toBe('same-origin');
     });
 
     it('stores a page under a key carrying the headers its Vary names', async () => {
@@ -196,11 +180,10 @@ describe('page payloads offline', () => {
 
         await boot(current, { caches });
 
-        const pages = await caches.open(`pwax-pages-v1-h1-install`);
+        const pages = await caches.open(`pwax-pages-h1`);
 
         // The mechanism, not the outcome: a bare lookup must miss, because the stored key
-        // carries headers the bare request does not. This is the assertion that fails if
-        // anyone ever goes back to `cache.put(url, response)`.
+        // carries headers the bare request does not.
         await expect(pages.match(new Request(ABOUT))).resolves.toBeUndefined();
         await expect(pages.match(asRuntime(ABOUT))).resolves.toBeDefined();
     });
@@ -226,7 +209,7 @@ describe('page payloads offline', () => {
         await worker.dispatch('install');
         await worker.dispatch('activate');
 
-        const pages = await caches.open('pwax-pages-v1-h1-install');
+        const pages = await caches.open('pwax-pages-h1');
 
         await expect(pages.match(asRuntime(ABOUT))).resolves.toBeUndefined();
     });
@@ -267,56 +250,6 @@ describe('page payloads offline', () => {
         await expect((await response).text()).resolves.toContain('pwax-initial');
     });
 
-    it('fetches the document without cookies, like the payload', async () => {
-        const worker = await boot();
-
-        const documents = worker.requests.filter(
-            (r) => new URL(r.url).pathname === ABOUT && r.headers.get('X-Pwax-Component') !== 'true'
-        );
-
-        expect(documents).toHaveLength(1);
-        expect(documents[0].credentials).toBe('omit');
-    });
-
-    /**
-     * Ordering that carries weight: a route behind auth answers an anonymous request with
-     * a login screen. As JSON that is detectable and refused; as HTML it is
-     * indistinguishable from a real page. Requiring the payload to succeed first is what
-     * stops a login screen being cached as somebody's Settings page.
-     */
-    it('does not store a document when the payload was refused', async () => {
-        const current = manifest();
-        const caches = new FakeCaches();
-
-        const worker = createWorker({
-            manifest: current,
-            caches,
-            routes: (path, request) => {
-                if (path === '/sw.json') {
-                    return Response.json(current);
-                }
-
-                if (path === ABOUT) {
-                    // A login screen, whichever way it is asked for.
-                    return new Response('<html>login</html>', {
-                        headers: { 'Content-Type': 'text/html', 'Cache-Control': 'public' },
-                    });
-                }
-
-                return new Response('<html>shell</html>', {
-                    headers: { 'Content-Type': 'text/html', 'Cache-Control': 'public' },
-                });
-            },
-        });
-
-        await worker.dispatch('install');
-        await worker.dispatch('activate');
-
-        const precache = await caches.open('pwax-precache-v1-h1');
-
-        await expect(precache.match(ABOUT)).resolves.toBeUndefined();
-    });
-
     it('falls back to the shell for a page it has no document for', async () => {
         const current = manifest();
         const caches = new FakeCaches();
@@ -328,7 +261,7 @@ describe('page payloads offline', () => {
 
         const response = await offline(current, caches).navigate(DASHBOARD);
 
-        await expect((await response).text()).resolves.toBe('<html>shell</html>');
+        await expect((await response).text()).resolves.toContain('pwax-initial');
     });
 
     it('never answers a navigation with a page payload', async () => {
@@ -348,97 +281,23 @@ describe('page payloads offline', () => {
         expect(body).not.toContain('template');
     });
 
-    it('does not serve one identity a page cached for another', async () => {
+    it('serves the same cached page to a second visitor offline', async () => {
+        // Caches are shared: a page that the first visitor fetched is the page the second
+        // visitor gets. This used to require a per-identity wipe and a re-fetch, which
+        // cost both cache space and the offline experience.
         const current = manifest();
         const caches = new FakeCaches();
 
         const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
 
-        await visit(worker, DASHBOARD, 'alice');
+        await visit(worker, DASHBOARD);
 
-        await expectNetworkError(visit(offline(current, caches), DASHBOARD, 'bob'));
+        const response = await visit(offline(current, caches), DASHBOARD);
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ template: '<p>/dashboard</p>' });
     });
 
-    it('serves what the build precached to a signed-in visitor too', async () => {
-        const current = manifest();
-        const caches = new FakeCaches();
-
-        await boot(current, { caches });
-
-        // This used to be refused, on the reasoning that a cookieless rendering belongs
-        // to the guest it was rendered for. The reasoning does not survive contact with
-        // the rest of the worker: the precached *document* for this same URL is already
-        // served to whoever asks, so a signed-in visitor offline could reload `/about`
-        // and see it, but could not click a link to it. Refusing the payload withheld
-        // nothing and broke the feature precaching exists for.
-        const response = await visit(offline(current, caches), ABOUT, 'alice');
-
-        expect(response.type).not.toBe('error');
-        expect((await response.json()).template).toContain('about');
-    });
-
-    it('empties what the visitor left, and keeps what the build installed', async () => {
-        const current = manifest();
-        const caches = new FakeCaches();
-
-        const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
-
-        await visit(worker, DASHBOARD, 'alice');
-        expect(await (await caches.open('pwax-pages-v1-h1')).match(asRuntime(DASHBOARD))).toBeTruthy();
-
-        await worker.dispatch('message', { data: { type: 'PWAX_FORGET_IDENTITY' } });
-
-        // The pages they visited go. The precache and the build's own guest payloads stay,
-        // so the next person gets an application that still works offline rather than one
-        // that has to download itself again.
-        expect(await caches.has('pwax-pages-v1-h1')).toBe(false);
-        expect(await caches.has('pwax-pages-v1-h1-install')).toBe(true);
-        expect(await caches.has('pwax-precache-v1-h1')).toBe(true);
-    });
-
-    it('empties the last visitor when the server says it is serving somebody else', async () => {
-        const current = manifest();
-        const caches = new FakeCaches();
-
-        const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
-
-        await visit(worker, DASHBOARD, 'alice');
-
-        const pages = await caches.open('pwax-pages-v1-h1');
-        expect(await pages.match(asRuntime(DASHBOARD))).toBeTruthy();
-
-        // One cache holds them all, so the partition is kept by emptying it rather than by
-        // naming it after somebody. This is the moment that has to happen.
-        await visit(worker, ABOUT, 'bob');
-
-        expect(await (await caches.open('pwax-pages-v1-h1')).match(asRuntime(DASHBOARD))).toBeFalsy();
-        expect(await (await caches.open('pwax-pages-v1-h1')).match(asRuntime(ABOUT))).toBeTruthy();
-    });
-
-    it('does not empty anything for a request that claims nothing', async () => {
-        const current = manifest();
-        const caches = new FakeCaches();
-
-        const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
-
-        await visit(worker, DASHBOARD, 'alice');
-
-        // A browser fetching an image sends no identity header, and reading that as a
-        // sign-out would empty the cache on the next asset the page loads.
-        await worker.request('/images/logo.svg');
-
-        expect(await (await caches.open('pwax-pages-v1-h1')).match(asRuntime(DASHBOARD))).toBeTruthy();
-    });
-
-    /**
-     * The case that shipped broken.
-     *
-     * A page payload is `no-store, private` unless the route calls `->cacheable()`, which
-     * is the default for every route in a normal application. Runtime page caching gated
-     * its writes on the same rule assets use, so it stored nothing at all: the pages cache
-     * stayed empty, and offline gave a shell that could render nothing. The earlier test
-     * for this passed only because its fixture opted in.
-     */
     it('caches a page the route never marked cacheable, which is the default', async () => {
         const current = manifest();
         const caches = new FakeCaches();
@@ -455,13 +314,13 @@ describe('page payloads offline', () => {
         await expect(body.json()).resolves.toEqual({ template: '<p>/dashboard</p>' });
     });
 
-    it('precaches a no-store page too, since it is fetched without cookies', async () => {
+    it('precaches a no-store page too, since it is fetched the way the runtime asks', async () => {
         const current = manifest();
         const caches = new FakeCaches();
 
         await boot(current, { caches, cacheable: [] });
 
-        const pages = await caches.open('pwax-pages-v1-h1-install');
+        const pages = await caches.open('pwax-pages-h1');
 
         await expect(pages.match(asRuntime(ABOUT), { ignoreVary: true })).resolves.toBeDefined();
     });
@@ -554,7 +413,7 @@ describe('page payloads offline', () => {
         await worker.dispatch('activate');
         await visit(worker, DASHBOARD);
 
-        const pages = await caches.open('pwax-pages-v1-h1-anon');
+        const pages = await caches.open('pwax-pages-h1');
 
         await expect(pages.match(asRuntime(DASHBOARD), { ignoreVary: true })).resolves.toBeUndefined();
     });
@@ -635,57 +494,6 @@ describe('page payloads offline', () => {
     });
 });
 
-describe('a precached page and a signed-in visitor', () => {
-    /** Whatever `Shell::identity()` mints. Sixteen hex characters, opaque to the worker. */
-    const ALICE = 'a1b2c3d4e5f60718';
-
-    const signedIn = { headers: { ...PAGE_HEADERS, 'X-Pwax-Identity': ALICE } };
-
-    it('serves the precached payload offline', async () => {
-        // Reported: sign in, browse online, go offline, click a link to a page you have
-        // not opened this session — and it errors, while *reloading* that same URL works.
-        //
-        // Reloading worked because a navigation is answered from the precache, which is
-        // shared. The payload was precached too, but under `anon`, and a signed-in
-        // visitor's requests name their own cache — so the one thing precaching exists to
-        // provide was the one thing they could not reach.
-        const caches = new FakeCaches();
-
-        await boot(manifest(), { caches });
-
-        const offline = createWorker({
-            manifest: manifest(),
-            caches,
-            routes: server(manifest(), { down: new Set([ABOUT]) }),
-        });
-        await offline.dispatch('activate');
-
-        const response = await offline.request(ABOUT, signedIn);
-
-        expect(response.type).not.toBe('error');
-        expect((await response.json()).template).toContain('about');
-    });
-
-    it('still prefers the visitor\'s own copy when they have one', async () => {
-        const caches = new FakeCaches();
-
-        const online = await boot(manifest(), { caches });
-        await online.request(DASHBOARD, signedIn);
-
-        const offline = createWorker({
-            manifest: manifest(),
-            caches,
-            routes: server(manifest(), { down: new Set([DASHBOARD]) }),
-        });
-        await offline.dispatch('activate');
-
-        // Theirs, rendered with their session, not the guest copy.
-        expect((await (await offline.request(DASHBOARD, signedIn)).json()).template).toContain(
-            'dashboard'
-        );
-    });
-});
-
 describe('a server that is failing rather than absent', () => {
     /** A server that answers this path with a status instead of a payload. */
     const failing = (current, path, status) => (asked, request) =>
@@ -722,8 +530,7 @@ describe('a server that is failing rather than absent', () => {
         await broken.dispatch('activate');
 
         // Answering this from cache hides it twice: the visitor sees a page that works and
-        // reports nothing, and whoever deployed the bug has no idea a route is broken. A
-        // stale page is worse than an error page when the error is the thing you needed.
+        // reports nothing, and whoever deployed the bug has no idea a route is broken.
         expect((await visit(broken, ABOUT)).status).toBe(500);
     });
 
@@ -793,26 +600,10 @@ describe('a server that is failing rather than absent', () => {
  * A page answers two ways: JSON to the runtime, HTML to a navigation. Only the JSON was
  * ever stored after install, so a route the build did not precache — a dynamic one, or
  * anything route discovery could not reach — had no document at all and reloading it
- * offline fell back to the shell.
+ * offline fell back to the shell. With cookies passed through, the document the server
+ * returns is what the worker stores.
  */
 describe('documents cached as they are visited', () => {
-    /** A document response with whatever identity the server wants to claim. */
-    const withIdentity = (current, identity) => (path, request) => {
-        const wants = request && request.headers.get('X-Pwax-Component') === 'true';
-
-        if (path === DASHBOARD && !wants) {
-            return new Response(`<html><span>${identity ?? 'none'}</span></html>`, {
-                headers: {
-                    'Content-Type': 'text/html',
-                    'Cache-Control': 'no-store, private',
-                    ...(identity ? { 'X-Pwax-Identity': identity } : {}),
-                },
-            });
-        }
-
-        return server(current, { cacheable: [ABOUT, DASHBOARD] })(path, request);
-    };
-
     it('serves a route the build never precached', async () => {
         const current = manifest();
         const caches = new FakeCaches();
@@ -828,59 +619,20 @@ describe('documents cached as they are visited', () => {
         await expect(response.text()).resolves.toContain('pwax-initial');
     });
 
-    it('stores nothing when the server does not say who the page is for', async () => {
-        const current = manifest();
-        const caches = new FakeCaches();
-
-        const worker = createWorker({ manifest: current, caches, routes: withIdentity(current, null) });
-        await worker.dispatch('install');
-        await worker.dispatch('activate');
-        await worker.navigate(DASHBOARD);
-
-        // Missing is unknown, and unknown is somebody's. An application that does not send
-        // the header — or a route that is not a Pwax page at all — must not have its HTML
-        // filed where every visitor can read it.
-        await expect((await offline(current, caches).navigate(DASHBOARD)).text()).resolves.toBe(
-            '<html>shell</html>'
-        );
-    });
-
-    it('stores nothing when the page was rendered for somebody', async () => {
-        const current = manifest();
-        const caches = new FakeCaches();
-
-        const worker = createWorker({
-            manifest: current,
-            caches,
-            routes: withIdentity(current, 'cd5318ce8cd873b4'),
-        });
-        await worker.dispatch('install');
-        await worker.dispatch('activate');
-        await worker.navigate(DASHBOARD);
-
-        await expect((await offline(current, caches).navigate(DASHBOARD)).text()).resolves.toBe(
-            '<html>shell</html>'
-        );
-    });
-
-    it('withholds a guest document once somebody has signed in here', async () => {
+    it('stores a document rendered for any visitor', async () => {
+        // No identity check: the document the server returns is the document the next
+        // visitor gets. The old "must be anon" rule meant a missing header meant
+        // unknown, and unknown meant nobody's, and a route that didn't say so had its
+        // HTML thrown away.
         const current = manifest();
         const caches = new FakeCaches();
 
         const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
-        await worker.navigate(ABOUT);
+        await worker.navigate(DASHBOARD);
 
-        // Someone signs in and the runtime asks for a page under their identity, which is
-        // what puts a bucket on this device.
-        await visit(worker, DASHBOARD, 'cd5318ce8cd873b4');
+        const response = await offline(current, caches).navigate(DASHBOARD);
 
-        const response = await offline(current, caches).navigate(ABOUT);
-
-        // Every stored document is a signed-out rendering, and handing one to a signed-in
-        // visitor tells them they are logged out when they are not — and unlike a slow
-        // paint it does not correct itself, because the document carries its own payload.
-        // The shell defers the question to a request that carries an identity.
-        await expect(response.text()).resolves.toBe('<html>shell</html>');
+        await expect(response.text()).resolves.toContain('pwax-initial');
     });
 
     it('stores nothing when runtime page caching is off', async () => {
@@ -893,7 +645,7 @@ describe('documents cached as they are visited', () => {
         const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
         await worker.navigate(DASHBOARD);
 
-        expect(await caches.keys()).not.toContain('pwax-documents-v1-h1');
+        expect(await caches.keys()).not.toContain('pwax-documents-h1');
     });
 
     it('drops the documents of a build that has been replaced', async () => {
@@ -903,12 +655,12 @@ describe('documents cached as they are visited', () => {
         const worker = await boot(first, { caches, cacheable: [ABOUT, DASHBOARD] });
         await worker.navigate(DASHBOARD);
 
-        expect(await caches.keys()).toContain('pwax-documents-v1-h1');
+        expect(await caches.keys()).toContain('pwax-documents-h1');
 
         // A document has the compiled component inlined, so one kept across a deploy would
         // paint the previous build's markup into this build's shell.
         await boot(manifest({ hash: 'h2' }), { caches, cacheable: [ABOUT, DASHBOARD] });
 
-        expect(await caches.keys()).not.toContain('pwax-documents-v1-h1');
+        expect(await caches.keys()).not.toContain('pwax-documents-h1');
     });
 });

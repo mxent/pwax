@@ -23,7 +23,6 @@
     // the directive is shredded into a syntax error.
     $swConfig = [
         'hash' => (string) ($manifest['hash'] ?? ''),
-        'version' => (string) ($manifest['version'] ?? 'v1'),
         'strategy' => (string) ($manifest['strategy'] ?? 'network-first'),
         'maxEntries' => (int) ($manifest['maxEntries'] ?? 60),
         'navigationPreload' => (bool) ($manifest['navigationPreload'] ?? true),
@@ -60,15 +59,6 @@ const STATE_KEY = '/__pwax__/sw-state';
  * running.
  */
 const PENDING_KEY = '/__pwax__/sw-pending';
-
-/**
- * Who the visitor caches currently belong to.
- *
- * In the state cache rather than in memory, because the browser kills an idle worker
- * routinely and one that woke with no record would treat the next response as the first
- * and never notice that the person had changed.
- */
-const IDENTITY_KEY = '/__pwax__/sw-identity';
 
 /**
  * How many assets to precache at once.
@@ -127,99 +117,6 @@ const OFFLINE_HTML =
     '</div></body></html>';
 
 /**
- * What a request says about who is asking, or null when it says nothing.
- *
- * The distinction is load-bearing. Every request the client runtime makes carries this
- * header — `anon` included, deliberately — so that "a guest is asking" and "this is not a
- * Pwax request at all" are different signals. A browser fetching an image says nothing,
- * and reading that as a sign-out would empty the caches on the next asset a page loads.
- *
- * The value is an opaque HMAC minted by the server (`Shell::identity()`); the worker only
- * ever compares it, never interprets it.
- */
-function declaredIdentity(request) {
-    return (request && request.headers && request.headers.get('X-Pwax-Identity')) || null;
-}
-
-/**
- * Who a response was actually rendered for, or null when nothing said.
- *
- * The request cannot answer this on its own. Signing in through the runtime is a
- * client-side navigation by design, so the request that carries a visitor into their
- * account still holds the identity they had before it. The response knows:
- * `ComponentResponse` sends the identity it rendered for, on the payload and on the HTML
- * alike, and the request is consulted only when the response is silent.
- */
-function identityFor(request, response) {
-    const declared = response && response.headers && response.headers.get('X-Pwax-Identity');
-
-    return declared || declaredIdentity(request);
-}
-
-/**
- * Who the visitor caches currently belong to.
- *
- * `undefined` until read, `null` when nothing has ever been recorded. Memoised because it
- * is consulted on every page response and the worker is a single instance; a worker the
- * browser has killed and restarted simply reads it back from the state cache.
- */
-let knownIdentity = undefined;
-
-async function currentIdentity() {
-    if (knownIdentity === undefined) {
-        const stored = await readManifest(IDENTITY_KEY);
-
-        knownIdentity = stored && typeof stored.identity === 'string' ? stored.identity : null;
-    }
-
-    return knownIdentity;
-}
-
-/**
- * Notice that a different person is being served, and empty what belonged to the last one.
- *
- * This is what replaces naming caches after the visitor. The old scheme made a cross-user
- * read impossible by construction, which is stronger — but it also meant a new set of
- * caches per person, an empty one minted on every sign-in, and everything re-fetched under
- * the new name. One cache, emptied the moment the server says it is answering somebody
- * else, holds the property that actually matters on a shared device.
- *
- * Driven by the server's own statement rather than by anything the client sends, so it
- * cannot be skipped by a page that forgot to call `forgetIdentity()`. The window it leaves
- * is one response wide: the response that announces the change is written after the wipe,
- * never before.
- *
- * `null` on the first ever response is recorded and nothing is wiped — there is nothing
- * there to belong to anyone.
- */
-async function syncIdentity(manifest, identity) {
-    // A request that claims nothing is not a claim that nobody is signed in.
-    if (!identity) {
-        return;
-    }
-
-    const known = await currentIdentity();
-
-    if (known === identity) {
-        return;
-    }
-
-    knownIdentity = identity;
-    await writeManifest(IDENTITY_KEY, { identity });
-
-    if (known !== null) {
-        await wipeVisitorCaches(manifest);
-    }
-}
-
-/** Is anybody signed in on this device? */
-async function signedInHere() {
-    const identity = await currentIdentity();
-
-    return identity !== null && identity !== 'anon';
-}
-
-/**
  * The request the client runtime would make for a page — and therefore the cache key.
  *
  * Page responses carry `Vary: X-Pwax-Component, X-Requested-With, Accept`, so an entry
@@ -234,15 +131,14 @@ function pageKey(url) {
 /**
  * The same request, aimed at the network.
  *
- * `credentials: 'omit'` by default, and that matters. A page is only precacheable because
- * it renders the same for everyone — that is what `->cacheable()` asserts — so the
- * anonymous rendering is the correct one to store. Fetching with cookies would precache
- * whichever user happened to trigger the install, on a device they may share.
+ * Used to fetch page payloads and documents at install. The default credentials mode lets
+ * the request pass cookies through, so precaching stores whatever the server actually
+ * rendered for the request.
  */
 function pageRequest(url, credentials) {
     return new Request(url, {
         headers: CONFIG.pageHeaders || {},
-        credentials: credentials || 'omit',
+        credentials: credentials || 'same-origin',
         cache: 'reload',
     });
 }
@@ -279,18 +175,6 @@ self.addEventListener('message', (event) => {
     if (type === 'PWAX_CLEAR_CACHES') {
         event.waitUntil(clearCaches().then(() => reply(event, { type: 'PWAX_CACHES_CLEARED' })));
         return;
-    }
-
-    // Sign-out. Drops one person's pages, runtime entries and API responses while leaving
-    // the precache — the framework, the components, the shell — in place, so the next
-    // person to use the device gets an application that still works offline rather than
-    // one that has to download itself again.
-    if (type === 'PWAX_FORGET_IDENTITY') {
-        event.waitUntil(
-            state()
-                .then((manifest) => forgetVisitor(manifest))
-                .then(() => reply(event, { type: 'PWAX_IDENTITY_FORGOTTEN' }))
-        );
     }
 });
 
@@ -351,18 +235,12 @@ async function install() {
 
     const cacheName = precacheName(manifest);
 
-    // Opened together. Nothing here depends on anything else here — the two caches are
-    // named from the manifest and the previous precaches are found by listing — so
+    // Opened together. Nothing here depends on anything else here — the cache and pages
+    // are named from the manifest and the previous precaches are found by listing — so
     // awaiting them in turn only added the storage layer's latency up.
-    //
-    // Page payloads go to their own cache, which every identity can read and none can
-    // write to. What is fetched here is the guest rendering — cookieless, the same fetch
-    // that produces the precached document — so withholding it from a signed-in visitor
-    // protected nobody and broke the feature for them: offline, a page they had not
-    // already opened this session was the one page precaching could not give them.
     const [cache, pages, previous] = await Promise.all([
         caches.open(cacheName),
-        caches.open(installedPagesName(manifest)),
+        caches.open(pagesName(manifest)),
         previousPrecaches(cacheName),
     ]);
 
@@ -389,7 +267,6 @@ async function install() {
             crossOrigin: crossOrigin.has(entry.url),
             kind: entry.kind,
             credentials: entry.credentials,
-            documents: entry.kind === 'page' ? cache : null,
         })
     );
 
@@ -449,12 +326,17 @@ async function activate() {
     const manifest = installed || (await readManifest(PENDING_KEY)) || (await readManifest(STATE_KEY)) || CONFIG;
     const keep = new Set([
         precacheName(manifest),
-        installedPagesName(manifest),
-        documentsName(manifest),
         pagesName(manifest),
-        runtimeName(manifest),
+        documentsName(manifest),
+        runtimeName(),
         STATE_CACHE,
     ]);
+
+    // The data caches are matched by prefix in the sweep below, not by name, since one
+    // data group can be added or removed across deploys and we want the rest to survive.
+    for (const group of manifest.dataGroups || []) {
+        keep.add(dataName(group));
+    }
 
     // Promoted before the sweep, so a worker terminated midway through cannot come back
     // and mistake the cache it is activating for a stale one.
@@ -465,15 +347,7 @@ async function activate() {
     // origin and deleting those would be someone else's outage.
     const keys = await caches.keys();
 
-    // Every cache this build owns can now be named outright, which it could not when each
-    // signed-in visitor had a set of their own. Data groups are the exception and are
-    // matched by prefix: they are answers from an API rather than part of the build, so
-    // they survive a deploy and an application that was working offline still is the moment
-    // a new version installs.
-    const live = [`${PREFIX}-data-`];
-    const stale = keys.filter(
-        (key) => key.startsWith(`${PREFIX}-`) && !keep.has(key) && !live.some((prefix) => key.startsWith(prefix))
-    );
+    const stale = keys.filter((key) => key.startsWith(`${PREFIX}-`) && !keep.has(key));
 
     await Promise.all(stale.map((key) => caches.delete(key)));
 
@@ -494,7 +368,7 @@ async function activate() {
  * re-downloaded — the difference between a few kilobytes and the whole application on
  * every deploy, over whatever connection the visitor happens to have.
  */
-async function store(cache, url, { hash, inherited, previous, crossOrigin, kind, credentials, documents }) {
+async function store(cache, url, { hash, inherited, previous, crossOrigin, kind, credentials }) {
     const page = kind === 'page';
 
     if (hash && inherited.get(url) === hash) {
@@ -502,7 +376,7 @@ async function store(cache, url, { hash, inherited, previous, crossOrigin, kind,
             const copy = await old.match(url);
 
             if (copy) {
-                await cache.put(url, copy);
+                await cache.put(page ? pageKey(url) : url, copy);
                 return true;
             }
         }
@@ -530,8 +404,6 @@ async function store(cache, url, { hash, inherited, previous, crossOrigin, kind,
     // A page must actually be a payload. `fetch` follows redirects silently, so a route
     // behind `auth` answers 200 with the login page's HTML — perfectly `ok`, and useless
     // as a cached page. Storing it would serve the login screen for that route forever.
-    // This is also what keeps an authenticated route out of the anonymous precache: asked
-    // for without cookies, it answers with the login screen and is refused here.
     if (page && !isJson(response)) {
         return false;
     }
@@ -544,47 +416,7 @@ async function store(cache, url, { hash, inherited, previous, crossOrigin, kind,
     // response's `Vary` can be satisfied on lookup.
     await cache.put(page ? pageKey(url) : url, response);
 
-    if (page && documents) {
-        await storeDocument(documents, url, credentials);
-    }
-
     return true;
-}
-
-/**
- * Store the page's rendered HTML, so an offline navigation gets the real document.
- *
- * The payload alone is enough to *work* offline — the shell boots and the runtime renders
- * from it — but it means a spinner and a second round trip on a device that already has
- * everything. The document has the component inlined in its `pwax-initial` island, so an
- * offline navigation paints the page immediately, exactly as an online one does.
- *
- * Deliberately in the precache rather than beside the payload. Both are the same URL, and
- * page responses vary on `Accept` among other things — a document stored next to the JSON
- * would need a key carrying the exact `Accept` string the browser sends on a navigation,
- * which differs between browsers and is not knowable here. Separate caches make each
- * lookup unambiguous. The precache is also simply where it belongs: fetched without
- * cookies, identical for every visitor, versioned and swept with the build, exactly like
- * the offline shell.
- *
- * Only ever called after the payload fetch succeeded, and that ordering is load-bearing.
- * A route behind `auth` answers an anonymous request with a login screen; as JSON that is
- * detectable and refused, as HTML it is indistinguishable from a real page. Requiring the
- * payload first is what stops a login screen being cached as somebody's Settings page.
- */
-async function storeDocument(cache, url, credentials) {
-    try {
-        const response = await fetch(
-            new Request(url, { cache: 'reload', credentials: credentials || 'omit' })
-        );
-
-        if (response.ok && response.status !== 206 && storablePage(response)) {
-            await cache.put(url, response);
-        }
-    } catch {
-        // The payload is already stored and is what offline correctness depends on. A
-        // document that could not be fetched costs a spinner, not a broken page.
-    }
 }
 
 /**
@@ -842,28 +674,13 @@ function pageGroupFor(manifest, key, request) {
 }
 
 /**
- * A page payload: from the network when there is one, from this identity's cache when
- * there is not.
+ * A page payload: from the network when there is one, from the cache when there is not.
  *
- * This is the request that used to fail. The runtime fetches the page it is navigating to
- * with `mode: 'cors'` rather than `'navigate'`, so it never reached the shell fallback —
- * it fell through to the generic network-first path, missed, and surfaced as "This page
- * needs an internet connection to load" on a device that had the whole application
- * installed.
+ * Caches are shared across visitors. Whatever the server returns for a URL is stored and
+ * served to the next visitor. A page that genuinely must not reach disk uses
+ * `->offline(false)`; the server still says so on the response, and the worker respects it.
  */
 async function page(request, manifest, group) {
-    // Before the read, from the request's own claim. The write path syncs from the
-    // response, which is the authority — but a response only arrives when the network
-    // does, and the case this exists for is a visitor who is offline from the first
-    // request. Without this, somebody signing in on a device where the last person's
-    // pages are still stored would be served them, because nothing had yet told the
-    // worker the person had changed.
-    //
-    // Stale for exactly one request, the one that signs somebody in, and stale in the
-    // safe direction: it matches what is stored, so nothing is wiped and nothing is
-    // served that was not already theirs.
-    await syncIdentity(manifest, declaredIdentity(request));
-
     if (group.strategy === 'performance') {
         const hit = await storedPage(request, manifest);
 
@@ -875,17 +692,8 @@ async function page(request, manifest, group) {
     try {
         const response = await withTimeout(fetch(request), group.timeout);
 
-        // Not a payload — a login screen, a maintenance page, a captive portal. Hand it
-        // back so the runtime can act on it, but do not remember it as this page.
         if (isJson(response) && storablePage(response)) {
             const url = new URL(request.url);
-
-            // Before the write, never after. The response's identity is the authority —
-            // the request that signs somebody in still carries the identity they had
-            // before it — so this is the moment the change is visible, and the moment the
-            // last person's pages have to go. Wiping afterwards would leave the new
-            // visitor's first page in a cache about to be emptied.
-            await syncIdentity(manifest, identityFor(request, response));
 
             const cache = await caches.open(pagesName(manifest));
 
@@ -919,26 +727,26 @@ async function page(request, manifest, group) {
 }
 
 /**
- * This page as it was last stored: the visitor's own copy, then the one the build shipped.
+ * This page as it was last stored.
  *
- * The same shape as `matchScoped()`, and for the same reason. Their own copy first,
- * because it was rendered for them and the build's was not. The build's as a fallback,
- * because it is cookieless and shared by construction — it is what a navigation to this
- * URL is already answered with offline, so refusing it to the runtime only meant a link
- * failed where a reload of the same URL succeeded.
+ * The same cache for every visitor. Caches are shared, so the page the server returned
+ * last is what the next visitor gets.
  */
 async function storedPage(request, manifest) {
-    // `has` before `open` throughout: `caches.open` *creates*, and a read that brings a
-    // cache into existence leaves an empty one behind for every visitor who merely looked
-    // at a page. Those empty caches are litter, and they made the worker look as though it
-    // held something for a route when it held nothing at all.
-    for (const name of [pagesName(manifest), installedPagesName(manifest)]) {
-        const cache = await openIfPresent(name);
-        const hit = cache && (await cache.match(request, { ignoreVary: true }));
+    // `has` before `open`: `caches.open` *creates*, and a read that brings a cache into
+    // existence leaves an empty one behind for every visitor who merely looked at a page.
+    // Those empty caches are litter.
+    //
+    // Match by the request the runtime actually sends, with its `Vary` headers. A stored
+    // entry with no headers would not be matched by the runtime's request, and matching
+    // with `ignoreVary` would let a bare URL hit an entry that should only answer the
+    // component-bearing request.
+    const name = pagesName(manifest);
+    const cache = await openIfPresent(name);
+    const hit = cache && (await cache.match(request));
 
-        if (hit) {
-            return hit;
-        }
+    if (hit) {
+        return hit;
     }
 
     return undefined;
@@ -1036,11 +844,10 @@ function dataGroupFor(manifest, key) {
  * forfeits streaming for every request that goes through here.
  */
 async function dataResponse(request, manifest, group) {
-    await syncIdentity(manifest, declaredIdentity(request));
-
     const config = group.cacheConfig || {};
-    const name = dataName(manifest, group);
-    const key = new URL(request.url).pathname + new URL(request.url).search;
+    const name = dataName(group);
+    const url = new URL(request.url);
+    const key = url.pathname + url.search;
 
     // Opened lazily, and only for a read that has something to read. Opening at the top
     // created this cache for every request that passed through, so a device that had never
@@ -1056,8 +863,6 @@ async function dataResponse(request, manifest, group) {
         const response = await withTimeout(fetch(request), config.timeout);
 
         if (cacheable(response)) {
-            await syncIdentity(manifest, identityFor(request, response));
-
             const cache = await caches.open(name);
 
             await cache.put(request, response.clone());
@@ -1152,7 +957,7 @@ async function trimData(cache, maxSize) {
 }
 
 /**
- * Navigations go to the network, and a guest rendering of one is kept.
+ * Navigations go to the network, and any response that is safe to keep is kept.
  *
  * A page has two representations. The runtime asks for the payload and gets JSON; a
  * reload, a bookmark, a link from outside the app is a navigation and gets HTML with the
@@ -1160,18 +965,8 @@ async function trimData(cache, maxSize) {
  * did not precache — a dynamic one, or anything route discovery could not reach — had no
  * document at all, and reloading it offline fell all the way back to the shell.
  *
- * What is stored is deliberately narrow: only a response that *says* it was rendered for
- * a signed-out visitor, by carrying `X-Pwax-Identity: anon`. Not a response that merely
- * looks anonymous, and not one with no header at all — an unknown identity is treated as
- * somebody's, so a server that does not send it stores nothing.
- *
- * The reason for that narrowness is that a navigation is the one request whose sender the
- * worker cannot identify. The runtime's fetches carry an identity header; a document
- * request made by the browser carries cookies, which a worker cannot read. So there is no
- * way to decide *whose* document to hand back, and the only document that is safe to hand
- * to anybody is the one that belongs to nobody. Signed-in pages keep working offline the
- * way they already did: the shell boots and the runtime asks for the payload, and that
- * request does carry an identity.
+ * Caches are shared across visitors; whatever HTML the server returns for a URL is
+ * stored, and the next visitor that asks gets the same answer.
  */
 async function navigate(event, manifest) {
     const path = new URL(event.request.url).pathname;
@@ -1238,17 +1033,12 @@ async function navigate(event, manifest) {
 }
 
 /**
- * Keep a navigation's HTML, when it is safe to hand back to anyone.
+ * Keep a navigation's HTML, when it is safe to keep.
  *
- * `X-Pwax-Identity: anon`, present and explicit. A response with no header is not treated
- * as anonymous — an application that does not send one, or a route that is not a Pwax page
- * at all, would otherwise have a signed-in document filed where every visitor can read it.
- * Missing means unknown, and unknown means no.
- *
- * `redirected` is the HTML counterpart of the payload path's JSON check. A route behind
- * `auth` answers a signed-out navigation by redirecting to the login screen, and `fetch`
- * follows it silently — so without this the login page would be stored as that route's
- * document and served under its URL forever.
+ * Caches are shared across visitors. A response is stored as long as it is `ok`, HTML,
+ * and not a followed redirect (a route behind `auth` answers a navigation by redirecting
+ * to the login screen, and `fetch` follows it silently — so without this the login page
+ * would be stored as that route's document and served under its URL forever).
  */
 async function rememberDocument(response, manifest, path) {
     // The same switch that governs the payload. `pages.runtime => false` is documented as
@@ -1263,8 +1053,7 @@ async function rememberDocument(response, manifest, path) {
         !response.ok ||
         response.redirected ||
         !isHtml(response) ||
-        !storablePage(response) ||
-        (response.headers.get('X-Pwax-Identity') || '') !== 'anon'
+        !storablePage(response)
     ) {
         return;
     }
@@ -1293,34 +1082,12 @@ async function rememberDocument(response, manifest, path) {
 }
 
 /**
- * The stored HTML for a path: what this device saw, then what the build shipped.
+ * The stored HTML for a path: what the device has seen, then what the build shipped.
  *
- * Withheld once anyone has signed in on this device, and that is the whole of "use them
- * according to the request". Every document here is a signed-out rendering — the precached
- * ones were fetched at install without cookies, the runtime ones said so themselves — and
- * a signed-out rendering is the wrong answer for a signed-in visitor. It is not a leak:
- * nothing personal is in these caches. It is the page telling someone they are logged out
- * when they are not, and unlike a slow paint it does not correct itself, because the
- * document carries its own inlined payload and the runtime has no reason to refetch it.
- *
- * So a device with a signed-in bucket gets the shell instead, and the runtime's own
- * request — which carries an identity — decides what to render. That costs a spinner and
- * buys the right page. `pwax.sw.forgetIdentity()` on sign-out clears the bucket and the
- * fast path comes back.
- *
- * Note what this is *not*: the install bucket of guest payloads, which `storedPage()`
- * still falls back to for a signed-in visitor, is deliberately unguarded. The two look
- * like the same decision made twice, opposite ways, and they are not. Withholding a
- * document costs a spinner, because the shell then boots and asks for the payload — which
- * consults the visitor's own bucket first, and reaches the same guest copy only if they
- * have none. Withholding the payload would cost the page itself: there is nothing behind
- * it. One has a strictly better answer available and the other has nothing.
+ * Caches are shared across visitors. Whatever HTML the server returned for the URL is
+ * what comes back.
  */
 async function storedDocument(manifest, path) {
-    if (await signedInHere()) {
-        return null;
-    }
-
     const name = documentsName(manifest);
 
     // `has` before `open`: a read must not bring a cache into existence.
@@ -1346,11 +1113,6 @@ function isHtml(response) {
  * older half: this is what the *build* installed, where the documents cache holds what the
  * device has since visited. A route discovery could not read has neither until somebody
  * opens it, and until then the shell answers.
- *
- * Not scoped by identity, and does not need to be: this reads the precache by name, and
- * every document in it was fetched without cookies at install. It is the guest rendering
- * or it is not there. Compare `matchScoped()`, which exists because the *runtime* caches
- * hold one person's responses and must never be read across the partition.
  */
 async function pageDocument(manifest, path) {
     try {
@@ -1365,13 +1127,10 @@ async function pageDocument(manifest, path) {
 /**
  * The precached document a navigation falls back to.
  *
- * Looked up by URL, never by matching the request — a navigation must never be answered
- * from the pages cache, whose entries are JSON.
- *
- * `caches.match` without a cache name is deliberate here and safe for the same reason it
- * is unsafe in `matchScoped()`: these two URLs address the session-free shell, which is
- * rendered with no session precisely so that it is the same document for every visitor.
- * There is no partition to cross.
+ * Looked up by URL in the cache it was put in. `caches.match()` would iterate every
+ * cache the origin owns to find an entry under this URL; the shell is in exactly one of
+ * them, so the iteration is wasted work. Opening the known cache directly is one cache
+ * call instead of every one of them.
  */
 async function shellDocument(manifest) {
     for (const url of [manifest.offlineUrl, manifest.shellUrl]) {
@@ -1379,10 +1138,14 @@ async function shellDocument(manifest) {
             continue;
         }
 
-        const hit = await caches.match(url, { ignoreVary: true });
+        const cache = await openIfPresent(precacheName(manifest));
 
-        if (hit) {
-            return hit;
+        if (cache) {
+            const hit = await cache.match(url, { ignoreVary: true });
+
+            if (hit) {
+                return hit;
+            }
         }
     }
 
@@ -1489,7 +1252,16 @@ async function settled(preload) {
 function offlineDocument() {
     return new Response(OFFLINE_HTML, {
         status: 503,
-        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            // A navigation the worker answered from disk should not give the document
+            // any permission the application did not ask for. `style-src 'unsafe-inline'`
+            // is needed because the page's only stylesheet is the `<style>` block above.
+            'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            'X-Content-Type-Options': 'nosniff',
+            'Referrer-Policy': 'no-referrer',
+            'X-Robots-Tag': 'noindex',
+        },
     });
 }
 
@@ -1543,39 +1315,22 @@ async function staleWhileRevalidate(request, manifest) {
 /* ------------------------------------------------------------------ cache reads ----- */
 
 /**
- * Everything this identity is allowed to be answered from, and nothing else.
+ * Everything this origin is allowed to be answered from.
  *
- * The counterpart to `put()`: one function decides what a write may touch, so one function
- * decides what a read may see. Without that pairing the partitioning only held on the way
- * in — `caches.match(request)` with no cache name walks *every* cache on the origin, so the
- * offline fallback would answer one visitor from the cache named for another. Partitioning
- * that holds in one direction is not partitioning; it is a naming convention.
- *
- * Two caches, in this order:
- *
- *   1. This identity's runtime cache. Theirs alone, by name.
- *   2. The precache — shared on purpose. It holds the framework, the components and the
- *      shell: the application itself, identical for everyone, fetched without cookies at
- *      install. Partitioning it would make every visitor re-download the app and protect
- *      nothing, because there is nothing in it that belongs to anybody.
+ * Caches are shared across visitors: there is one runtime cache and one precache, both
+ * keyed on the build, both read by anybody.
  */
 async function matchScoped(request, manifest) {
-    // The read gate for the runtime cache, and therefore where the same check the page
-    // path makes has to happen too: a visitor who is offline from their first request
-    // never produces a response for the write path to notice them by.
-    await syncIdentity(manifest, declaredIdentity(request));
+    const name = runtimeName();
 
-    const name = runtimeName(manifest);
-
-    // `has` before `open`, because `open` creates. A read has no business bringing a cache
-    // into existence: every visitor who merely looked at a page whose response could not
-    // be stored would leave an empty cache named after them, which is both litter and a
-    // list of who has used the device.
+    // `has` before `open`, because `open` creates. A read has no business bringing a
+    // cache into existence: every visitor who merely looked at a page whose response
+    // could not be stored would leave an empty cache behind.
     if (await caches.has(name)) {
-        const mine = await (await caches.open(name)).match(request);
+        const hit = await (await caches.open(name)).match(request);
 
-        if (mine) {
-            return mine;
+        if (hit) {
+            return hit;
         }
     }
 
@@ -1591,11 +1346,7 @@ async function put(request, response, manifest) {
         return;
     }
 
-    // The response's identity wins over the request's, for the same reason it does on the
-    // page path: the request that signs someone in still carries who they were.
-    await syncIdentity(manifest, identityFor(request, response));
-
-    const cache = await caches.open(runtimeName(manifest));
+    const cache = await caches.open(runtimeName());
     await cache.put(request, response);
     await trim(cache, manifest.maxEntries);
 }
@@ -1630,8 +1381,8 @@ function tooLarge(response, manifest) {
  * An opaque response has status 0 and an unreadable body; caching one wastes quota and
  * can serve an error page forever. Partial content is equally unsafe to store. And
  * `no-store` is the server saying, in the only way it has, that this body belongs to one
- * person and one moment — component modules and page payloads carrying user data say
- * exactly that, and honouring it is what keeps them off disk.
+ * moment — component modules and page payloads carrying user data say exactly that, and
+ * honouring it is what keeps them off disk.
  *
  * This governs assets. Page payloads take the other gate, `storablePage()`, which is
  * deliberately more permissive and explains itself there — do not merge the two.
@@ -1655,18 +1406,10 @@ function cacheable(response) {
 /**
  * May this page payload be stored?
  *
- * Deliberately *not* `cacheable()`, and the difference is the whole of offline page
- * support. A page payload is `no-store, private` by default — correctly, because it can
- * embed the signed-in user's data and must never reach a shared HTTP cache. Applying that
- * rule here too would mean the page cache only ever held routes that had called
- * `->cacheable()`, which is what "runtime page caching" quietly was until this existed:
- * an empty cache and an offline app that could render its shell and nothing else.
- *
- * What makes storing it safe is not the header, it is where it goes. The cache is named
- * after the signed-in identity, so another identity cannot reach these entries at all;
- * install-time copies are fetched without cookies, so what they hold is the guest
- * rendering; and `->offline(false)` refuses outright, for a page that must not touch disk
- * under any circumstances. `service_worker.pages.runtime` turns the whole thing off.
+ * Caches are shared across visitors. A page that the server rendered for whoever asked is
+ * served to the next visitor; the assumption is that pages are static (so the next render
+ * would be identical), or that a small staleness is acceptable. A page that genuinely must
+ * not reach disk at all uses `->offline(false)`.
  */
 function storablePage(response) {
     if (!response || !response.ok || response.status === 206 || response.type === 'opaque') {
@@ -1709,99 +1452,53 @@ async function clearCaches() {
 
 /* ------------------------------------------------------------------------ state ----- */
 
+/**
+ * Cache names are derived from the manifest hash alone.
+ *
+ * No version, no build id, no install bucket — the hash changes whenever the build does,
+ * which is the only signal that ever needs to rename a cache. The hash is in the manifest
+ * the worker shipped with, so the name is determined by the worker, not by guesswork.
+ */
 function precacheName(manifest) {
-    return `${PREFIX}-precache-${manifest.version || 'v1'}-${manifest.hash}`;
+    return `${PREFIX}-precache-${manifest.hash}`;
 }
 
 /**
- * Where page payloads this device has visited live.
+ * Where page payloads live, whoever fetched them.
  *
- * One cache, whoever is signed in. The identity used to be part of the name, which made a
- * cross-user read structurally impossible — and cost a fresh empty cache on every sign-in,
- * a set of them per person on a shared device, and a re-cache of everything each time the
- * name changed. The partition is now kept by *emptying* this cache the moment the server
- * says a different person is being served (`syncIdentity()`), which holds the same
- * property against the case that matters — the next person on the device — at the price of
- * losing the previous one's offline pages rather than parking them.
- *
- * Keyed by the build, because a page payload embeds the compiled component: one stored
- * before a deploy holds the previous build's markup, and serving it into this build's
- * shell would render last week's page.
+ * One cache per build (keyed by the manifest hash), shared across all visitors. Whatever
+ * the server returned for a URL is what the next visitor gets; there is no per-person
+ * partition, no per-person wiping, and no separate install bucket — page payloads written
+ * by `install()` and page payloads written by the runtime share the same cache.
  */
 function pagesName(manifest) {
-    return `${PREFIX}-pages-${manifest.version || 'v1'}-${manifest.hash}`;
-}
-
-/**
- * Where the build's own guest page payloads live.
- *
- * Not a person and never wiped by a sign-in: this is what `install()` fetched without
- * cookies, the copies every visitor falls back to when they have none of their own. It is
- * swept with the build like the precache, and it is the reason a signed-in visitor can
- * open a page offline that they have never visited.
- */
-function installedPagesName(manifest) {
-    return pagesName(manifest) + '-install';
+    return `${PREFIX}-pages-${manifest.hash}`;
 }
 
 /**
  * Where navigation HTML lives.
  *
- * Everything in here is a signed-out rendering — `rememberDocument()` stores nothing else —
- * so it survives an identity change untouched. Keyed by the build like the pages cache,
- * because a document has the compiled component inlined.
+ * One cache per build, shared across all visitors. Whatever document the server returns
+ * for a URL is stored, and the next visitor that asks gets the same answer.
  */
 function documentsName(manifest) {
-    return `${PREFIX}-documents-${manifest.version || 'v1'}-${manifest.hash}`;
+    return `${PREFIX}-documents-${manifest.hash}`;
 }
 
 /**
- * Where runtime-cached assets live. Emptied on an identity change, like the pages cache:
- * a response to a signed-in request can be as personal as a page.
+ * Where runtime-cached assets live.
  *
- * Deliberately not keyed by the build. These are URLs the application declared rather than
- * ones this build compiled, and re-downloading them on every deploy is exactly the churn
- * this cache exists to avoid.
+ * Not keyed by the build. These are URLs the application declared rather than ones the
+ * build compiled, and re-downloading them on every deploy is exactly the churn this cache
+ * exists to avoid. Not keyed by anything else, either — the device has one runtime cache,
+ * shared by whoever is using it.
  */
-function runtimeName(manifest) {
-    return `${PREFIX}-runtime-${manifest.version || 'v1'}`;
+function runtimeName() {
+    return `${PREFIX}-runtime`;
 }
 
-function dataName(manifest, group) {
-    return `${PREFIX}-data-${group.name}-${group.version || 1}`;
-}
-
-/**
- * The explicit sign-out call, behind `pwax.sw.forgetIdentity()`.
- *
- * `syncIdentity()` already empties these the moment the server says somebody else is being
- * served, so this is belt and braces — and it is the one that runs when the sign-out is the
- * last thing that happens before the tab closes and no response follows it.
- */
-async function forgetVisitor(manifest) {
-    knownIdentity = 'anon';
-    await writeManifest(IDENTITY_KEY, { identity: 'anon' });
-    await wipeVisitorCaches(manifest);
-}
-
-/**
- * Empty everything that belongs to whoever was using this device.
- *
- * The pages they visited, the API responses they were served, the assets fetched under
- * their session. Not the precache, not the install bucket, not the documents cache: those
- * are the build's own, fetched without cookies, and belong to nobody — dropping them would
- * make every sign-in re-download the application for no gain.
- */
-async function wipeVisitorCaches(manifest) {
-    const keys = await caches.keys();
-    const names = keys.filter(
-        (key) =>
-            key === pagesName(manifest) ||
-            key === runtimeName(manifest) ||
-            key.startsWith(`${PREFIX}-data-`)
-    );
-
-    await Promise.all(names.map((key) => caches.delete(key)));
+function dataName(group) {
+    return `${PREFIX}-data-${group.name}`;
 }
 
 async function precacheFor(manifest) {

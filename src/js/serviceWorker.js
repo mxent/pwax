@@ -225,13 +225,10 @@ export function createServiceWorkerApi() {
         /**
          * Delete every Pwax cache, including the precache.
          *
-         * The blunt instrument. `forgetIdentity()` is almost always the one you want on
-         * sign-out: it drops what belonged to that person and leaves the framework, the
-         * components and the shell in place, so the next visitor gets an application that
-         * still works offline instead of one that downloads itself again.
-         *
          * Reach for this when the device itself should be left with nothing — a shared
-         * terminal at the end of a shift, a kiosk being handed on.
+         * terminal at the end of a shift, a kiosk being handed on. For routine sign-out
+         * there is no need to clear anything: caches are shared across visitors, and the
+         * next person to use the device gets the same offline app the last one had.
          */
         clearCaches() {
             const controller = navigator.serviceWorker?.controller;
@@ -254,43 +251,7 @@ export function createServiceWorkerApi() {
         },
 
         /**
-         * Drop everything cached for one signed-in identity.
-         *
-         * What to call on sign-out. Unlike `clearCaches()` it leaves the precache — the
-         * framework, the components, the shell — in place, so the next person to use the
-         * device gets an application that still works offline rather than one that has to
-         * download itself again.
-         *
-         * Called with no argument it uses the identity the runtime currently holds, which
-         * is the one you want and the one that is hard to get right by hand: reading
-         * `window.pwax.config.identity` into a variable early and passing it back later
-         * hands over whoever was signed in *then*. The runtime keeps its own copy in step
-         * with the server on every page load.
-         *
-         * @param {string} [identity]  Defaults to the current `window.pwax.config.identity`.
-         */
-        forgetIdentity(identity) {
-            const controller = navigator.serviceWorker?.controller;
-            identity = identity || window.pwax?.config?.identity;
-
-            if (!controller || !identity) {
-                return Promise.resolve(false);
-            }
-
-            return new Promise((resolve) => {
-                const channel = new MessageChannel();
-                const timer = window.setTimeout(() => resolve(false), 5000);
-
-                channel.port1.onmessage = () => {
-                    window.clearTimeout(timer);
-                    resolve(true);
-                };
-
-                controller.postMessage({ type: 'PWAX_FORGET_IDENTITY', identity }, [channel.port2]);
-            });
-        },
-
-        /** Unregister the worker entirely. */
+         * Unregister the worker entirely. */
         async unregister() {
             const registration = await navigator.serviceWorker?.getRegistration();
 

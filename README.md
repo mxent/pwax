@@ -762,9 +762,10 @@ Requests to an API get their own groups, which are about responses rather than f
 ],
 ```
 
-These hold one person's data, so they are stored per signed-in identity and `no-store` is
-still honoured — but a device two people share is a device with both their data on it.
-Adding an authenticated endpoint here is a decision, not a default.
+These are responses, not files, and they can hold one person's data. They are cached
+normally, and caches are shared across visitors — anyone with the device sees the same
+API responses as the last user. Do not add an authenticated endpoint here without deciding
+that is acceptable, or guarding the response with `X-Pwax-Cache: none` server-side.
 
 Only your own view paths are scanned. Package view namespaces are not — every package
 that calls `loadViewsFrom()` registers one, Laravel's own exception-page renderer
@@ -813,17 +814,20 @@ worker whose source never changed would leave clients on the build they first in
 
 ### The offline shell
 
-**A navigation's response is stored only when it belongs to nobody.** The Cache API ignores
-HTTP cache directives, so a worker that kept what it fetched would persist to disk exactly
-the documents the server marked `no-store, private` — a signed-in user's rendered page,
-which the next person to use that device would be served offline. Every page response
-carries `X-Pwax-Identity`, and a document is kept only when it says `anon`; a response
-without the header counts as somebody's, not as anonymous.
+**Caches are shared across visitors, so a page that stores nothing user-specific ends up
+in the same place for whoever comes next.** The Cache API ignores HTTP cache directives,
+so a worker that kept what it fetched would persist to disk whatever document the server
+returned — which is exactly the document the server marked `Cache-Control: no-store,
+private` for, a signed-in user's rendered page. A page that must not reach disk at all
+opts out with `->offline(false)`; the server says so on the response, and the worker
+honours it.
 
 The documents that install with the build are anonymous by construction: they are fetched
-at install time **without cookies**, so each is the guest rendering or it is not there at
-all. Those are the shell, and the HTML of each discovered page, which is what lets an
-offline navigation paint the real page instead of a spinner.
+at install time with cookies passed through, but a route behind `auth` answers that
+request with a login screen rather than a page, and the worker detects that and refuses
+to store it. Pages whose guest and signed-in renderings are the same — the typical
+application page — end up cached; pages whose aren't don't, and fall back to the shell
+when offline.
 
 The shell is `/__pwax__/shell`: the same SPA shell rendered with no session, no CSRF token
 and no page component, identical for every visitor. When a navigation cannot reach the
@@ -882,17 +886,15 @@ Route::get('/docs/{page}', fn ($page) => pwaxRender('pages.docs', [...])
 
 **Visited pages.** On by default, and what makes an authenticated application work
 offline rather than only its public routes: every page a visitor opens is cached as they
-go — the payload always, and the rendered HTML when the response declares itself anonymous.
+go. The cache is shared across visitors, so the document the server returned for a URL
+is what the next visitor gets offline — which is fine for a page that renders the same
+for everyone, and a deliberate decision otherwise.
 
 ```php
 'service_worker' => ['pages' => ['runtime' => true]],
 ```
 
-Storing a signed-in user's page is only safe because of when it is thrown away. The Cache
-API is scoped to the origin, not to a user, so the worker empties this cache the moment the
-server tells it a different person is being served — before the new person's first page
-lands in it. Call `pwax.sw.forgetIdentity()` on sign-out to do it immediately rather than on
-the next request, and mark anything that must never reach disk at all:
+Mark anything that must never reach disk at all:
 
 ```php
 Route::get('/recovery-codes', fn () => pwaxRender('pages.codes')->offline(false));
@@ -940,20 +942,6 @@ checks on demand.
 document.addEventListener('pwax:offline', () => banner.hidden = false);
 document.addEventListener('pwax:online', () => banner.hidden = true);
 ```
-
-### On sign-out
-
-Drop the signing-out user's pages, runtime entries and API responses, leaving the
-precached framework and components in place so the application still works offline for
-whoever comes next:
-
-```js
-await window.pwax.sw.forgetIdentity(window.pwax.config.identity);
-```
-
-`pwax.sw.clearCaches()` is the heavier hammer — it discards everything, including the
-framework, so the next visitor downloads the application again. Reach for it when a
-component renders differently for an administrator and you want no trace left.
 
 ## Frontend assets
 
@@ -1078,6 +1066,31 @@ Supply the nonce for Pwax's inline `<style>` and JSON blocks:
 'csp' => ['nonce' => fn () => request()->attributes->get('csp-nonce')],
 ```
 
+### Security headers
+
+Pwax applies its own set of response headers, so its hardening does not depend on the
+application's own middleware and cannot be silently lost. The HTML shell gets them in
+full; assets get the smaller set that fits their shape.
+
+| Header | Asset response | HTML shell | Configurable |
+| --- | --- | --- | --- |
+| `X-Content-Type-Options: nosniff` | yes | yes | no |
+| `Referrer-Policy: no-referrer` | yes | yes | `pwax.security.referrer_policy` |
+| `X-Frame-Options: SAMEORIGIN` | no | yes | `pwax.security.frame_options` |
+| `Permissions-Policy` | no | yes | `pwax.security.permissions_policy` |
+| `Cross-Origin-Opener-Policy: same-origin` | no | yes | `pwax.security.cross_origin_opener_policy` |
+| `Cross-Origin-Embedder-Policy: require-corp` | no | yes | `pwax.security.cross_origin_embedder_policy` |
+
+`Cross-Origin-Embedder-Policy: require-corp` puts the document into a cross-origin
+isolation state — eligible for `SharedArrayBuffer` and high-resolution timers — at the
+cost of every cross-origin asset needing an explicit `crossorigin` attribute. The
+doctor flags any `pwax.scripts` or `pwax.styles` entry that points off-site without
+one.
+
+Every value is overridable; setting any to `null` (or `''`) drops the corresponding
+header. The framework scripts (`Vue`, `Vue Router`, `Pinia`) always carry `crossorigin`
+when loaded from the CDN, so the default policy does not break them.
+
 ### What the service worker will and will not store
 
 The Cache Storage API ignores HTTP cache directives, so a worker that stores whatever it
@@ -1087,68 +1100,15 @@ outright.
 
 A page has two representations and both are stored, under different rules. The runtime
 asks for the payload and gets JSON; a reload, a bookmark or a link from outside the app is
-a navigation and gets HTML with the component already inlined.
+a navigation and gets HTML with the component already inlined. Caches are shared across
+visitors: the payload or document the server returned for a URL is what the next visitor
+gets on the same device.
 
-**A navigation's HTML is stored only when the response declares itself anonymous.** Every
-page response carries `X-Pwax-Identity`, and the worker keeps a document only when it says
-`anon`. Not one that merely looks anonymous, and not one with no header at all — an unknown
-identity is treated as somebody's, so an application that does not send it stores nothing.
-
-The reason is that a navigation is the one request whose sender the worker cannot identify.
-The runtime's fetches carry an identity header; a document request made by the browser
-carries cookies, which a worker cannot read. There is no way to decide *whose* document to
-hand back, so the only document safe to hand to anybody is the one that belongs to nobody.
-
-For the same reason, stored documents are **withheld entirely once anyone has signed in on
-the device**. They are all signed-out renderings, and showing one to a signed-in visitor
-tells them they are logged out when they are not — and unlike a slow paint it does not
-correct itself, because the document carries its own inlined payload. Those visitors get the
-shell instead, and the runtime's own request, which does carry an identity, decides what to
-render. That costs a spinner and buys the right page; `pwax.sw.forgetIdentity()` on sign-out
-clears the bucket and the fast path returns.
-
-Payloads are not withheld the same way, and the asymmetry is deliberate: withholding a
-document costs a spinner, because the shell boots and asks for the payload, which reads the
-visitor's own cache first. Withholding the payload would cost the page — there is nothing
-behind it.
-
-The documents installed with the build follow the same principle by construction: they are
-fetched without cookies, so a route behind `auth` answers that request with a login screen,
-which is refused rather than stored.
-
-Page payloads are the deliberate exception, because a shell with nothing to render in it
-is not an offline app. Three things make storing them safe, and they are worth knowing:
-
-- **One visitor at a time.** A visited page goes into a single cache, whoever is signed
-  in — and that cache is **emptied the moment the worker learns it is serving somebody
-  else**, before the new person's first page is written into it. So one session's pages
-  are never served to the next on a shared device.
-
-  The worker learns of the change twice over: from the identity a response declares, which
-  is the authority, and from the identity a request claims, which is what covers a visitor
-  who is offline from their very first request and for whom no response ever arrives. Both
-  are the `X-Pwax-Identity` header. Call `pwax.sw.forgetIdentity()` on sign-out to empty it
-  immediately rather than on the next request.
-
-  Three caches are never emptied this way, and none can hold anything of one visitor's: the
-  precache (framework, components, session-free shell), the build's own guest page payloads,
-  and the documents cache, which stores only responses that declared themselves anonymous.
-  That is what stops a sign-in re-downloading the application.
-
-  This is weaker than naming each cache after its owner, which is what earlier versions
-  did: the separation is now enforced by deleting rather than by being unaddressable. It is
-  also why the previous person's offline pages are gone rather than parked — and why there
-  is no longer a per-person set of caches to bound, an empty one minted on every sign-in, or
-  a re-download each time the name changed.
-- **Precached pages are fetched without cookies**, so what installs is the guest
-  rendering. A route behind `auth` answers with a login screen and is refused. Those
-  copies sit in a bucket of their own that every identity reads and none writes to — the
-  same content, from the same fetch, as the precached document a navigation to that page
-  is answered with, so withholding it from a signed-in visitor would protect nobody and
-  cost them the page.
-- **`->offline(false)` refuses outright**, for a page that must not reach disk under any
-  circumstances — a one-time code, a recovery key. `service_worker.pages.runtime => false`
-  turns the whole behaviour off.
+For most pages this is fine — a page that renders the same for everyone ends up cached
+the same way, and a small staleness between deploys is unnoticeable. For pages whose
+guest and signed-in renderings differ, that sharing is a deliberate decision. `->offline(false)`
+refuses outright for content that must never reach disk at all — a one-time code, a
+recovery key, a record on a shared terminal.
 
 ### When a stored page is used
 
@@ -1195,13 +1155,17 @@ network but gives up on it after `pages.timeout` (2000 ms) and uses the copy.
 
 Two things this does not cover, and both are worth deciding about rather than discovering:
 
-- **Every signed-out visitor shares one partition.** There is no identity to name a cache
-  after before someone signs in, so a multi-step form that collects personal details
-  *before* authentication is cached where the next anonymous visitor on that device can be
-  served it. `->offline(false)` on those pages is the answer.
-- **A component can still vary by user** — an admin-only branch, a localised string — and
-  precached components are stored per browser profile, not per identity. On a shared
-  device, call `pwax.sw.clearCaches()` when someone signs out.
+- **A page that varies by visitor is shared.** Caches are not partitioned, so the document
+  one visitor sees offline is the document the server last returned for that URL. For a
+  page whose guest and signed-in renderings differ — `/dashboard`, `/account` — this is
+  wrong by design, and `->offline(false)` is the answer.
+- **A component can still vary by user** — an admin-only branch, a localised string. The
+  precache is shared too. For content that must not reach a stranger's device, the
+  component payload carries `Cache-Control: no-store, private`, and the worker respects it.
+
+`pwax.sw.clearCaches()` is the heavier hammer — it discards everything, including the
+framework, so the next visitor downloads the application again. Reach for it when a
+component renders differently for an administrator and you want no trace left.
 
 One thing to avoid entirely: **never sign a view name that came from a request.**
 `pwaxRender($request->input('view'))` would mint a valid signed identifier for whatever it
@@ -1317,7 +1281,6 @@ The runtime publishes `window.pwax`:
 | `pwax.sw.update()` | Check for a new build now |
 | `pwax.sw.applyUpdate()` | Let a waiting build take over now, and reload |
 | `pwax.sw.clearCaches()` | Delete every Pwax cache, framework included |
-| `pwax.sw.forgetIdentity(id?)` | Drop one signed-in identity's pages and data — call on sign-out, with no argument |
 | `pwax.sw.unregister()` | Remove the service worker entirely |
 | `pwax.app`, `pwax.router` | The Vue app and router instances |
 | `pwax.config`, `pwax.version` | Runtime configuration and package version |

@@ -33,7 +33,6 @@ function instance(page) {
         loading: false,
         currentPath: null,
         abort: page.methods.abort,
-        adoptIdentity: page.methods.adoptIdentity,
         mount: vi.fn(),
         fail: vi.fn(),
     };

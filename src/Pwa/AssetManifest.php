@@ -592,10 +592,11 @@ class AssetManifest
         return [
             'strategy' => $strategy === 'performance' ? 'performance' : 'freshness',
             'timeout' => (int) $this->config->get('pwax.service_worker.pages.timeout', 2000),
-            // Anonymous by default. A page is precacheable because it renders the same for
-            // everyone, so the guest rendering is the correct one to store; fetching with
-            // cookies would precache whichever visitor happened to trigger the install.
-            'credentials' => (string) $this->config->get('pwax.service_worker.pages.credentials', 'omit'),
+            // Cookies are passed through. Caches are shared across visitors, so what is
+            // stored is what the server returned for whoever fetched the page last; the
+            // alternative was an "anonymous only" precache that did nothing for signed-in
+            // visitors.
+            'credentials' => (string) $this->config->get('pwax.service_worker.pages.credentials', 'include'),
             'maxEntries' => (int) $this->config->get('pwax.service_worker.pages.max_entries', 60),
         ];
     }

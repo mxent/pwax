@@ -101,6 +101,9 @@ const OFFLINE_HTML =
  * previous user's entries becoming unreachable, because they were never reachable under
  * this name to begin with.
  *
+ * The name alone only covers the write. `matchScoped()` is the other half — a lookup that
+ * does not name a cache searches all of them, so the read has to be confined deliberately.
+ *
  * The value is an opaque HMAC minted by the server (`Shell::identity()`); the worker only
  * ever compares it, never interprets it.
  */
@@ -934,6 +937,11 @@ async function navigate(event, manifest) {
  * Looked up in the precache by exact URL. A page whose document was never precached — one
  * cached at runtime as it was visited, or a route discovery could not read — simply has
  * none, and the shell answers instead.
+ *
+ * Not scoped by identity, and does not need to be: this reads the precache by name, and
+ * every document in it was fetched without cookies at install. It is the guest rendering
+ * or it is not there. Compare `matchScoped()`, which exists because the *runtime* caches
+ * hold one person's responses and must never be read across the partition.
  */
 async function pageDocument(manifest, path) {
     try {
@@ -950,6 +958,11 @@ async function pageDocument(manifest, path) {
  *
  * Looked up by URL, never by matching the request — a navigation must never be answered
  * from the pages cache, whose entries are JSON.
+ *
+ * `caches.match` without a cache name is deliberate here and safe for the same reason it
+ * is unsafe in `matchScoped()`: these two URLs address the session-free shell, which is
+ * rendered with no session precisely so that it is the same document for every visitor.
+ * There is no partition to cross.
  */
 async function shellDocument(manifest) {
     for (const url of [manifest.offlineUrl, manifest.shellUrl]) {
@@ -1015,7 +1028,7 @@ async function networkFirst(request, manifest, identity) {
 
         return response;
     } catch (error) {
-        const cached = await caches.match(request);
+        const cached = await matchScoped(request, manifest, identity);
 
         if (cached) {
             return cached;
@@ -1026,7 +1039,7 @@ async function networkFirst(request, manifest, identity) {
 }
 
 async function staleWhileRevalidate(request, manifest, identity) {
-    const cached = await caches.match(request);
+    const cached = await matchScoped(request, manifest, identity);
 
     const network = fetch(request)
         .then(async (response) => {
@@ -1040,6 +1053,38 @@ async function staleWhileRevalidate(request, manifest, identity) {
         .catch(() => cached ?? Response.error());
 
     return cached || network;
+}
+
+/* ------------------------------------------------------------------ cache reads ----- */
+
+/**
+ * Everything this identity is allowed to be answered from, and nothing else.
+ *
+ * The counterpart to `put()`: one function decides what a write may touch, so one function
+ * decides what a read may see. Without that pairing the partitioning only held on the way
+ * in — `caches.match(request)` with no cache name walks *every* cache on the origin, so the
+ * offline fallback would answer one visitor from the cache named for another. Partitioning
+ * that holds in one direction is not partitioning; it is a naming convention.
+ *
+ * Two caches, in this order:
+ *
+ *   1. This identity's runtime cache. Theirs alone, by name.
+ *   2. The precache — shared on purpose. It holds the framework, the components and the
+ *      shell: the application itself, identical for everyone, fetched without cookies at
+ *      install. Partitioning it would make every visitor re-download the app and protect
+ *      nothing, because there is nothing in it that belongs to anybody.
+ */
+async function matchScoped(request, manifest, identity) {
+    const runtime = await caches.open(runtimeName(manifest, identity));
+    const mine = await runtime.match(request);
+
+    if (mine) {
+        return mine;
+    }
+
+    const precache = await precacheFor(manifest);
+
+    return precache ? precache.match(request, { ignoreVary: true }) : undefined;
 }
 
 /* ----------------------------------------------------------------- cache writes ----- */

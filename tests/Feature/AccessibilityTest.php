@@ -80,7 +80,9 @@ class AccessibilityTest extends TestCase
 
         $html = (string) $this->get('/page')->getContent();
 
-        $this->assertStringNotContainsString('display: none', $html);
+        // The injected *rule*, not the phrase: the stylesheet's own comments discuss
+        // hiding things, and a test that matched those would be asserting against prose.
+        $this->assertStringNotContainsString('html { display: none }', $html);
         $this->assertStringContainsString('background: #ffffff', $html);
     }
 

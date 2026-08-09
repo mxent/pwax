@@ -326,7 +326,7 @@ class PwaxController extends Controller
         return $notModified;
     }
 
-    private function plain(string $body, int $status, string $contentType): Response
+    private function plain(string $body, int $status, string $contentType): SymfonyResponse
     {
         $response = new Response($body, $status, ['Content-Type' => $contentType]);
         $response->headers->set('Cache-Control', 'no-store, private');

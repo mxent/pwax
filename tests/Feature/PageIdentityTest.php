@@ -43,7 +43,10 @@ class PageIdentityTest extends TestCase
 
     public function test_the_identity_is_opaque(): void
     {
-        $user = $this->user();
+        // Long and distinctive on purpose. A single-digit id is a substring of most
+        // sixteen-character hex strings by luck alone, so asserting against one tests the
+        // random number generator rather than the code.
+        $user = $this->user(90210111213);
 
         $identity = (string) $this->actingAs($user)
             ->get('/identity-page', $this->componentHeaders())

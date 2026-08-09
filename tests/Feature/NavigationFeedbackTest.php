@@ -136,8 +136,10 @@ class NavigationFeedbackTest extends TestCase
             preg_match('/<script type="application\/json" id="pwax-config"[^>]*>(.*?)<\/script>/s', $html, $m)
         );
 
+        // The island is emitted with the JSON_HEX_* flags, which produce `<`-style
+        // escapes — valid JSON, decoded natively. Nothing to unescape first.
         /** @var array<string, mixed> $config */
-        $config = json_decode(html_entity_decode($m[1]), true, 512, JSON_THROW_ON_ERROR);
+        $config = json_decode($m[1], true, 512, JSON_THROW_ON_ERROR);
 
         return $config;
     }

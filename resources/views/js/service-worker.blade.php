@@ -1268,9 +1268,10 @@ function isHtml(response) {
 /**
  * The precached HTML for a specific path, if this build stored one.
  *
- * Looked up in the precache by exact URL. A page whose document was never precached — one
- * cached at runtime as it was visited, or a route discovery could not read — simply has
- * none, and the shell answers instead.
+ * Looked up in the precache by exact URL. The second half of `storedDocument()`, and the
+ * older half: this is what the *build* installed, where the documents cache holds what the
+ * device has since visited. A route discovery could not read has neither until somebody
+ * opens it, and until then the shell answers.
  *
  * Not scoped by identity, and does not need to be: this reads the precache by name, and
  * every document in it was fetched without cookies at install. It is the guest rendering

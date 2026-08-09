@@ -822,16 +822,17 @@ without the header counts as somebody's, not as anonymous.
 
 The documents that install with the build are anonymous by construction: they are fetched
 at install time **without cookies**, so each is the guest rendering or it is not there at
-all. Those are the shell below, and the HTML of each discovered page, which is what lets an
+all. Those are the shell, and the HTML of each discovered page, which is what lets an
 offline navigation paint the real page instead of a spinner.
 
-`service_worker.pages.runtime => false` turns off both halves of runtime page caching, the
-payload and the document alike.
+The shell is `/__pwax__/shell`: the same SPA shell rendered with no session, no CSRF token
+and no page component, identical for every visitor. When a navigation cannot reach the
+network and there is no document for that route, the worker serves the shell, the runtime
+boots, and client-side routing carries on as normal.
 
-Instead Pwax precaches `/__pwax__/shell`: the same SPA shell rendered with no session, no
-CSRF token and no page component, identical for every visitor. When a navigation cannot
-reach the network the worker serves that, the runtime boots, and client-side routing
-carries on as normal.
+`service_worker.pages.runtime => false` turns off both halves of runtime page caching, the
+payload and the document alike. The precached shell and documents are unaffected — they
+are what the build installed, not what a visitor left behind.
 
 The page *content* for a route is a separate question, and it is the one that decides
 whether the application is genuinely usable offline or merely renders a shell. Two
@@ -1305,7 +1306,7 @@ The runtime publishes `window.pwax`:
 | `pwax.sw.update()` | Check for a new build now |
 | `pwax.sw.applyUpdate()` | Let a waiting build take over now, and reload |
 | `pwax.sw.clearCaches()` | Delete every Pwax cache, framework included |
-| `pwax.sw.forgetIdentity(id)` | Drop one signed-in identity's pages and data — call on sign-out |
+| `pwax.sw.forgetIdentity(id?)` | Drop one signed-in identity's pages and data — call on sign-out, with no argument |
 | `pwax.sw.unregister()` | Remove the service worker entirely |
 | `pwax.app`, `pwax.router` | The Vue app and router instances |
 | `pwax.config`, `pwax.version` | Runtime configuration and package version |

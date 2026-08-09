@@ -1108,6 +1108,12 @@ so waiting for `fetch` to throw would show an error while a copy of the page sat
 device unread. A `404` or `403` is never answered from a copy, because the server is
 working correctly and saying something true.
 
+The same rule holds for a full page load, not only for a navigation inside the app: a
+reload while the origin is failing is answered from the precached document for that route,
+so an application installed on the device stays the thing on screen. It holds for data
+groups and for the runtime cache too — anywhere there is a stored copy to prefer over an
+error nobody asked for.
+
 To prefer the stored copy even when the network is fine, make pages cache-first:
 
 ```php

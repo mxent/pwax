@@ -686,4 +686,34 @@ describe('a server that is failing rather than absent', () => {
         // stored copy would invent a page that is not there any more.
         expect((await visit(gone, ABOUT)).status).toBe(404);
     });
+
+    it('answers a navigation from the precached document when the origin returns a 5xx', async () => {
+        // The rule has to hold on a reload too, not only on a payload fetch. A reload
+        // during a deploy would otherwise replace an application that is installed on the
+        // device with whatever error page the origin managed to produce.
+        const caches = new FakeCaches();
+        const current = manifest();
+
+        await boot(current, { caches });
+
+        const broken = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 502) });
+        await broken.dispatch('activate');
+
+        const response = await broken.navigate(ABOUT);
+
+        expect(response.status).toBe(200);
+        await expect(response.text()).resolves.toContain('pwax-initial');
+    });
+
+    it('lets a navigation see a 404', async () => {
+        const caches = new FakeCaches();
+        const current = manifest();
+
+        await boot(current, { caches });
+
+        const gone = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 404) });
+        await gone.dispatch('activate');
+
+        expect((await gone.navigate(ABOUT)).status).toBe(404);
+    });
 });

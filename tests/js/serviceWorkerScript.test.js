@@ -571,6 +571,35 @@ describe('the runtime strategy', () => {
         expect(await runtime.match('/big.bin')).toBeFalsy();
     });
 
+    it('serves the last good copy when the origin returns a 5xx', async () => {
+        const current = manifest({ overrides: { strategy: 'network-first' } });
+        const caches = new FakeCaches();
+        const base = server(current);
+        let broken = false;
+
+        const worker = createWorker({
+            manifest: current,
+            caches,
+            routes: (path) =>
+                broken && path === '/exports/report.csv'
+                    ? new Response('gateway', { status: 502 })
+                    : base(path),
+        });
+
+        await worker.dispatch('install');
+        await worker.dispatch('activate');
+        await worker.request('/exports/report.csv');
+
+        broken = true;
+
+        // `put()` refuses to store the 502 — `cacheable()` rejects anything not `ok` — so
+        // what comes back is the copy from before the origin started failing.
+        const response = await worker.request('/exports/report.csv');
+
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe('body:/exports/report.csv');
+    });
+
     it('keeps a response with no declared length', async () => {
         // Measuring it would mean buffering the very responses the ceiling exists to
         // avoid buffering. The entry cap still bounds them.

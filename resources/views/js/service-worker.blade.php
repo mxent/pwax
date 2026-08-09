@@ -1072,13 +1072,23 @@ async function navigate(event, manifest) {
     }
 
     try {
-        const preloaded = await settled(preload);
+        const response = (await settled(preload)) || (await fetch(event.request));
 
-        if (preloaded) {
-            return preloaded;
+        // The same rule a page payload follows: a 5xx is a reply, not an answer. An origin
+        // that is deploying, overloaded or behind a proxy having a bad minute would
+        // otherwise replace an application that is installed on the device with whatever
+        // error page the server managed to produce — while a document for this exact route
+        // sat in the precache. Only 5xx: a 404 or a 403 is the server working, and a
+        // redirect has to reach the runtime.
+        if (response.status >= 500) {
+            const stored = (await pageDocument(manifest, path)) || (await shellDocument(manifest));
+
+            if (stored) {
+                return stored;
+            }
         }
 
-        return await fetch(event.request);
+        return response;
     } catch {
         // This page's own HTML first, and the shell only if there is none. The shell is a
         // correct answer but a worse one: it paints a spinner and waits for the runtime to
@@ -1246,6 +1256,17 @@ async function networkFirst(request, manifest, identity) {
     try {
         const response = await fetch(request);
         await put(request, response.clone(), manifest, identity);
+
+        // A failing origin is not an answer here either. `put()` has already refused to
+        // store it — `cacheable()` rejects anything that is not `ok` — so what is looked
+        // up is the last good copy, never the error that just arrived.
+        if (response.status >= 500) {
+            const cached = await matchScoped(request, manifest, identity);
+
+            if (cached) {
+                return cached;
+            }
+        }
 
         return response;
     } catch (error) {

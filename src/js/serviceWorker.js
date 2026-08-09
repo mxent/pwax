@@ -78,6 +78,9 @@ function watchForUpdates(registration) {
         // being typed — so it waits, and an application that does not listen for the event
         // below gives no sign at all. The symptom is a deploy that appears not to have
         // happened, and this is the one line that explains it.
+        // `info`, not `warn`: nothing is wrong. The rule allows only warn and error, and
+        // logging this at either would report a deploy working as designed as a fault.
+        // eslint-disable-next-line no-console
         console.info(
             'pwax: a new version is installed and waiting. It takes over when every tab of ' +
                 'this app is closed, or immediately via pwax.sw.applyUpdate().'

@@ -7,7 +7,6 @@ use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\Foundation\Application;
-use Illuminate\Cache\Repository;
 use Illuminate\Contracts\View\Factory as ViewFactory;
 use Illuminate\Support\Facades\Log;
 use Mxent\Pwax\Pwax;
@@ -190,14 +189,12 @@ class AssetManifest
      */
     private function lock(): ?Lock
     {
-        $cache = $this->cache;
-
-        if (! $cache instanceof Repository) {
+        if ($this->cache === null) {
             return null;
         }
 
         try {
-            $store = $cache->getStore();
+            $store = $this->cache->getStore();
 
             if (! $store instanceof LockProvider) {
                 return null;

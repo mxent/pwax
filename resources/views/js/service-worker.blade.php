@@ -530,6 +530,47 @@ async function storeDocument(cache, url, credentials) {
     }
 }
 
+/**
+ * Statuses that mean the application never answered, as opposed to answering badly.
+ *
+ * This is the line between "fall back to what is stored" and "show the visitor what the
+ * server said", and it is not all of 5xx. A **500 is the application running and
+ * throwing** — a real bug in a real route — and answering it from cache hides it twice
+ * over: the visitor sees a page that works and reports nothing, and whoever deployed it
+ * has no idea a route is broken until somebody eventually notices. A stale page is worse
+ * than an error page when the error is the thing you needed to know.
+ *
+ * These three are the origin not being reachable through:
+ *
+ *   502  a proxy could not get an answer out of the application at all
+ *   503  the application, or the proxy, is explicitly refusing for now — `php artisan
+ *        down` is a 503, so this is the deploy window
+ *   504  a proxy waited and gave up
+ *
+ * From the device none of those is distinguishable from a bad connection, which is exactly
+ * the case the fallback exists for. Everything else — 500 included, and every 4xx — is the
+ * server working and saying something true, so it goes through untouched.
+ */
+const UNREACHABLE = [502, 503, 504];
+
+function unreachable(response) {
+    return UNREACHABLE.indexOf(response.status) !== -1;
+}
+
+/**
+ * Say when a stored copy stood in for a failing origin.
+ *
+ * Silence here is how an outage goes unnoticed: the application carries on looking healthy
+ * because every visitor is being served yesterday's copy of it. One line, with the status
+ * and the URL, so the failure is visible to anybody with devtools open.
+ */
+function warnStale(url, status) {
+    console.warn(
+        `pwax sw: ${url} answered ${status}; served a stored copy instead. ` +
+            'The origin is not reachable — this is being hidden from the page.'
+    );
+}
+
 function isJson(response) {
     return (response.headers.get('Content-Type') || '').includes('json');
 }
@@ -784,22 +825,15 @@ async function page(request, manifest, group, identity) {
             await trim(destination, group.maxEntries || manifest.maxEntries);
         }
 
-        // A reply is not the same as an answer.
-        //
-        // Falling back only when `fetch` throws covers the network being gone and nothing
-        // else. A connection that drops mid-request, a proxy between here and the origin,
-        // an application that is deploying or has fallen over — those come back as 5xx,
-        // which resolves, so the visitor was shown an error while a copy of the page sat
-        // on the device unread.
-        //
-        // Only 5xx. A 404 or a 403 is the server working correctly and saying something
-        // true, and answering it from a stale copy would be inventing a page that is not
-        // there any more; a redirect to a login screen must reach the runtime, which knows
-        // what to do with it.
-        if (response.status >= 500) {
+        // A reply is not the same as an answer. Falling back only when `fetch` throws
+        // covers the network being gone and nothing else — a proxy between here and the
+        // origin, or an application mid-deploy, resolves.
+        if (unreachable(response)) {
             const hit = await storedPage(request, manifest, cache);
 
             if (hit) {
+                warnStale(request.url, response.status);
+
                 return hit;
             }
         }
@@ -948,10 +982,17 @@ async function dataResponse(request, manifest, group, identity) {
             await trimData(cache, config.maxSize);
         }
 
-        // Same rule as a page: a failing origin is not an answer, and a stored copy
-        // within its `max_age` beats handing the application a 502 to render.
-        if (response.status >= 500) {
-            return (await stored()) || response;
+        // Same rule as a page: an origin that cannot be reached is not an answer, and a
+        // stored copy within its `max_age` beats handing the application a 502 to render.
+        // A 500 goes through — the API ran and failed, and that is worth knowing.
+        if (unreachable(response)) {
+            const hit = await stored();
+
+            if (hit) {
+                warnStale(request.url, response.status);
+
+                return hit;
+            }
         }
 
         return response;
@@ -1087,16 +1128,17 @@ async function navigate(event, manifest) {
         // would be paid for in first paint.
         event.waitUntil(rememberDocument(response, manifest, path));
 
-        // The same rule a page payload follows: a 5xx is a reply, not an answer. An origin
-        // that is deploying, overloaded or behind a proxy having a bad minute would
-        // otherwise replace an application that is installed on the device with whatever
-        // error page the server managed to produce — while a document for this exact route
-        // sat in the precache. Only 5xx: a 404 or a 403 is the server working, and a
-        // redirect has to reach the runtime.
-        if (response.status >= 500) {
+        // The same rule a page payload follows. An origin that is deploying, or behind a
+        // proxy that cannot reach it, would otherwise replace an application installed on
+        // the device with whatever error page came back — while a document for this exact
+        // route sat in the precache. A 500 is not that: the application ran and threw, and
+        // that page is the thing whoever deployed it needs to see.
+        if (unreachable(response)) {
             const stored = (await storedDocument(manifest, path)) || (await shellDocument(manifest));
 
             if (stored) {
+                warnStale(event.request.url, response.status);
+
                 return stored;
             }
         }
@@ -1381,13 +1423,15 @@ async function networkFirst(request, manifest, identity) {
         const response = await fetch(request);
         await put(request, response.clone(), manifest, identity);
 
-        // A failing origin is not an answer here either. `put()` has already refused to
-        // store it — `cacheable()` rejects anything that is not `ok` — so what is looked
+        // An unreachable origin is not an answer here either. `put()` has already refused
+        // to store it — `cacheable()` rejects anything that is not `ok` — so what is looked
         // up is the last good copy, never the error that just arrived.
-        if (response.status >= 500) {
+        if (unreachable(response)) {
             const cached = await matchScoped(request, manifest, identity);
 
             if (cached) {
+                warnStale(request.url, response.status);
+
                 return cached;
             }
         }

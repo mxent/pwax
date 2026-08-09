@@ -660,11 +660,11 @@ describe('a server that is failing rather than absent', () => {
             ? new Response('<html>error</html>', { status, headers: { 'Content-Type': 'text/html' } })
             : server(current)(asked, request);
 
-    it('serves the stored page when the origin returns a 5xx', async () => {
+    it('serves the stored page when the origin cannot be reached', async () => {
         // Falling back only when `fetch` throws covers the network being gone and nothing
-        // else. A connection that drops mid-request, a proxy in between, an application
-        // that is deploying — all resolve, with a 5xx, and the visitor used to be shown an
-        // error while a copy of the page sat on the device unread.
+        // else. A proxy that cannot reach the application, or one that is mid-deploy,
+        // resolves — and the visitor used to be shown an error while a copy of the page sat
+        // on the device unread. 503 is what `php artisan down` answers with.
         const caches = new FakeCaches();
         const current = manifest();
 
@@ -677,6 +677,21 @@ describe('a server that is failing rather than absent', () => {
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ template: '<p>/about</p>' });
+    });
+
+    it('lets a 500 through, because the application ran and threw', async () => {
+        const caches = new FakeCaches();
+        const current = manifest();
+
+        await boot(current, { caches });
+
+        const broken = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 500) });
+        await broken.dispatch('activate');
+
+        // Answering this from cache hides it twice: the visitor sees a page that works and
+        // reports nothing, and whoever deployed the bug has no idea a route is broken. A
+        // stale page is worse than an error page when the error is the thing you needed.
+        expect((await visit(broken, ABOUT)).status).toBe(500);
     });
 
     it('does not answer a 404 from a stale copy', async () => {
@@ -721,6 +736,21 @@ describe('a server that is failing rather than absent', () => {
         await gone.dispatch('activate');
 
         expect((await gone.navigate(ABOUT)).status).toBe(404);
+    });
+
+    it('lets a navigation see a 500', async () => {
+        const caches = new FakeCaches();
+        const current = manifest();
+
+        await boot(current, { caches });
+
+        const broken = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 500) });
+        await broken.dispatch('activate');
+
+        // The reload that would have shown the error is the one a developer does when
+        // something looks wrong. Answering it from the precache is how a broken deploy
+        // survives the afternoon.
+        expect((await broken.navigate(ABOUT)).status).toBe(500);
     });
 });
 

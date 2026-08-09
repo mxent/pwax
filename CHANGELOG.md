@@ -103,14 +103,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **A stored copy is used when the origin answers `5xx`, not only when the network throws.**
-  A connection dropping mid-request, a proxy in between, or an application mid-deploy all
-  produce a reply, so the fallback never ran and the visitor saw an error with a usable
-  copy on the device. The rule applies everywhere there is something to fall back to: page
-  payloads, data groups, full navigations — which answer from the precached document, so a
-  reload during a deploy still gets the installed application — and the runtime cache. A
-  `404` or `403` is still never answered from a copy: the server is working correctly and
-  saying something true, and a redirect has to reach the runtime.
+- **A stored copy is used when the origin cannot be reached through, not only when the
+  network throws.** A proxy that cannot get an answer out of the application, or an
+  application mid-deploy, produces a *reply* — so the fallback never ran and the visitor
+  saw an error with a usable copy on the device. The rule applies everywhere there is
+  something to fall back to: page payloads, data groups, full navigations — which answer
+  from the stored document, so a reload during a deploy still gets the installed
+  application — and the runtime cache.
+
+  Exactly `502`, `503` and `504`, none of which is distinguishable from a bad connection
+  from the device: a proxy that could not reach the application, one refusing for now
+  (`php artisan down` answers `503`), and one that waited and gave up. **A `500` is shown,
+  like a `404`** — the application ran and threw, and answering that from cache hides the
+  bug twice: the visitor sees a page that works and reports nothing, and whoever deployed
+  it does not learn the route is broken. When a stored copy does stand in, the worker says
+  so on the console with the status and the URL.
 - `service_worker.strategy` is `service_worker.runtime_strategy`, and defaults to
   `network-only`. The old default kept a copy of every same-origin GET it passed through,
   including URLs the application never declared.

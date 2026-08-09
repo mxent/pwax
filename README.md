@@ -1140,17 +1140,36 @@ is not an offline app. Three things make storing them safe, and they are worth k
 ### When a stored page is used
 
 By default a page goes to the network first and falls back to what is stored — not only
-when the network is gone, but when the origin answers with a `5xx`. A connection that
-drops mid-request, a proxy in between, an application that is deploying: those all *reply*,
-so waiting for `fetch` to throw would show an error while a copy of the page sat on the
-device unread. A `404` or `403` is never answered from a copy, because the server is
-working correctly and saying something true.
+when the network is gone, but when the origin cannot be reached through. A proxy that
+cannot get an answer out of the application, or an application mid-deploy, *replies*, so
+waiting for `fetch` to throw would show an error while a copy of the page sat on the device
+unread.
+
+Three statuses, and not one more:
+
+| | |
+| --- | --- |
+| `502` | a proxy could not get an answer out of the application at all |
+| `503` | the application or the proxy is refusing for now — `php artisan down` answers this |
+| `504` | a proxy waited and gave up |
+
+From the device none of those is distinguishable from a bad connection, which is the case
+the fallback exists for.
+
+**A `500` is shown, like a `404`.** It is not the origin being unreachable — it is the
+application running and throwing, in a real route, and answering it from cache hides the
+bug twice over: the visitor sees a page that works and reports nothing, and whoever
+deployed it has no idea that route is broken until somebody eventually notices. A stale
+page is worse than an error page when the error is the thing you needed to know.
 
 The same rule holds for a full page load, not only for a navigation inside the app: a
-reload while the origin is failing is answered from the stored document for that route —
-the one visited earlier, or the one installed with the build — so an application installed
-on the device stays the thing on screen. It holds for data groups and for the runtime cache
-too, anywhere there is a stored copy to prefer over an error nobody asked for.
+reload while the origin is unreachable is answered from the stored document for that route
+— the one visited earlier, or the one installed with the build. It holds for data groups
+and for the runtime cache too.
+
+Whenever a stored copy does stand in for a failing origin, the worker says so on the
+console with the status and the URL. Silence there is how an outage goes unnoticed: the
+application looks healthy because everybody is being served yesterday's copy of it.
 
 To prefer the stored copy even when the network is fine, make pages cache-first:
 

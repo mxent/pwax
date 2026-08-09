@@ -63,6 +63,34 @@ export function createProgress({ delay = 250, trickle = true, document: doc = do
         return bar;
     }
 
+    /**
+     * Take over a bar the server rendered already running.
+     *
+     * The first load is the one this cannot start for itself: the bar has to be moving
+     * while the document is still being parsed, which is before any of this exists. So the
+     * shell renders it already visible, advancing under a CSS animation that needs no
+     * JavaScript at all, and the runtime adopts it here rather than starting a second one.
+     *
+     * Without this the first load had a different indicator from every navigation after
+     * it — the one moment a visitor is most likely to be waiting, and the one that looked
+     * least like the rest of the application.
+     */
+    function adopt() {
+        const existing = doc.getElementById('pwax-progress');
+
+        if (!existing || !existing.classList.contains('pwax-progress-visible')) {
+            return;
+        }
+
+        bar = existing;
+        running = true;
+
+        // Whatever the animation had reached is where this picks up. Reading it back is
+        // not worth the layout it would cost: the next thing to happen is `done()`, which
+        // goes to full from wherever it is.
+        progress = CEILING;
+    }
+
     function paint() {
         const node = element();
 
@@ -128,6 +156,11 @@ export function createProgress({ delay = 250, trickle = true, document: doc = do
                 return;
             }
 
+            // A CSS animation beats an inline transform, so the boot animation has to be
+            // taken off before the completing stroke can be painted. Removing it is also
+            // what stops a slow first load from creeping on after the app has mounted.
+            bar.classList.remove('pwax-progress-boot');
+
             progress = 1;
             paint();
 
@@ -143,9 +176,26 @@ export function createProgress({ delay = 250, trickle = true, document: doc = do
             }, 320);
         },
 
+        /** Take over a bar the shell rendered already running. */
+        adopt,
+
         /** Whether a navigation is currently being tracked. */
         get active() {
             return running;
         },
     };
+}
+
+/**
+ * The progress API, having first taken over anything the shell left running.
+ *
+ * Separate from `createProgress` so the constructor stays testable without a document
+ * that has already been rendered into.
+ */
+export function bootProgress(options = {}) {
+    const progress = createProgress(options);
+
+    progress.adopt();
+
+    return progress;
 }

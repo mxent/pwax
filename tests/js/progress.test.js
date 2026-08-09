@@ -6,7 +6,7 @@
  * feature and the rest is decoration.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createProgress } from '../../src/js/progress.js';
+import { bootProgress, createProgress } from '../../src/js/progress.js';
 
 const bar = () => document.getElementById('pwax-progress');
 const width = () => bar().style.transform;
@@ -137,5 +137,49 @@ describe('the progress bar', () => {
 
         expect(bar()).toBe(existing);
         expect(document.querySelectorAll('#pwax-progress')).toHaveLength(1);
+    });
+
+    it('adopts a bar the shell rendered already running', () => {
+        // The first load is the one the runtime cannot start for itself: the bar has to
+        // be moving while the document is still being parsed. The shell renders it, CSS
+        // advances it, and this takes it over rather than starting a second.
+        document.body.innerHTML =
+            '<div id="pwax-progress" class="pwax-progress-visible pwax-progress-boot"></div>';
+
+        const progress = bootProgress({ delay: 0 });
+
+        expect(progress.active).toBe(true);
+    });
+
+    it('completes the adopted bar, and stops the CSS advancing it', () => {
+        document.body.innerHTML =
+            '<div id="pwax-progress" class="pwax-progress-visible pwax-progress-boot"></div>';
+
+        const progress = bootProgress({ delay: 0 });
+        progress.done();
+
+        // A CSS animation beats an inline transform, so the boot class has to come off
+        // before the completing stroke can be painted at all.
+        expect(bar().classList.contains('pwax-progress-boot')).toBe(false);
+        expect(width()).toBe('scaleX(1)');
+    });
+
+    it('does not adopt a bar the shell rendered but left hidden', () => {
+        // `progress.enabled => false` renders no element; this is the other shape — an
+        // element present but not running, which is not ours to finish.
+        document.body.innerHTML = '<div id="pwax-progress"></div>';
+
+        expect(bootProgress({ delay: 0 }).active).toBe(false);
+    });
+
+    it('starts normally when the shell rendered nothing', () => {
+        const progress = bootProgress({ delay: 0 });
+
+        expect(progress.active).toBe(false);
+
+        progress.start();
+        vi.advanceTimersByTime(1);
+
+        expect(bar()).not.toBeNull();
     });
 });

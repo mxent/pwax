@@ -267,6 +267,12 @@ export function createPageComponent({
                         document.title = payload.title;
                     }
 
+                    // Finished before the swap, not alongside it. The bar completing is
+                    // what says the waiting is over; the fade is what says the page has
+                    // changed. Running them in that order reads as one sequence rather
+                    // than two things happening at once.
+                    progress?.done();
+
                     // The swap, and the only point at which the page on screen changes.
                     // Everything above this line ran while the previous page was still
                     // rendered: the fetch, the compile, the external assets, the

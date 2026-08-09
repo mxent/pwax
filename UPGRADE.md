@@ -115,12 +115,32 @@ It returned the controlling `ServiceWorker`, not the `ServiceWorkerRegistration`
 + const registration = await pwax.sw.registration();
 ```
 
-### 8. If you published the shell view
+### 8. The first load is indicated by the progress bar, not a centred spinner
 
-`vendor:publish --tag=pwax-views` copies `layouts/shell.blade.php` into your application,
-so an upgrade cannot change it. Two edits are worth making by hand:
+`customization.init_spinner` defaults to `false`. The bar the runtime uses for every
+navigation now covers the first load too — the shell renders it already running and the
+runtime completes it on mount — and showing both was showing one thing twice.
 
 ```diff
+  'customization' => [
++     'init_spinner' => true,
+      'init_spinner_color' => '#0c83ff',
+  ],
+```
+
+Set it back if you prefer the spinner. `init_spinner_color` and `init_spinner_bg` still
+belong to it; the bar takes `init_spinner_color` as its own default.
+
+### 9. If you published the shell view
+
+`vendor:publish --tag=pwax-views` copies `layouts/shell.blade.php` into your application,
+so an upgrade cannot change it. Three edits are worth making by hand:
+
+```diff
++ @if (config('pwax.progress.enabled', true))
++     <div id="pwax-progress" class="pwax-progress-visible pwax-progress-boot" aria-hidden="true"></div>
++ @endif
++
 - <div id="pwax" class="pwax-preloader" role="status" aria-live="polite" aria-label="Loading">
 + <div id="pwax" class="pwax-preloader">
 +     <span class="pwax-sr-only" role="status">Loading</span>
@@ -130,13 +150,18 @@ so an upgrade cannot change it. Two edits are worth making by hand:
 + <div id="pwax-announcer" class="pwax-sr-only" role="status" aria-live="polite"></div>
 ```
 
-The first: those attributes belong to the spinner, and the runtime removes the preloader
-class on mount but cannot remove semantics you own — so the application root stayed a live
-region labelled "Loading" for the whole session, and every reactive text change in the app
-was announced. (The runtime now strips them defensively, so this is belt and braces.)
+**The progress bar** indicates the load that renders everything below it, which is why it
+comes first in the document. Without it a published shell has no first-load indicator at
+all, since the centred spinner is now off by default.
 
-The second is where a route change is announced. Without it, navigation is silent to a
-screen reader.
+**The mount element's attributes.** They belong to the spinner, and the runtime removes the
+preloader class on mount but cannot remove semantics you own — so the application root
+stayed a live region labelled "Loading" for the whole session, and every reactive text
+change in the app was announced. (The runtime now strips them defensively, so this is belt
+and braces.)
+
+**The announcer** is where a route change is read out. Without it, navigation is silent to
+a screen reader.
 
 ### Checklist
 
@@ -144,7 +169,8 @@ screen reader.
 - [ ] Data groups flattened; `max_size` → `max_entries`
 - [ ] `forgetIdentity()` called with no argument
 - [ ] `pwax.sw.registration` → `.controller` or `.registration()`
-- [ ] Published shell view updated, if you have one
+- [ ] Published shell view updated, if you have one — progress bar, announcer, mount attributes
+- [ ] Decided on `customization.init_spinner`
 - [ ] `php artisan pwax:doctor` is clean
 - [ ] Tested offline, signed in as two different users on one browser profile
 

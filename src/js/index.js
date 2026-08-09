@@ -12,7 +12,7 @@ import { resolveExtensions } from './extensions.js';
 import { createHttp } from './http.js';
 import { importModule } from './modules.js';
 import { createPageComponent } from './page.js';
-import { createProgress } from './progress.js';
+import { bootProgress } from './progress.js';
 import { createRouter } from './router.js';
 import { createServiceWorkerApi, registerServiceWorker } from './serviceWorker.js';
 import { createStyleManager } from './styles.js';
@@ -29,7 +29,11 @@ async function boot() {
 
     // Null when the application turned it off, and every call site uses `?.` — a disabled
     // progress bar should cost nothing at all, not an object that does nothing.
-    const progressBar = config.progress === false ? null : createProgress(config.progress || {});
+    //
+    // `bootProgress` rather than `createProgress`: the shell renders the bar already
+    // running, because the first load has to be indicated before this file exists. This
+    // takes that one over instead of starting a second.
+    const progressBar = config.progress === false ? null : bootProgress(config.progress || {});
 
     // Published before anything is mounted, so component scripts can call it during
     // their own evaluation.
@@ -130,6 +134,10 @@ async function boot() {
 
     document.documentElement.classList.add('pwax-ready');
 
+    // The first load is over. This completes the bar the shell started — and it is the
+    // only thing that will, since nothing here called `start()`.
+    progressBar?.done();
+
     document.dispatchEvent(new CustomEvent('pwax:ready', { detail: { app, router } }));
 
     if (config.serviceWorker) {
@@ -139,6 +147,12 @@ async function boot() {
 
 function fail(error) {
     console.error('pwax: failed to start', error);
+
+    // Whatever went wrong, the bar the shell started must not be left creeping across the
+    // top of an error message. Done directly rather than through the API, because the
+    // failure may be that the API was never built.
+    const bar = document.getElementById('pwax-progress');
+    bar?.classList.remove('pwax-progress-visible', 'pwax-progress-boot');
 
     const mount = document.getElementById('pwax');
 

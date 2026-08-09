@@ -140,7 +140,7 @@ describe('what stays on screen during a navigation', () => {
         expect(state.renderedPath).toBe('/one');
     });
 
-    it('runs the progress bar for a fetch and not for an inlined payload', async () => {
+    it('starts the bar for a fetch, and finishes the one the shell started', async () => {
         const start = vi.fn();
         const done = vi.fn();
 
@@ -154,13 +154,49 @@ describe('what stays on screen during a navigation', () => {
             })
         );
 
-        // The landing page is already in the document. There is no request to indicate.
+        // The landing page is already in the document, so there is no request to
+        // indicate — but the shell rendered the bar already running for the load that
+        // delivered it, and mounting is what that bar was waiting for.
         await state.visit('/one');
         expect(start).not.toHaveBeenCalled();
+        expect(done).toHaveBeenCalledTimes(1);
 
         await state.visit('/two');
         expect(start).toHaveBeenCalledTimes(1);
-        expect(done).toHaveBeenCalledTimes(1);
+    });
+
+    it('finishes the bar before swapping the page', async () => {
+        const order = [];
+        let component = null;
+
+        const page = createPageComponent({
+            http: { json: async (path) => payloadFor(path) },
+            styles: noStyles,
+            config: {},
+            initial: null,
+            progress: { start: () => order.push('start'), done: () => order.push('done') },
+        });
+
+        const state = bind(page);
+
+        Object.defineProperty(state, 'component', {
+            get: () => component,
+            set: (value) => {
+                order.push('swap');
+                component = value;
+            },
+        });
+
+        await state.visit('/one');
+
+        // The bar completing says the waiting is over; the fade says the page changed.
+        // In that order it reads as one sequence rather than two things at once.
+        //
+        // Relative order, not the exact list: `visit()` finishes the bar again in its
+        // `finally` as a safety net for the paths that never reach the swap, and on the
+        // real object that second call is a no-op.
+        expect(order.indexOf('done')).toBeGreaterThan(order.indexOf('start'));
+        expect(order.indexOf('swap')).toBeGreaterThan(order.indexOf('done'));
     });
 
     it('works without a progress bar at all', async () => {

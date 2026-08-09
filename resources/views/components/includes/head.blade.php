@@ -42,6 +42,7 @@
 
     // The navigation progress bar. Defaults to the spinner's colour so an application that
     // set one has already set the other.
+    $spinner = (bool) config('pwax.customization.init_spinner', false);
     $progressColor = $pwaxColor('pwax.progress.color', $spinnerColor);
     $progressHeight = (int) config('pwax.progress.height', 3);
     $transitionMs = (int) config('pwax.transition.duration', 150);
@@ -147,6 +148,10 @@
         z-index: 9999;
     }
 
+    @if ($spinner)
+    /* Off by default now: the progress bar indicates the first load, and one indicator
+       said twice is not twice as clear. `customization.init_spinner` brings it back for
+       an application that would rather have the centred one. */
     .pwax-preloader::after {
         content: '';
         position: absolute;
@@ -172,6 +177,7 @@
             animation-duration: 3s;
         }
     }
+    @endif
 
     .pwax-error {
         padding: 1.5rem;
@@ -217,6 +223,18 @@
 
     #pwax-progress.pwax-progress-visible {
         opacity: 1;
+    }
+
+    /* The first load, advanced by CSS because there is no JavaScript yet to advance it.
+       Eight seconds to reach a ceiling it never touches — long enough that a slow
+       connection still sees movement, short enough that a fast one is already done. */
+    #pwax-progress.pwax-progress-boot {
+        animation: pwax-progress-advance 8s cubic-bezier(0.1, 0.6, 0.3, 1) forwards;
+    }
+
+    @keyframes pwax-progress-advance {
+        from { transform: scaleX(0.02); }
+        to { transform: scaleX(0.94); }
     }
 
     /* The completing stroke: full width, then fade. The width transition is quicker here

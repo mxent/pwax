@@ -35,8 +35,21 @@
 
 <body>
     {{--
-        `pwax-preloader` shows the spinner until the runtime mounts and removes the class.
-        Content rendered inside is replaced on mount.
+        The progress bar, rendered already running.
+
+        This is the one load the runtime cannot indicate for itself: the bar has to be
+        moving while the document is still being parsed, which is before pwax.js exists.
+        So the server renders it visible and a CSS animation advances it, and the runtime
+        adopts it on boot and completes it on mount. A visitor sees the same indicator for
+        their first load as for every navigation after it.
+    --}}
+    @if (config('pwax.progress.enabled', true))
+        <div id="pwax-progress" class="pwax-progress-visible pwax-progress-boot" aria-hidden="true"></div>
+    @endif
+
+    {{--
+        `pwax-preloader` covers the mount point until the runtime mounts and removes the
+        class. Content rendered inside is replaced on mount.
 
         The loading semantics are on their own element rather than on this one. They used
         to be here, and `role="status"` with `aria-live="polite"` is right for a spinner

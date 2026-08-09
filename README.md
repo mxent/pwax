@@ -377,6 +377,20 @@ that flashes on and off for each of them reads as jitter — then eases towards 
 never reaches, because the payload has no length the browser can know in advance. Claiming
 to be finished and then waiting is what makes a progress bar feel like a lie.
 
+The same bar covers the **first** load. The shell renders it already running, advanced by
+CSS so it moves while the document is still being parsed and before `pwax.js` exists; the
+runtime adopts it on boot and completes it on mount. So the sequence is the same whether
+you arrived or navigated:
+
+```
+first load        bar starts (server) ─► app mounts ─► bar completes ─► page fades in
+navigation        bar starts (250ms)  ─► payload    ─► bar completes ─► page fades in
+```
+
+The centred spinner that used to cover the first load is off by default for that reason —
+one indicator shown twice is not twice as clear. `customization.init_spinner => true`
+brings it back.
+
 ```php
 'progress' => [
     'enabled' => true,
@@ -1081,6 +1095,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `cache.asset_ttl` | `3600` | `max-age` for component assets |
 | `cache.components` | `true` | Memoise compiled components |
 | `csp.nonce` | `null` | Nonce (or callable) for inline blocks |
+| `customization.init_spinner` | `false` | The centred first-load spinner; the progress bar covers that load now |
 | `customization.*` | see config | Preloader colours |
 | `progress.enabled` | `true` | Navigation progress bar |
 | `progress.color`, `.height` | `null`, `3` | Colour falls back to the spinner's; height in px |

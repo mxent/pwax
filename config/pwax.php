@@ -314,6 +314,15 @@ return [
     ],
 
     'customization' => [
+        /*
+        | The centred spinner on the very first load, before the runtime mounts.
+        |
+        | Off, because the progress bar now covers that load — the shell renders it
+        | already running and the runtime completes it on mount — and one indicator shown
+        | twice is not twice as clear. Turn it on for an application that would rather
+        | have the centred one; the two colours below are its.
+        */
+        'init_spinner' => false,
         'init_spinner_color' => '#0c83ff',
         'init_spinner_bg' => '#f3f3f3',
         'init_background' => '#ffffff',

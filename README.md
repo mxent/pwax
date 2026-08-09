@@ -983,6 +983,13 @@ all. Only the framework and the runtime are fetched, in parallel, and both are s
 cacheable. In 1.x the browser made six sequential requests before it could render
 anything.
 
+Anything the first render still has to import is named in the head with
+`<link rel="modulepreload">`: the components this page imports with `@pwaxImport`, the
+configured `plugins` and `directives` the runtime awaits before mounting, and any external
+script or stylesheet the component declares. All of those are known to the server while it
+is writing the document, and none are discoverable by the browser until Vue has loaded and
+rendered — a serial round trip that the hints remove.
+
 **Repeat navigation compiles each component once.** Compiled modules are cached on the
 content hash the server sends, so returning to a page reuses the module rather than
 building another one.
@@ -1001,7 +1008,15 @@ building another one.
 
 **Compilation is memoised** on a digest of the rendered output, so a component that has
 not changed is not re-parsed, re-scoped or re-minified. Because the key is the output
-itself, the cache can never go stale.
+itself, the cache can never go stale. What is memoised is the *parse* — splitting the
+blocks, scoping the styles, stamping the template, minifying — never the Blade render,
+which has to run every request because rendering is where a page's data enters.
+
+For the same reason, only renders that take no data are stored. A page rendered with
+controller data produces different output for every visitor, so an entry would be written
+once and read never; `->cacheable()` opts a page back in, since a page whose payload may
+sit in a shared HTTP cache has already been declared visitor-independent. `cache.ttl`
+bounds how long an entry lives — `null` keeps it forever.
 
 **Minification** runs in production only, and its results are cached by content. If your
 web server already applies gzip or brotli, turn it off — you recover most of the bytes
@@ -1212,6 +1227,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `minify.store`, `minify.ttl` | `null` | Cache for minified output |
 | `cache.asset_ttl` | `3600` | `max-age` for component assets |
 | `cache.components` | `true` | Memoise compiled components |
+| `cache.ttl` | `604800` | How long a compiled component is stored; `null` for forever |
 | `csp.nonce` | `null` | Nonce (or callable) for inline blocks |
 | `customization.init_spinner` | `true` | The centred spinner covering the first load |
 | `customization.*` | see config | Preloader colours |

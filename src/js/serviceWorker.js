@@ -131,7 +131,15 @@ function watchForUpdates(registration) {
         registration.update().catch(() => {});
     };
 
-    window.setInterval(check, UPDATE_INTERVAL);
+    // Kept, rather than left to `visibilitychange` alone: a dashboard on a wall-mounted
+    // screen is visible for weeks and never fires one, and that is precisely the tab most
+    // in need of learning that a new build exists.
+    const timer = window.setInterval(check, UPDATE_INTERVAL);
+
+    // Cleared when the page goes away. It costs almost nothing to leave running — the
+    // callback returns immediately unless the document is visible — but a timer that
+    // outlives its page is the kind of thing that quietly becomes a leak later.
+    window.addEventListener('pagehide', () => window.clearInterval(timer), { once: true });
 
     // Coming back to a backgrounded tab is the moment a stale build is most likely and
     // least disruptive to replace.

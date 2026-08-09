@@ -55,12 +55,10 @@ function deferredServer() {
 
 describe('what stays on screen during a navigation', () => {
     beforeEach(() => {
-        // `mount()` reaches for the global Vue. Only two functions of it are used here,
-        // and both can be identity-ish: the test is about *when* `component` changes.
-        globalThis.Vue = {
-            shallowRef: (value) => value,
-            defineAsyncComponent: (loader) => ({ __async: loader }),
-        };
+        // `mount()` reaches for the global Vue. Only `markRaw` is used, and it can be
+        // the identity: the test is about *when* `component` changes, not what Vue then
+        // does with it.
+        globalThis.Vue = { markRaw: (value) => value };
     });
 
     afterEach(() => {
@@ -101,6 +99,46 @@ describe('what stays on screen during a navigation', () => {
 
         expect(state.component).not.toBe(rendered);
         expect(state.renderedPath).toBe('/two');
+    });
+
+    it('mounts the resolved options directly, with no async wrapper', async () => {
+        const http = deferredServer();
+        const state = bind(
+            createPageComponent({ http, styles: noStyles, config: {}, initial: null })
+        );
+
+        const visit = state.visit('/one');
+        http.settle();
+        await visit;
+
+        // `toOptions()` has already resolved this. Wrapping it in `defineAsyncComponent`
+        // asked Vue to await a promise that was never pending, and — because every call
+        // produces a distinct component type — made Vue rebuild the page from scratch on
+        // every navigation, including a return to a path it had already rendered.
+        expect(state.component).toEqual(expect.objectContaining({ template: '<p>/one</p>' }));
+        expect(state.component.__async).toBeUndefined();
+    });
+
+    it('reuses the component type when the same path is rendered again', async () => {
+        const http = deferredServer();
+        const state = bind(
+            createPageComponent({ http, styles: noStyles, config: {}, initial: null })
+        );
+
+        const first = state.visit('/one');
+        http.settle();
+        await first;
+
+        const type = state.component;
+
+        const again = state.visit('/one');
+        http.settle();
+        await again;
+
+        // Different object, same shape — what matters is that the *type* Vue sees is a
+        // plain options object it can compare, not a fresh async wrapper every time.
+        expect(state.component).toEqual(type);
+        expect(state.renderedPath).toBe('/one');
     });
 
     it('leaves the rendered page in place when a navigation fails', async () => {

@@ -298,9 +298,18 @@ export function createPageComponent({
                     // stylesheet. `renderedPath` moves with it, because it keys the
                     // transition and must not change while a navigation is merely in
                     // flight — a failed one leaves the visitor where they were.
-                    this.component = Vue.shallowRef(
-                        Vue.defineAsyncComponent(() => Promise.resolve(options))
-                    );
+                    // `markRaw`, not `defineAsyncComponent`. The options object was
+                    // already resolved by `toOptions()` above, so wrapping it in an async
+                    // component asked Vue to await a promise that was never pending: an
+                    // extra microtask and an extra render pass in which `component` is
+                    // truthy but draws nothing. Worse, it minted a *new component type* on
+                    // every navigation, so returning to a path already visited unmounted
+                    // and rebuilt the page from scratch even though `renderedPath` — the
+                    // key on the `<component>` — had not changed.
+                    //
+                    // `markRaw` does what the `shallowRef` was reaching for: it keeps Vue
+                    // from walking the options and making them reactive.
+                    this.component = Vue.markRaw(options);
                     this.renderedPath = this.currentPath;
                     this.loading = false;
 

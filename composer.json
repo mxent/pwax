@@ -58,8 +58,7 @@
     },
     "autoload-dev": {
         "psr-4": {
-            "Mxent\\Pwax\\Tests\\": "tests/",
-            "Workbench\\App\\": "workbench/app/"
+            "Mxent\\Pwax\\Tests\\": "tests/"
         }
     },
     "scripts": {

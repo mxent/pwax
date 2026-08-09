@@ -131,6 +131,26 @@
     <link rel="preload" as="script" {{ $shell->attributes($pwaxPreload) }}>
 @endforeach
 
+{{--
+    The modules this page is about to import, named before it can ask for them.
+
+    A component imported with @pwaxImport is fetched only once Vue has loaded, compiled
+    this page's template and rendered it — a serial round trip after the framework is
+    already up, for a URL the server knew while it was writing this document. The same
+    goes for configured plugins and directives, which the runtime awaits before it mounts.
+--}}
+@foreach ($shell->modulePreloads($component) as $pwaxModule)
+    <link rel="modulepreload" href="{{ $pwaxModule }}">
+@endforeach
+
+@foreach ($component?->externalScripts ?? [] as $pwaxExternalScript)
+    <link rel="preload" as="script" href="{{ $pwaxExternalScript }}">
+@endforeach
+
+@foreach ($component?->externalStyles ?? [] as $pwaxExternalStyle)
+    <link rel="preload" as="style" href="{{ $pwaxExternalStyle }}">
+@endforeach
+
 <style{!! $nonceAttr !!}>
     .pwax-preloader {
         position: relative;

@@ -67,9 +67,14 @@ function server(current, { cacheable = [ABOUT], down = new Set() } = {}) {
         }
 
         if (path === SHELL) {
-            return new Response('<html><div id="pwax"></div><script id="pwax-initial">{"url":"' + path + '"}</script></html>', {
-                headers: { 'Content-Type': 'text/html', 'Cache-Control': 'public' },
-            });
+            return new Response(
+                '<html><div id="pwax"></div><script id="pwax-initial">{"url":"' +
+                    path +
+                    '"}</script></html>',
+                {
+                    headers: { 'Content-Type': 'text/html', 'Cache-Control': 'public' },
+                }
+            );
         }
 
         if (path === ABOUT || path === DASHBOARD) {
@@ -101,7 +106,9 @@ function server(current, { cacheable = [ABOUT], down = new Set() } = {}) {
             });
         }
 
-        return new Response(`body:${path}`, { headers: { 'Cache-Control': 'private, max-age=3600' } });
+        return new Response(`body:${path}`, {
+            headers: { 'Cache-Control': 'private, max-age=3600' },
+        });
     };
 }
 
@@ -121,8 +128,7 @@ function offline(current, caches) {
 }
 
 /** The request the client runtime makes for a page. */
-const asRuntime = (path) =>
-    new Request(path, { headers: PAGE_HEADERS });
+const asRuntime = (path) => new Request(path, { headers: PAGE_HEADERS });
 
 /** Ask for a page the way the runtime does. */
 const visit = (worker, path) =>
@@ -130,17 +136,6 @@ const visit = (worker, path) =>
         request: asRuntime(path),
         preloadResponse: Promise.resolve(null),
     });
-
-/**
- * The worker answers a request it cannot satisfy with `Response.error()` rather than a
- * rejection — same outcome for the caller, without an unhandled rejection attributed to
- * the worker. `type: 'error'` is how that arrives.
- */
-async function expectNetworkError(response) {
-    const settled = await response;
-
-    expect(settled.type).toBe('error');
-}
 
 describe('page payloads offline', () => {
     it('serves a precached page with no network at all', async () => {
@@ -239,7 +234,7 @@ describe('page payloads offline', () => {
      * round trip on a device that already has everything. The document has the component
      * inlined in `pwax-initial`, so the page paints at once.
      */
-    it('answers an offline navigation with the page\'s own document', async () => {
+    it("answers an offline navigation with the page's own document", async () => {
         const current = manifest();
         const caches = new FakeCaches();
 
@@ -415,7 +410,9 @@ describe('page payloads offline', () => {
 
         const pages = await caches.open('pwax-pages-h1');
 
-        await expect(pages.match(asRuntime(DASHBOARD), { ignoreVary: true })).resolves.toBeUndefined();
+        await expect(
+            pages.match(asRuntime(DASHBOARD), { ignoreVary: true })
+        ).resolves.toBeUndefined();
     });
 
     it('goes to the network first for a page when there is one', async () => {
@@ -498,7 +495,10 @@ describe('a server that is failing rather than absent', () => {
     /** A server that answers this path with a status instead of a payload. */
     const failing = (current, path, status) => (asked, request) =>
         asked === path
-            ? new Response('<html>error</html>', { status, headers: { 'Content-Type': 'text/html' } })
+            ? new Response('<html>error</html>', {
+                  status,
+                  headers: { 'Content-Type': 'text/html' },
+              })
             : server(current)(asked, request);
 
     it('serves the stored page when the origin cannot be reached', async () => {
@@ -511,7 +511,11 @@ describe('a server that is failing rather than absent', () => {
 
         await boot(current, { caches });
 
-        const broken = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 503) });
+        const broken = createWorker({
+            manifest: current,
+            caches,
+            routes: failing(current, ABOUT, 503),
+        });
         await broken.dispatch('activate');
 
         const response = await visit(broken, ABOUT);
@@ -526,7 +530,11 @@ describe('a server that is failing rather than absent', () => {
 
         await boot(current, { caches });
 
-        const broken = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 500) });
+        const broken = createWorker({
+            manifest: current,
+            caches,
+            routes: failing(current, ABOUT, 500),
+        });
         await broken.dispatch('activate');
 
         // Answering this from cache hides it twice: the visitor sees a page that works and
@@ -540,7 +548,11 @@ describe('a server that is failing rather than absent', () => {
 
         await boot(current, { caches });
 
-        const gone = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 404) });
+        const gone = createWorker({
+            manifest: current,
+            caches,
+            routes: failing(current, ABOUT, 404),
+        });
         await gone.dispatch('activate');
 
         // The server is working correctly and saying something true. Answering from a
@@ -557,7 +569,11 @@ describe('a server that is failing rather than absent', () => {
 
         await boot(current, { caches });
 
-        const broken = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 502) });
+        const broken = createWorker({
+            manifest: current,
+            caches,
+            routes: failing(current, ABOUT, 502),
+        });
         await broken.dispatch('activate');
 
         const response = await broken.navigate(ABOUT);
@@ -572,7 +588,11 @@ describe('a server that is failing rather than absent', () => {
 
         await boot(current, { caches });
 
-        const gone = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 404) });
+        const gone = createWorker({
+            manifest: current,
+            caches,
+            routes: failing(current, ABOUT, 404),
+        });
         await gone.dispatch('activate');
 
         expect((await gone.navigate(ABOUT)).status).toBe(404);
@@ -584,7 +604,11 @@ describe('a server that is failing rather than absent', () => {
 
         await boot(current, { caches });
 
-        const broken = createWorker({ manifest: current, caches, routes: failing(current, ABOUT, 500) });
+        const broken = createWorker({
+            manifest: current,
+            caches,
+            routes: failing(current, ABOUT, 500),
+        });
         await broken.dispatch('activate');
 
         // The reload that would have shown the error is the one a developer does when

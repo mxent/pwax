@@ -10,10 +10,10 @@
         "dev": "node build.js --watch",
         "test": "vitest run",
         "test:watch": "vitest",
-        "lint": "eslint src/js build.js",
-        "lint:fix": "eslint --fix src/js build.js",
-        "format": "prettier --write \"src/js/**/*.js\" build.js",
-        "format:check": "prettier --check \"src/js/**/*.js\" build.js"
+        "lint": "eslint src/js tests/js build.js",
+        "lint:fix": "eslint --fix src/js tests/js build.js",
+        "format": "prettier --write \"src/js/**/*.js\" \"tests/js/**/*.js\" build.js",
+        "format:check": "prettier --check \"src/js/**/*.js\" \"tests/js/**/*.js\" build.js"
     },
     "devDependencies": {
         "esbuild": "^0.25.0",

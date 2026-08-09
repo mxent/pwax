@@ -30,23 +30,19 @@ first one's cached responses.
 
 Nothing to change. Upgrading is the fix. See §10 for the scheme that replaced the naming.
 
-### 2. The identity could be a session out of date
+### 2. `forgetIdentity()` and `window.pwax.config.identity` are gone
 
-`window.pwax.config.identity` was read once, when the document loaded, and Pwax turns a
-post-login `redirect()` into a client-side navigation on purpose. So someone who signed in
-through the runtime kept sending the guest identity, and the first pages of their
-authenticated session were filed in the partition every signed-out visitor can read.
-
-Page payloads now report the identity they were rendered for, and the runtime follows it.
-
-**If you call `forgetIdentity()` on sign-out, drop the argument:**
+Both belonged to the per-identity cache naming that §10 removes. There are no per-person
+caches left to forget, so the call has nothing to do — delete it.
 
 ```diff
 - pwax.sw.forgetIdentity(window.pwax.config.identity);
-+ pwax.sw.forgetIdentity();
 ```
 
-Passing it by hand was the documented pattern and the easiest way to pass a stale value.
+To clear stored responses on sign-out — on a shared terminal, say — use
+`pwax.sw.clearCaches()`. It is the heavier hammer: it discards the framework too, so the
+next visitor downloads the application again. For a page that must never reach disk in the
+first place, `->offline(false)` on the route is the better answer.
 
 ### 3. `service_worker.strategy` is now `runtime_strategy`, defaulting to `network-only`
 
@@ -146,18 +142,13 @@ was kept after install. A route the build never precached, a `/posts/{post}` for
 had no document at all, so reloading it offline fell back to the shell and a spinner. Now
 the HTML is kept too.
 
-Nothing to change, but two things to know.
+Nothing to change, but one thing to decide.
 
-**It rides on a response header.** Every page response carries `X-Pwax-Identity`, and a
-document is stored only when it says `anon`. If a reverse proxy or CDN in front of the
-application strips response headers it does not recognise, nothing is stored and you get
-the previous behaviour — correct, just slower. Allow the header through.
-
-**`forgetIdentity()` on sign-out now buys speed as well as privacy.** Stored documents are
-all signed-out renderings, so they are withheld entirely while somebody is signed in —
-otherwise a signed-in visitor reloading offline would be told they are logged out, and the
-document carries its own payload so nothing corrects it. Signing out puts the worker back
-to `anon` and restores the fast path for the next visitor.
+**These documents are shared, like every other cache.** Whatever HTML the server returned
+for a URL is what the next visitor on that device gets offline. For a page that renders
+the same for everyone that is the point. For one whose signed-in and signed-out renderings
+differ — `/dashboard`, `/account` — mark the route `->offline(false)` and it is refused
+outright.
 
 `service_worker.pages.runtime => false` turns off both halves, as before.
 
@@ -168,10 +159,10 @@ device. That made a cross-user read impossible by construction — and meant a f
 cache on every sign-in, a set left behind per person, and everything re-fetched under the
 new name each time it changed.
 
-They are fixed now: `pwax-pages-v1-<build>`, `pwax-runtime-v1`, `pwax-data-<group>-<v>`.
-The separation is kept by emptying the visitor caches the moment the worker learns it is
-answering somebody else, which it learns from the `X-Pwax-Identity` header on both requests
-and responses.
+The names are fixed now, one set per build: `pwax-precache-<build>`,
+`pwax-pages-<build>`, `pwax-documents-<build>`, plus `pwax-runtime`, `pwax-lazy` and
+`pwax-data-<group>-v<n>`, which are not keyed by the build so a deploy does not discard
+them.
 
 **`service_worker.identity_cache_limit` is gone.** It bounded how many per-person cache sets
 a device kept, and there are none. Remove it; `pwax:doctor` names it if you forget.
@@ -182,11 +173,16 @@ a device kept, and there are none. Remove it; `pwax:doctor` names it if you forg
   ],
 ```
 
-**Two consequences worth knowing.** The separation is enforced by deleting rather than by
-being unaddressable, so it is weaker: a device that is switched off between one person
-signing out and the next signing in still has the last person's pages on disk until the
-next request. And the previous person's offline pages are now *gone* on a switch rather
-than parked — on a genuinely shared device, each person re-caches as they browse.
+**The consequence, stated plainly: caches are shared across visitors.** Whatever the server
+returned for a URL is what the next person using that device is served offline. The naming
+scheme it replaces did not actually prevent that — a `caches.match()` with no cache named
+searches every cache on the origin, which is exactly what the offline fallback did — so
+this is the same exposure with the guarantee removed rather than a new one.
+
+Decide per route. `->offline(false)` refuses to store a page at all, and is the right
+answer for anything whose signed-in and signed-out renderings differ. Data groups are
+responses and can hold one person's data; do not add an authenticated endpoint to one
+without meaning it.
 
 Existing caches from 4.0.x are swept on the first activate of the new worker, so there is
 nothing to clear by hand.
@@ -196,10 +192,10 @@ nothing to clear by hand.
 - [ ] `service_worker.strategy` → `service_worker.runtime_strategy`, and decided on its value
 - [ ] `service_worker.identity_cache_limit` removed
 - [ ] Data groups flattened; `max_size` → `max_entries`
-- [ ] `forgetIdentity()` called with no argument
+- [ ] `forgetIdentity()` and `window.pwax.config.identity` removed from your code
 - [ ] `pwax.sw.registration` → `.controller` or `.registration()`
 - [ ] Published shell view updated, if you have one — announcer, mount attributes
-- [ ] `X-Pwax-Identity` survives your proxy or CDN, if you have one
+- [ ] Decided which routes need `->offline(false)`, now that caches are shared
 - [ ] `php artisan pwax:doctor` is clean
 - [ ] Tested offline, signed in as two different users on one browser profile
 

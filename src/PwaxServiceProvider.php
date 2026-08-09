@@ -105,6 +105,8 @@ class PwaxServiceProvider extends ServiceProvider
                 ? $this->cacheStore($app, (string) $config->get('pwax.cache.store', '') ?: null)
                 : null;
 
+            $ttl = $config->get('pwax.cache.ttl');
+
             return new ComponentCompiler(
                 $app->make(ViewFactory::class),
                 $app->make(BlockExtractor::class),
@@ -113,6 +115,7 @@ class PwaxServiceProvider extends ServiceProvider
                 $app->make(Minifier::class),
                 $cache,
                 (bool) $config->get('pwax.components.scoped_styles', true),
+                $ttl === null ? null : max(1, (int) $ttl),
             );
         });
     }

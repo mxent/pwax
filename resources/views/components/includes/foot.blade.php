@@ -25,8 +25,15 @@
 
 {{--
     Vue must evaluate before Vue Router and Pinia: both are IIFE builds that read the
-    global `Vue` at load time. None of them are ES modules, so `defer` would reorder
-    them relative to this file's own execution and is deliberately not used.
+    global `Vue` at load time.
+
+    No `defer`, and not because it would break that order — `defer` preserves document
+    order for classic scripts, so it would hold. The reason is that it would buy nothing
+    and cost something. These tags sit at the end of `<body>`, with only the closing tags
+    below them, and the head already emits `<link rel="preload">` for each so the
+    downloads start while it is still being parsed. What `defer` would change is that
+    anything an application puts in `pwax.blade.foot` or `@stack('pwax-foot')` — both of
+    which render *after* this — would begin running before Vue rather than after it.
 --}}
 @foreach ($shell->vendorScripts() as $script)
     <script {{ $shell->attributes($script) }}></script>

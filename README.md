@@ -1107,6 +1107,11 @@ shell instead, and the runtime's own request, which does carry an identity, deci
 render. That costs a spinner and buys the right page; `pwax.sw.forgetIdentity()` on sign-out
 clears the bucket and the fast path returns.
 
+Payloads are not withheld the same way, and the asymmetry is deliberate: withholding a
+document costs a spinner, because the shell boots and asks for the payload, which reads the
+visitor's own cache first. Withholding the payload would cost the page — there is nothing
+behind it.
+
 The documents installed with the build follow the same principle by construction: they are
 fetched without cookies, so a route behind `auth` answers that request with a login screen,
 which is refused rather than stored.
@@ -1117,9 +1122,11 @@ is not an offline app. Three things make storing them safe, and they are worth k
 - **They are partitioned by identity.** A visited page goes in a cache named after an
   opaque HMAC of the signed-in user, so another session on the same device cannot reach
   it — it is not cleared later, it was never addressable. Reads are confined to the same
-  name; the precache is the one cache deliberately shared, and it holds only the
-  framework, the components and the session-free shell. Call `pwax.sw.forgetIdentity()`
-  on sign-out to drop the rest at once.
+  name. Three caches are deliberately shared, and none of them can hold anything of one
+  visitor's: the precache (framework, components, session-free shell), the install bucket
+  of guest page payloads, and the documents cache, which stores only responses that
+  declared themselves anonymous. Call `pwax.sw.forgetIdentity()` on sign-out to drop the
+  rest at once.
 - **Precached pages are fetched without cookies**, so what installs is the guest
   rendering. A route behind `auth` answers with a login screen and is refused. Those
   copies sit in a bucket of their own that every identity reads and none writes to — the

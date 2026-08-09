@@ -1182,6 +1182,14 @@ async function rememberDocument(response, manifest, path) {
  * request — which carries an identity — decides what to render. That costs a spinner and
  * buys the right page. `pwax.sw.forgetIdentity()` on sign-out clears the bucket and the
  * fast path comes back.
+ *
+ * Note what this is *not*: the install bucket of guest payloads, which `storedPage()`
+ * still falls back to for a signed-in visitor, is deliberately unguarded. The two look
+ * like the same decision made twice, opposite ways, and they are not. Withholding a
+ * document costs a spinner, because the shell then boots and asks for the payload — which
+ * consults the visitor's own bucket first, and reaches the same guest copy only if they
+ * have none. Withholding the payload would cost the page itself: there is nothing behind
+ * it. One has a strictly better answer available and the other has nothing.
  */
 async function storedDocument(manifest, path) {
     if (await signedInHere(manifest)) {

@@ -56,6 +56,7 @@ table in JavaScript.
 - [Blade and Vue together](#blade-and-vue-together)
 - [Passing data](#passing-data)
 - [Routing](#routing)
+- [Navigating](#navigating)
 - [Redirects and errors](#redirects-and-errors)
 - [Importing components](#importing-components)
 - [Scoped styles](#scoped-styles)
@@ -362,6 +363,51 @@ Customise the error and loading markup by publishing the views, or by pointing
 ```
 
 `error` exposes `status`, `statusText` and `message`; `retry()` refetches the page.
+
+## Navigating
+
+A navigation does not unmount the page you are on. The current page stays rendered while
+the next one is fetched, compiled and has its styles applied; only then do the two swap,
+with a fade. Nothing collapses to a spinner in between, and a navigation that fails leaves
+you where you were.
+
+The one thing that moves while you wait is a progress bar across the top of the window.
+It waits 250 ms before appearing — most navigations finish well inside that, and a bar
+that flashes on and off for each of them reads as jitter — then eases towards a ceiling it
+never reaches, because the payload has no length the browser can know in advance. Claiming
+to be finished and then waiting is what makes a progress bar feel like a lie.
+
+```php
+'progress' => [
+    'enabled' => true,
+    'color'   => null,   // defaults to customization.init_spinner_color
+    'height'  => 3,
+    'delay'   => 250,
+    'trickle' => true,
+],
+
+'transition' => [
+    'name'     => 'pwax-page',   // any Vue transition name
+    'duration' => 150,           // must agree with the CSS
+],
+```
+
+The bundled transition fades with opacity alone — anything that changes an element's size
+or position is a second kind of movement to follow. Name your own and define its classes
+in your stylesheet to replace it. Both defer to `prefers-reduced-motion`.
+
+Wrap your own slow work in the same indicator:
+
+```js
+window.pwax.progress.start();
+await fetch('/api/report');
+window.pwax.progress.done();
+```
+
+The loader view is now only for the case with nothing to keep — the first paint of an
+application whose landing page was not inlined. It ships silent, speaking only to screen
+readers, which have no progress bar to look at. Point `pwax.blade.loader` at a skeleton if
+you would rather show one.
 
 > Use `v-text`, not `v-html`. Part of `error` derives from the HTTP response, and
 > rendering that as HTML would make reflected content executable.
@@ -1036,6 +1082,10 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `cache.components` | `true` | Memoise compiled components |
 | `csp.nonce` | `null` | Nonce (or callable) for inline blocks |
 | `customization.*` | see config | Preloader colours |
+| `progress.enabled` | `true` | Navigation progress bar |
+| `progress.color`, `.height` | `null`, `3` | Colour falls back to the spinner's; height in px |
+| `progress.delay`, `.trickle` | `250`, `true` | Silence before it appears, and whether it eases while waiting |
+| `transition.name`, `.duration` | `pwax-page`, `150` | The page transition and how long its CSS runs |
 | `manifest_path`, `manifest` | see config | Web App Manifest (all spec members) |
 | `head.title`, `.title_template` | `null` | Document title and its wrapper |
 | `head.description`, `.icon` | `null` | Fall back to the manifest's |

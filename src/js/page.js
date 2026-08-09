@@ -10,7 +10,7 @@ import { importInlineModule, importModule, styleMetadata, toComponentOptions } f
 
 const PAGE_STYLE_KEY = 'pwax:page';
 
-const DEFAULT_LOADER = '<div class="pwax-loading" role="status" aria-live="polite">Loading…</div>';
+const DEFAULT_LOADER = '<div class="pwax-loading" role="status">Loading…</div>';
 
 const DEFAULT_ERROR = `
     <div class="pwax-error" role="alert">
@@ -29,18 +29,44 @@ export function createPageComponent({
     // module middleware does not hold up the first paint; `await` accepts both.
     middleware = {},
     templates = {},
+    progress = null,
+    transition = 'pwax-page',
 }) {
     let initialPayload = initial;
 
     return {
         name: 'PwaxPage',
 
-        // Loader and error markup come from the server so they stay customisable through
-        // Blade, while this bundle itself remains static and cacheable.
+        /*
+         * The page that is on screen stays on screen until the next one is ready.
+         *
+         * This used to render the loader *instead of* the current component the moment a
+         * navigation started, so every click threw away what the visitor was reading,
+         * collapsed the layout to the height of the word "Loading", and then expanded it
+         * again — a flash of nothing between every two pages, at its worst on exactly the
+         * connections where it matters most.
+         *
+         * Now `component` is only reassigned once the replacement has been fetched,
+         * compiled and had its styles applied. During the fetch the old page is untouched
+         * and the progress bar is the only thing that moves. The loader is still here for
+         * the one case that has nothing to keep: the very first paint of an application
+         * whose landing page was not inlined.
+         *
+         * Keyed on the path so Vue treats each page as a new element and runs the
+         * transition; `mode="out-in"` because two pages briefly overlapping is a layout
+         * jump, which is the thing being fixed.
+         *
+         * Loader and error markup come from the server so they stay customisable through
+         * Blade, while this bundle itself remains static and cacheable.
+         */
         template: `
             <template v-if="error">${templates.error || DEFAULT_ERROR}</template>
-            <template v-else-if="loading">${templates.loader || DEFAULT_LOADER}</template>
-            <component v-else :is="component"></component>
+            <template v-else>
+                <template v-if="!component">${templates.loader || DEFAULT_LOADER}</template>
+                <transition name="${transition}" mode="out-in">
+                    <component v-if="component" :is="component" :key="renderedPath"></component>
+                </transition>
+            </template>
         `,
 
         data() {
@@ -49,6 +75,10 @@ export function createPageComponent({
                 loading: true,
                 error: null,
                 currentPath: null,
+                // The path of the component actually on screen, which during a navigation
+                // is not the path being navigated to. It is what keys the transition, so
+                // it must change only when the rendered page does.
+                renderedPath: null,
                 // The first paint is not a navigation: the browser has just read the
                 // document, so announcing it again would be noise.
                 announced: false,
@@ -100,6 +130,7 @@ export function createPageComponent({
 
                 this.error = null;
                 this.loading = true;
+                progress?.start();
 
                 const controller = new AbortController();
                 this.controller = controller;
@@ -147,6 +178,12 @@ export function createPageComponent({
                 } finally {
                     if (this.controller === controller) {
                         this.controller = null;
+
+                        // Only the navigation still in flight finishes the bar. An
+                        // aborted one has been replaced by another that is still running,
+                        // and completing it there would flash the bar to full and start
+                        // it again for every link clicked in quick succession.
+                        progress?.done();
                     }
                 }
             },
@@ -230,9 +267,16 @@ export function createPageComponent({
                         document.title = payload.title;
                     }
 
+                    // The swap, and the only point at which the page on screen changes.
+                    // Everything above this line ran while the previous page was still
+                    // rendered: the fetch, the compile, the external assets, the
+                    // stylesheet. `renderedPath` moves with it, because it keys the
+                    // transition and must not change while a navigation is merely in
+                    // flight — a failed one leaves the visitor where they were.
                     this.component = Vue.shallowRef(
                         Vue.defineAsyncComponent(() => Promise.resolve(options))
                     );
+                    this.renderedPath = this.currentPath;
                     this.loading = false;
 
                     this.$nextTick(() => {

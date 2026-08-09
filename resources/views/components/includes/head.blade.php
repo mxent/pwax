@@ -40,6 +40,12 @@
     $spinnerBg = $pwaxColor('pwax.customization.init_spinner_bg', '#f3f3f3');
     $spinnerColor = $pwaxColor('pwax.customization.init_spinner_color', '#0c83ff');
 
+    // The navigation progress bar. Defaults to the spinner's colour so an application that
+    // set one has already set the other.
+    $progressColor = $pwaxColor('pwax.progress.color', $spinnerColor);
+    $progressHeight = (int) config('pwax.progress.height', 3);
+    $transitionMs = (int) config('pwax.transition.duration', 150);
+
     $documentTitle = $title ?: (config('pwax.head.title') ?: config('pwax.manifest.name'));
     $description = config('pwax.head.description') ?: config('pwax.manifest.description');
 @endphp
@@ -188,6 +194,63 @@
     .pwax-loading {
         padding: 1.5rem;
         font-family: system-ui, sans-serif;
+    }
+
+    /* The navigation progress bar.
+       Fixed and scaled from the left, so it never participates in layout and never
+       reflows the page underneath it — the whole point is that nothing else moves. */
+    #pwax-progress {
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 2147483000;
+        width: 100%;
+        height: {{ $progressHeight }}px;
+        background: {{ $progressColor }};
+        transform: scaleX(0);
+        transform-origin: 0 50%;
+        opacity: 0;
+        pointer-events: none;
+        will-change: transform, opacity;
+        transition: transform 200ms ease-out, opacity 200ms linear;
+    }
+
+    #pwax-progress.pwax-progress-visible {
+        opacity: 1;
+    }
+
+    /* The completing stroke: full width, then fade. The width transition is quicker here
+       so "done" reads as an arrival rather than one last slow crawl. */
+    #pwax-progress.pwax-progress-done {
+        opacity: 0;
+        transition: transform 120ms ease-out, opacity 220ms linear 100ms;
+    }
+
+    /* Page transitions.
+       Opacity only — nothing that changes an element's size or position, because a
+       transform on the outgoing page is a second kind of movement to look at, and the
+       reason this exists is that navigation felt unsettled. */
+    .pwax-page-enter-active,
+    .pwax-page-leave-active {
+        transition: opacity {{ $transitionMs }}ms ease;
+    }
+
+    .pwax-page-enter-from,
+    .pwax-page-leave-to {
+        opacity: 0;
+    }
+
+    /* Motion is a preference, and both of these are motion. The progress bar keeps its
+       colour and its position — it just stops sliding — and pages swap outright. */
+    @media (prefers-reduced-motion: reduce) {
+        #pwax-progress {
+            transition: opacity 200ms linear;
+        }
+
+        .pwax-page-enter-active,
+        .pwax-page-leave-active {
+            transition: none;
+        }
     }
 
     /* Read by a screen reader, invisible to everyone else. `display: none` and

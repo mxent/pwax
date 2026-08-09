@@ -12,6 +12,7 @@ import { resolveExtensions } from './extensions.js';
 import { createHttp } from './http.js';
 import { importModule } from './modules.js';
 import { createPageComponent } from './page.js';
+import { createProgress } from './progress.js';
 import { createRouter } from './router.js';
 import { createServiceWorkerApi, registerServiceWorker } from './serviceWorker.js';
 import { createStyleManager } from './styles.js';
@@ -26,6 +27,10 @@ async function boot() {
     const styles = createStyleManager(document);
     const loader = createComponentLoader({ styles, nonce: config.nonce });
 
+    // Null when the application turned it off, and every call site uses `?.` — a disabled
+    // progress bar should cost nothing at all, not an object that does nothing.
+    const progressBar = config.progress === false ? null : createProgress(config.progress || {});
+
     // Published before anything is mounted, so component scripts can call it during
     // their own evaluation.
     window.pwax = {
@@ -37,6 +42,9 @@ async function boot() {
         load: loader.load,
         import: importModule,
         sw: createServiceWorkerApi(),
+        // Exposed so an application can wrap its own long-running work — a form
+        // submission, a report — in the same indicator its navigations use.
+        progress: progressBar,
     };
 
     if (typeof Vue === 'undefined') {
@@ -67,6 +75,8 @@ async function boot() {
         initial,
         middleware: middlewareReady,
         templates: config.templates || {},
+        progress: progressBar,
+        transition: config.transition || 'pwax-page',
     });
 
     const app = Vue.createApp({

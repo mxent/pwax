@@ -76,6 +76,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A navigation no longer unmounts the page you are on.** The current page stays rendered
+  while the next one is fetched, compiled and has its styles applied; only then do the two
+  swap, with a fade. Previously the loader replaced the component the moment a navigation
+  began, so every click threw away what the visitor was reading and collapsed the layout to
+  a single line, twice. A failed navigation now leaves you where you were.
+- **A navigation progress bar**, which is the only thing that moves while you wait. It
+  waits 250 ms before appearing, eases towards a ceiling it never reaches, and completes
+  before it fades. `pwax.progress`; `window.pwax.progress` exposes `start()` and `done()`
+  for an application's own slow work.
+- `pwax.transition` names the page transition and its duration. The bundled one fades with
+  opacity alone; both it and the progress bar defer to `prefers-reduced-motion`.
 - `service_worker.max_entry_bytes`, bounding a single runtime-cache entry. `max_entries`
   counts entries, which bounds nothing on its own.
 - **Pages work offline.** An application could precache its framework, its components and
@@ -102,7 +113,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   glob patterns resolved against `public/`. Images, fonts, stylesheets and build output are
   precached without listing each one.
 - **Data groups** (`service_worker.data_groups`) with `freshness` and `performance`
-  strategies, `max_age` and `max_size`. An offline page used to render and then fail every
+  strategies, `max_age` and `max_entries`. An offline page used to render and then fail every
   fetch it made.
 - **`navigation_strategy`** with an `app-shell` option for zero-round-trip navigation, and
   **`navigation_urls`** so a path the application does not own bypasses the worker.

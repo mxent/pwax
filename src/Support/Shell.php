@@ -48,10 +48,33 @@ class Shell
             'csrf' => $this->csrfToken(),
             'identity' => $this->identity(),
             'home' => $this->pwax->homeUrl(),
+            'progress' => $this->progress(),
+            'transition' => (string) $this->config->get('pwax.transition.name', 'pwax-page'),
             'plugins' => $this->extensions('pwax.plugins'),
             'directives' => $this->extensions('pwax.directives'),
             'middleware' => $this->extensions('pwax.middleware_js'),
             'templates' => $this->templates(),
+        ];
+    }
+
+    /**
+     * Settings for the navigation progress bar, or `false` when it is switched off.
+     *
+     * `false` rather than an empty array, because the runtime treats it as a signal to
+     * build nothing at all — no element, no timers. Colour and height belong to the
+     * stylesheet in the head and are not repeated here.
+     *
+     * @return array{delay: int, trickle: bool}|false
+     */
+    private function progress(): array|false
+    {
+        if (! $this->config->get('pwax.progress.enabled', true)) {
+            return false;
+        }
+
+        return [
+            'delay' => (int) $this->config->get('pwax.progress.delay', 250),
+            'trickle' => (bool) $this->config->get('pwax.progress.trickle', true),
         ];
     }
 

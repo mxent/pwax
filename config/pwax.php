@@ -259,6 +259,60 @@ return [
     |--------------------------------------------------------------------------
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Navigation feedback
+    |--------------------------------------------------------------------------
+    |
+    | A client-side navigation has no address-bar spinner, so without something here a
+    | slow page gives no sign that anything is happening. The progress bar is that sign,
+    | and it is deliberately the only thing that moves: the page you are on stays
+    | rendered until its replacement is ready, then the two cross-fade.
+    |
+    |   enabled   Set to false to remove the bar entirely — no element, no timers.
+    |   color     Defaults to `customization.init_spinner_color`, so an application that
+    |             set one has already set the other.
+    |   height    Pixels.
+    |   delay     Milliseconds of silence before the bar appears at all. Most navigations
+    |             finish well inside this, and a bar that flashes on and off for every
+    |             one of them reads as jitter rather than as feedback.
+    |   trickle   Ease towards a ceiling while waiting. Off means the bar appears and
+    |             then sits still until the page arrives.
+    |
+    | `window.pwax.progress` exposes `start()` and `done()` so the same indicator can
+    | cover your own long-running work — a form submission, a report.
+    |
+    */
+
+    'progress' => [
+        'enabled' => true,
+        'color' => null,
+        'height' => 3,
+        'delay' => 250,
+        'trickle' => true,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Page transition
+    |--------------------------------------------------------------------------
+    |
+    | The name of the Vue transition wrapping the routed page, and how long its CSS runs
+    | for. The bundled `pwax-page` fades, using opacity alone — anything that changes an
+    | element's size or position is a second kind of movement to follow, and the reason
+    | this exists is that navigation felt unsettled.
+    |
+    | `duration` must agree with whatever the CSS does; it is what the default stylesheet
+    | is written with. Name your own transition here and define its classes in your own
+    | stylesheet to replace it entirely. Both are ignored under `prefers-reduced-motion`.
+    |
+    */
+
+    'transition' => [
+        'name' => 'pwax-page',
+        'duration' => 150,
+    ],
+
     'customization' => [
         'init_spinner_color' => '#0c83ff',
         'init_spinner_bg' => '#f3f3f3',

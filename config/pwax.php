@@ -404,12 +404,7 @@ return [
     |             with `--tag=pwax-service-worker`.
     | version     Mixed into the manifest hash. Bump it to force every client to discard
     |             its caches even when no file changed.
-    | strategy    Applies to same-origin requests that are not in the manifest.
-    |             'network-first' favours freshness; 'stale-while-revalidate' favours
-    |             speed and serves the cached copy while refreshing in the background.
     | offline_url Page shown when a navigation fails. Defaults to the app shell.
-    | max_entries Cap on the *runtime* cache only. Precached entries are never evicted,
-    |             so ordinary browsing can no longer push the app shell out of storage.
     |
     */
 
@@ -420,10 +415,45 @@ return [
         'blade' => null,
         'version' => 'v1',
         'cache_name' => 'pwax',
-        'strategy' => 'network-first',
         'offline_url' => null,
-        'max_entries' => 60,
         'navigation_preload' => true,
+
+        /*
+        | What happens to a same-origin GET that nothing in the manifest claims.
+        |
+        | 'network-only'            pass it through and store nothing (default)
+        | 'network-first'           store a copy, and serve that copy when offline
+        | 'stale-while-revalidate'  serve the copy first and refresh behind it
+        |
+        | The default is the conservative one because the alternative kept everything: a
+        | one-off PDF, a CSV export, a file under /storage — URLs the application never
+        | declared, taking up someone's disk and never asked for offline. What an
+        | application genuinely needs offline belongs in an asset group or a data group,
+        | where it is listed, hashed and bounded.
+        |
+        | This governs the runtime cache only. Anything in the manifest is precached, and
+        | anything under Pwax's own prefixes is served from cache and revalidated,
+        | whatever this says.
+        */
+        'runtime_strategy' => 'network-only',
+
+        /*
+        | Ceilings on the runtime cache.
+        |
+        | `max_entries` counts entries and `max_entry_bytes` bounds each one, because the
+        | first without the second is not a bound on anything: sixty JSON payloads and
+        | sixty videos are very different amounts of a visitor's disk, and one large
+        | response can push the origin over its quota and have the browser evict the
+        | precache — taking the application's offline capability with it.
+        |
+        | Precached entries are never evicted by either, so ordinary browsing cannot push
+        | the app shell out of storage.
+        |
+        | A response with no Content-Length is kept: measuring it would mean buffering the
+        | very responses the ceiling exists to avoid buffering.
+        */
+        'max_entries' => 60,
+        'max_entry_bytes' => 5242880,
 
         /*
         | How a full page navigation is answered.
@@ -656,18 +686,20 @@ return [
         | They are stored per signed-in identity and `no-store` is still honoured, but a
         | device shared between two people is a device with both their data on it. Do not
         | add an authenticated endpoint here without deciding that is acceptable.
+        |
+        | Written flat, like `pages` and `asset_groups`: `max_entries` here is the same
+        | quantity as `max_entries` there, and had no business being spelled differently
+        | one level further down.
         */
         'data_groups' => [
             // [
             //     'name' => 'posts',
             //     'urls' => ['/api/posts', '/api/posts/**'],
             //     'version' => 1,
-            //     'cache_config' => [
-            //         'strategy' => 'freshness',
-            //         'max_size' => 50,
-            //         'max_age' => 3600,
-            //         'timeout' => 3000,
-            //     ],
+            //     'strategy' => 'freshness',
+            //     'max_entries' => 50,
+            //     'max_age' => 3600,
+            //     'timeout' => 3000,
             // ],
         ],
 

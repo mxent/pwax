@@ -659,9 +659,19 @@ async function serve(event) {
         return staleWhileRevalidate(request, manifest, identity);
     }
 
-    return manifest.strategy === 'stale-while-revalidate'
-        ? staleWhileRevalidate(request, manifest, identity)
-        : networkFirst(request, manifest, identity);
+    // Everything else: a URL this application never declared. `network-only` is the
+    // default, and it stores nothing — a one-off download, a CSV export, a file under
+    // /storage is not part of the app and does not belong in its cache. `runtime_strategy`
+    // opts back into keeping them.
+    if (manifest.strategy === 'stale-while-revalidate') {
+        return staleWhileRevalidate(request, manifest, identity);
+    }
+
+    if (manifest.strategy === 'network-first') {
+        return networkFirst(request, manifest, identity);
+    }
+
+    return fetch(request);
 }
 
 /**
@@ -1197,7 +1207,7 @@ async function matchScoped(request, manifest, identity) {
 /* ----------------------------------------------------------------- cache writes ----- */
 
 async function put(request, response, manifest, identity) {
-    if (!cacheable(response)) {
+    if (!cacheable(response) || tooLarge(response, manifest)) {
         return;
     }
 
@@ -1206,6 +1216,30 @@ async function put(request, response, manifest, identity) {
     const cache = await caches.open(runtimeName(manifest, identityFor(request, response)));
     await cache.put(request, response);
     await trim(cache, manifest.maxEntries);
+}
+
+/**
+ * Is this response too big to be worth a place in the runtime cache?
+ *
+ * The entry cap counts entries, and sixty JSON payloads and sixty videos are not the same
+ * amount of somebody's disk. One large response can crowd out everything the cap was meant
+ * to protect, or push the origin over its quota and have the browser evict the precache —
+ * which takes the application's offline capability with it.
+ *
+ * Only `Content-Length` is consulted. Reading the body to measure it would mean buffering
+ * the very responses this exists to avoid buffering, so a streamed response with no length
+ * is allowed through: the cap on entries still bounds it, and guessing is worse.
+ */
+function tooLarge(response, manifest) {
+    const limit = manifest.maxEntryBytes || 0;
+
+    if (limit <= 0) {
+        return false;
+    }
+
+    const declared = Number(response.headers.get('Content-Length'));
+
+    return Number.isFinite(declared) && declared > limit;
 }
 
 /**

@@ -65,7 +65,7 @@ class DoctorCommand extends Command
     }
 
     /**
-     * Config keys 3.0 removed, and what replaced them.
+     * Config keys a major version removed, and what replaced them.
      *
      * A published `config/pwax.php` is the application's file, so an upgrade cannot
      * rewrite it. Left unattended these keys do nothing at all — the most confusing
@@ -78,6 +78,7 @@ class DoctorCommand extends Command
             'pwax.service_worker.precache' => 'service_worker.pages.urls, though most routes are now discovered automatically',
             'pwax.service_worker.files' => 'service_worker.asset_groups, which takes globs',
             'pwax.helpers.global' => 'nothing — vue() and router() were removed in 3.0',
+            'pwax.service_worker.strategy' => 'service_worker.runtime_strategy, which now defaults to network-only',
         ];
 
         foreach ($replacements as $key => $replacement) {
@@ -91,8 +92,41 @@ class DoctorCommand extends Command
         if ($config->get('pwax.components.directive') === 'pwax') {
             $this->warn_(
                 'pwax.components.directive is set to "pwax". @pwaxImport is the canonical '
-                . 'name in 3.0 and is always registered; keeping this only means both work.'
+                . 'name and is always registered; keeping this only means both work.'
             );
+        }
+
+        $this->checkDataGroupShape($config);
+    }
+
+    /**
+     * Data groups written the 3.x way.
+     *
+     * The nested `cache_config` is now flat, and `max_size` is `max_entries` — the same
+     * quantity the pages block and the runtime cache already spelled that way. A group
+     * left in the old shape is not an error the worker can see: it reads defaults and
+     * caches happily, with none of the bounds its author wrote.
+     */
+    private function checkDataGroupShape(Config $config): void
+    {
+        foreach ((array) $config->get('pwax.service_worker.data_groups', []) as $group) {
+            if (! is_array($group)) {
+                continue;
+            }
+
+            $name = is_string($group['name'] ?? null) ? $group['name'] : 'a data group';
+
+            if (isset($group['cache_config'])) {
+                $this->warn_(sprintf(
+                    'Data group "%s" still nests its settings under cache_config. Move strategy, '
+                    . 'max_age and timeout onto the group itself, or it runs on defaults.',
+                    $name
+                ));
+            }
+
+            if (isset($group['max_size'])) {
+                $this->warn_(sprintf('Data group "%s" uses max_size. It is now max_entries.', $name));
+            }
         }
     }
 
@@ -105,16 +139,21 @@ class DoctorCommand extends Command
         );
     }
 
+    /**
+     * Report which directive imports a component.
+     *
+     * Only reports it. This used to assert that the name was not `import` — the 1.x
+     * default, which also matched the CSS at-rule inside `<style>` blocks — but
+     * `PwaxServiceProvider::assertDirectiveName()` throws at boot on that name, so an
+     * application configured that way cannot start, let alone reach this command. A check
+     * that can never fail is a line of output pretending to be a result.
+     */
     private function checkDirective(Config $config): void
     {
-        $directive = (string) $config->get('pwax.components.directive', 'pwaxImport');
-
-        $this->assert(
-            $directive !== 'import',
-            sprintf('Import directive is @%s', $directive),
-            'pwax.components.directive is "import", which also matches the CSS at-rule @import '
-            . 'inside <style> blocks and rewrites it as JavaScript. Change it to "pwaxImport".'
-        );
+        $this->ok(sprintf(
+            'Import directive is @%s',
+            (string) $config->get('pwax.components.directive', 'pwaxImport')
+        ));
     }
 
     private function checkAssets(Config $config): void
@@ -408,5 +447,14 @@ class DoctorCommand extends Command
     {
         $this->warnings++;
         $this->components->twoColumnDetail($message, '<fg=yellow>WARN</>');
+    }
+
+    /**
+     * State a fact. Unlike `assert()` there is no failing branch — this is for things
+     * worth showing that cannot be wrong.
+     */
+    private function ok(string $message): void
+    {
+        $this->components->twoColumnDetail($message, '<fg=green>OK</>');
     }
 }

@@ -179,8 +179,9 @@ class AssetManifest
             'configVersion' => 2,
             'version' => (string) $this->config->get('pwax.service_worker.version', 'v1'),
             'cachePrefix' => (string) $this->config->get('pwax.service_worker.cache_name', 'pwax'),
-            'strategy' => (string) $this->config->get('pwax.service_worker.strategy', 'network-first'),
+            'strategy' => $this->runtimeStrategy(),
             'maxEntries' => (int) $this->config->get('pwax.service_worker.max_entries', 60),
+            'maxEntryBytes' => (int) $this->config->get('pwax.service_worker.max_entry_bytes', 5242880),
             'navigationPreload' => (bool) $this->config->get('pwax.service_worker.navigation_preload', true),
             'navigationStrategy' => $this->navigationStrategy(),
             'navigationUrls' => Glob::compile($this->navigationUrls()),
@@ -540,10 +541,7 @@ class AssetManifest
                 continue;
             }
 
-            /** @var array<string, mixed> $cache */
-            $cache = (array) ($declaration['cache_config'] ?? []);
-
-            $strategy = (string) ($cache['strategy'] ?? 'freshness');
+            $strategy = (string) ($declaration['strategy'] ?? 'freshness');
 
             $groups[] = [
                 'name' => is_string($declaration['name'] ?? null) ? $declaration['name'] : 'data-' . $index,
@@ -551,14 +549,35 @@ class AssetManifest
                 'patterns' => Glob::compile($patterns),
                 'cacheConfig' => [
                     'strategy' => $strategy === 'performance' ? 'performance' : 'freshness',
-                    'maxSize' => (int) ($cache['max_size'] ?? 50),
-                    'maxAge' => (int) ($cache['max_age'] ?? 3600),
-                    'timeout' => (int) ($cache['timeout'] ?? 3000),
+                    'maxSize' => (int) ($declaration['max_entries'] ?? 50),
+                    'maxAge' => (int) ($declaration['max_age'] ?? 3600),
+                    'timeout' => (int) ($declaration['timeout'] ?? 3000),
                 ],
             ];
         }
 
         return $groups;
+    }
+
+    /**
+     * How a same-origin GET nothing else claims is answered.
+     *
+     * `network-only` by default, and that is the change from 3.x. The catch-all used to be
+     * `network-first`, which stored a copy of everything it passed through: a one-off PDF,
+     * a CSV export, a file under `/storage` — anything the application never declared. All
+     * of it counted against the origin's quota, none of it was ever asked for offline, and
+     * the entry cap counts entries rather than bytes so sixty large ones is a very
+     * different amount of disk from sixty small ones.
+     *
+     * An application that wants the old behaviour asks for it, and then knows it has.
+     */
+    private function runtimeStrategy(): string
+    {
+        $strategy = (string) $this->config->get('pwax.service_worker.runtime_strategy', 'network-only');
+
+        return in_array($strategy, ['network-first', 'stale-while-revalidate'], true)
+            ? $strategy
+            : 'network-only';
     }
 
     private function navigationStrategy(): string

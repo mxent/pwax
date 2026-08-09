@@ -507,3 +507,72 @@ describe('a manifest with a bad pattern', () => {
         ]);
     });
 });
+
+describe('the runtime strategy', () => {
+    it('stores nothing for a URL the application never declared', async () => {
+        // The default. A one-off download, a CSV export, a file under /storage — none of
+        // it is part of the application, and all of it used to be kept.
+        const current = manifest({ overrides: { strategy: 'network-only' } });
+        const worker = await boot(current);
+
+        const response = await worker.request('/exports/report.csv');
+
+        expect(await response.text()).toBe('body:/exports/report.csv');
+
+        const names = await worker.caches.keys();
+        expect(names.filter((name) => name.startsWith('pwax-runtime-'))).toEqual([]);
+    });
+
+    it('keeps them when asked to', async () => {
+        const current = manifest({ overrides: { strategy: 'network-first' } });
+        const worker = await boot(current);
+
+        await worker.request('/exports/report.csv');
+
+        const runtime = await worker.caches.open('pwax-runtime-v1-anon');
+        expect(await runtime.match('/exports/report.csv')).toBeTruthy();
+    });
+
+    it('refuses a response larger than the entry ceiling', async () => {
+        const current = manifest({
+            overrides: { strategy: 'network-first', maxEntryBytes: 1024 },
+        });
+        const caches = new FakeCaches();
+        const base = server(current);
+
+        const worker = createWorker({
+            manifest: current,
+            caches,
+            routes: (path) =>
+                path === '/big.bin'
+                    ? new Response('x', {
+                          headers: { 'Cache-Control': 'public', 'Content-Length': '99999' },
+                      })
+                    : base(path),
+        });
+
+        await worker.dispatch('install');
+        await worker.dispatch('activate');
+
+        // Handed back, just not kept: the entry cap counts entries, so one large response
+        // can crowd out everything the cap was meant to protect.
+        expect(await (await worker.request('/big.bin')).text()).toBe('x');
+
+        const runtime = await caches.open('pwax-runtime-v1-anon');
+        expect(await runtime.match('/big.bin')).toBeFalsy();
+    });
+
+    it('keeps a response with no declared length', async () => {
+        // Measuring it would mean buffering the very responses the ceiling exists to
+        // avoid buffering. The entry cap still bounds them.
+        const current = manifest({
+            overrides: { strategy: 'network-first', maxEntryBytes: 1024 },
+        });
+        const worker = await boot(current);
+
+        await worker.request('/streamed');
+
+        const runtime = await worker.caches.open('pwax-runtime-v1-anon');
+        expect(await runtime.match('/streamed')).toBeTruthy();
+    });
+});

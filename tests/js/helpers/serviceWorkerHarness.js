@@ -231,6 +231,7 @@ export function render(manifest) {
             version: manifest.version,
             strategy: manifest.strategy,
             maxEntries: manifest.maxEntries,
+            maxEntryBytes: manifest.maxEntryBytes,
             navigationPreload: manifest.navigationPreload,
             navigationStrategy: manifest.navigationStrategy,
             navigationUrls: manifest.navigationUrls,

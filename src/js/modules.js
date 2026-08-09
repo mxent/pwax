@@ -79,6 +79,16 @@ export function toComponentOptions(module, exportName = '') {
         return named;
     }
 
+    // A function default export is not options to be merged — it is the value itself.
+    // Client middleware is written as `export default async function ({ redirect }) {…}`,
+    // and a Vue functional component is a function too. Spreading either into an object
+    // yields `{}`, since a function's own enumerable properties are none: the middleware
+    // silently became "unknown", and a functional component silently rendered nothing.
+    // Neither can carry a Blade template, so there is nothing below to apply.
+    if (typeof module.default === 'function') {
+        return module.default;
+    }
+
     const options = { ...(module.default || {}) };
 
     // An author who wrote their own `template` wins; otherwise use the Blade one.

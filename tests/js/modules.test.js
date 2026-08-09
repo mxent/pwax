@@ -86,6 +86,22 @@ describe('toComponentOptions', () => {
         expect(options.template).toBe('<p>mine</p>');
     });
 
+    it('returns a function default export unchanged', () => {
+        // Client middleware is a function. Spreading it into an object produced `{}`,
+        // so `runMiddleware` reported the name as unknown.
+        const middleware = async () => {};
+
+        expect(toComponentOptions({ default: middleware })).toBe(middleware);
+    });
+
+    it('does not attach a template to a functional component', () => {
+        const functional = () => null;
+
+        expect(toComponentOptions({ default: functional, __pwaxTemplate: '<i></i>' })).toBe(
+            functional
+        );
+    });
+
     it('handles a module with no default export', () => {
         expect(toComponentOptions({ __pwaxTemplate: '<i></i>' }).template).toBe('<i></i>');
     });

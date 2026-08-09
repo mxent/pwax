@@ -48,6 +48,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Client middleware was always "unknown".** A middleware is written as
+  `export default async function (…) {}`, exactly as the README shows, but the module
+  loader spread every default export into a fresh object to merge in the Blade template.
+  A function has no own enumerable properties, so the spread produced `{}` and
+  `runMiddleware` reported `pwax: unknown middleware "name"` for a middleware that had
+  loaded perfectly. A function default export is now returned as itself, which also fixes
+  Vue functional components silently rendering nothing.
 - **`service_worker.precache` never worked.** The worker fetched each listed route without
   the `X-Pwax-Component` header, so the server answered with the HTML shell; that shell is
   `no-store`, which the worker correctly refused to store. Every entry was skipped in

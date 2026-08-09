@@ -35,12 +35,29 @@
 
 <body>
     {{--
-        `pwax-preloader` shows the spinner until the runtime mounts and removes the
-        class. Content rendered inside is replaced on mount.
+        `pwax-preloader` shows the spinner until the runtime mounts and removes the class.
+        Content rendered inside is replaced on mount.
+
+        The loading semantics are on their own element rather than on this one. They used
+        to be here, and `role="status"` with `aria-live="polite"` is right for a spinner
+        and badly wrong for an application root: the runtime removed the class on mount
+        and left the attributes, so for the rest of the session every reactive text change
+        anywhere in the app was announced, and the whole application was labelled
+        "Loading". This element is a container; nothing about it is a status.
     --}}
-    <div id="pwax" class="pwax-preloader" role="status" aria-live="polite" aria-label="Loading">
+    <div id="pwax" class="pwax-preloader">
+        <span class="pwax-sr-only" role="status">Loading</span>
         @yield('content')
     </div>
+
+    {{--
+        Where the runtime announces a client-side navigation.
+
+        A browser announces a page change on its own. A router does not — it swaps the DOM
+        and leaves a screen-reader user with no signal that anything happened, which is the
+        one thing an SPA has to put back by hand.
+    --}}
+    <div id="pwax-announcer" class="pwax-sr-only" role="status" aria-live="polite"></div>
 
     <x-pwax::includes.foot :shell="$pwaxShell" :initial="$pwaxInitial ?? null" />
     @stack('pwax-foot')

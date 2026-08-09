@@ -49,6 +49,9 @@ export function createPageComponent({
                 loading: true,
                 error: null,
                 currentPath: null,
+                // The first paint is not a navigation: the browser has just read the
+                // document, so announcing it again would be noise.
+                announced: false,
             };
         },
 
@@ -233,6 +236,8 @@ export function createPageComponent({
                     this.loading = false;
 
                     this.$nextTick(() => {
+                        this.announce();
+
                         document.dispatchEvent(
                             new CustomEvent('pwax:navigated', {
                                 detail: { component: options, path: this.currentPath },
@@ -241,6 +246,38 @@ export function createPageComponent({
                     });
                 } catch (error) {
                     this.fail(error);
+                }
+            },
+
+            /**
+             * Tell a screen reader the page changed.
+             *
+             * A full navigation announces itself: the browser resets focus and reads the
+             * new document. A router does neither. It swaps the DOM under a user who is
+             * given no signal that anything happened, and leaves focus wherever the link
+             * they followed used to be — which, once that link is gone, is the top of the
+             * document with nothing selected.
+             *
+             * Announcing the title is the smallest thing that restores the signal, and
+             * the title is already correct here because `mount()` has just set it.
+             * Nothing is announced for the first paint: the browser has just read the
+             * document, and repeating it is noise.
+             */
+            announce() {
+                if (!this.announced) {
+                    this.announced = true;
+
+                    return;
+                }
+
+                const announcer = document.getElementById('pwax-announcer');
+
+                if (announcer) {
+                    // Cleared first. A live region only announces a *change*, so
+                    // navigating twice to pages with the same title would otherwise be
+                    // read once.
+                    announcer.textContent = '';
+                    announcer.textContent = document.title;
                 }
             },
 

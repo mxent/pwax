@@ -108,6 +108,16 @@ async function boot() {
 
     app.mount(mount);
     mount.classList.remove('pwax-preloader');
+
+    // Mounting replaces the spinner's markup, but a shell rendered by an older version of
+    // this package — or a published one an application has customised — may still put the
+    // loading semantics on the mount element itself. Left there they turn the application
+    // root into a live region for the rest of the session: every reactive text change
+    // announced, and the whole app labelled "Loading".
+    for (const attribute of ['role', 'aria-live', 'aria-label', 'aria-busy']) {
+        mount.removeAttribute(attribute);
+    }
+
     document.documentElement.classList.add('pwax-ready');
 
     document.dispatchEvent(new CustomEvent('pwax:ready', { detail: { app, router } }));

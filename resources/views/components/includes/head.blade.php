@@ -172,6 +172,20 @@
         padding: 1.5rem;
         font-family: system-ui, sans-serif;
     }
+
+    /* Read by a screen reader, invisible to everyone else. `display: none` and
+       `visibility: hidden` would hide it from both. */
+    .pwax-sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+        border: 0;
+    }
 </style>
 
 @foreach ($shell->stylesheets() as $style)

@@ -100,6 +100,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `window.pwax.progress` exposes `start()` and `done()` for an application's own slow work.
 - `customization.init_spinner` turns the first-load spinner off, for an application that
   renders its own skeleton into the mount element.
+- **The screens have a design.** The page that would not load, the runtime that would not
+  start and the worker's offline document were unstyled text on a white page; they now
+  share one centred layout that works in light and dark, and each offers the way out that
+  applies. Restyle them with the `--pwax-screen-*` custom properties without publishing a
+  view. The offline document carries its own copy of the styles, since it answers a
+  navigation to a page whose stylesheet never loaded.
 - `pwax.transition` names the page transition and its duration. The bundled one fades with
   opacity alone; both it and the progress bar defer to `prefers-reduced-motion`.
 - `service_worker.max_entry_bytes`, bounding a single runtime-cache entry. `max_entries`

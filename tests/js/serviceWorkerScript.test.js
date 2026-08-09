@@ -346,8 +346,14 @@ describe('with no network', () => {
     it('answers with a real page even when nothing was ever cached', async () => {
         const response = await offline(manifest(), new FakeCaches()).navigate('/x');
 
+        const body = await response.text();
+
         expect(response.status).toBe(503);
-        await expect(response.text()).resolves.toMatch(/You are offline/);
+        expect(body).toMatch(/not available offline/);
+        // A whole document, not a fragment: the shell's stylesheet belongs to a page that
+        // never loaded, so this one carries its own.
+        expect(body).toMatch(/<!DOCTYPE html>/);
+        expect(body).toMatch(/role="alert"/);
     });
 
     it('fails a request without reporting an unhandled rejection', async () => {

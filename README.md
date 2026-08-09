@@ -364,6 +364,31 @@ Customise the error and loading markup by publishing the views, or by pointing
 
 `error` exposes `status`, `statusText` and `message`; `retry()` refetches the page.
 
+Three screens share one design — the page that would not load, the runtime that would not
+start, and the service worker's offline document — because to a visitor they are the same
+event, and three different-looking apologies read as three different bugs. Each is
+centred, legible in light and dark, and offers the way out that applies.
+
+Restyle them without publishing anything by setting the custom properties in your own
+stylesheet, which loads after the shell's:
+
+```css
+:root {
+    --pwax-screen-fg: #111;
+    --pwax-screen-muted: #666;
+    --pwax-screen-line: #e5e5e5;
+    --pwax-screen-accent: #0c83ff;      /* buttons and focus rings */
+    --pwax-screen-accent-fg: #fff;
+    --pwax-screen-bg: transparent;      /* the app's own background shows through */
+}
+```
+
+The markup hooks are `.pwax-screen`, `.pwax-screen__code`, `.pwax-screen__title`,
+`.pwax-screen__message`, `.pwax-screen__actions` and `.pwax-button` (plus
+`.pwax-button--quiet`). The worker's offline document carries its own copy of the styles,
+because it answers a navigation to a page that never loaded — there is no shell stylesheet
+to inherit. Publish it with `--tag=pwax-service-worker` to change it.
+
 ## Navigating
 
 A navigation does not unmount the page you are on. The current page stays rendered while

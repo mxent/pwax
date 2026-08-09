@@ -84,12 +84,38 @@ const CONFIG = @json($swConfig, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
 /** Third-party URLs this build precached, and the only ones we answer off-origin. */
 const CROSS_ORIGIN = new Set(CONFIG.crossOrigin || []);
 
+/**
+ * The last resort: a navigation with no network and nothing stored for that URL.
+ *
+ * A whole document, so it carries its own styles — the shell's stylesheet belongs to a
+ * page that never loaded. It is written to match the application's other screens rather
+ * than to stand out: a visitor who has already seen the in-app error should recognise this
+ * as the same thing said by something further down the stack, not as a second, worse
+ * failure.
+ *
+ * No script, and no reload button that reloads on its own. Reloading is exactly what will
+ * fail again; the browser's own control is the honest place for that.
+ */
 const OFFLINE_HTML =
     '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' +
-    '<title>Offline</title></head><body style="font-family:system-ui,sans-serif;padding:2rem">' +
-    '<h1>You are offline</h1><p>This page has not been stored for offline use.</p>' +
-    '</body></html>';
+    '<meta name="color-scheme" content="light dark"><title>Offline</title><style>' +
+    ':root{--fg:#18181b;--muted:#71717a;--line:#e4e4e7;--bg:#ffffff}' +
+    '@media(prefers-color-scheme:dark){:root{--fg:#fafafa;--muted:#a1a1aa;--line:#3f3f46;--bg:#09090b}}' +
+    'html,body{margin:0;height:100%}' +
+    'body{display:flex;align-items:center;justify-content:center;padding:2rem 1.5rem;' +
+    'background:var(--bg);color:var(--fg);line-height:1.5;' +
+    'font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}' +
+    'div{width:100%;max-width:32rem;text-align:center}' +
+    'p.c{margin:0 0 1rem;font-size:.75rem;font-weight:600;letter-spacing:.1em;' +
+    'text-transform:uppercase;color:var(--muted)}' +
+    'p.c::after{content:"";display:block;width:2.5rem;height:1px;margin:.75rem auto 0;background:var(--line)}' +
+    'h1{margin:0 0 .5rem;font-size:1.375rem;font-weight:600;letter-spacing:-.01em}' +
+    'p.m{margin:0;color:var(--muted)}' +
+    '</style></head><body><div role="alert">' +
+    '<p class="c">Offline</p><h1>This page is not available offline</h1>' +
+    '<p class="m">It has not been stored on this device. Reconnect and try again.</p>' +
+    '</div></body></html>';
 
 /**
  * The label a request carries for whoever is signed in, or `anon`.

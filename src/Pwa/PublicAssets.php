@@ -38,8 +38,24 @@ class PublicAssets
         '/**.htaccess',
         '/**.htpasswd',
         '/**/web.config',
+        // Four spellings, because a glob segment constrains only its own segment. A rule
+        // for a hidden *leaf* names `/.env` and says nothing about `/.git/config`, where
+        // the file is not hidden and its directory is — and everything below a hidden
+        // directory is as private as the directory.
+        //
+        // The walk already skips all of them: `allFiles()` asks Finder to ignore dot
+        // files, which covers dot directories too. This is the second line, not the
+        // first, and it is here because a deny list that does not mean what it says is a
+        // protection nobody can reason about — including whoever next changes the walk.
+        //
+        // A consequence worth naming: `/.well-known` is excluded as well. Those files are
+        // read by an operating system or a certificate authority, never by the
+        // application through its worker, so precaching them buys nothing. Leaving a file
+        // out here does not stop the server serving it.
         '/**/.*',
         '/.*',
+        '/**/.*/**',
+        '/.*/**',
         '/hot',
         '/**/mix-manifest.json',
         // `public/storage` is a symlink to user uploads. Walking it would precache

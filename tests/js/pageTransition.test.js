@@ -250,19 +250,72 @@ describe('what stays on screen during a navigation', () => {
         expect(state.renderedPath).toBe('/one');
     });
 
-    it('wraps the page in the configured transition', () => {
-        const page = createPageComponent({
-            http: { json: async () => ({}) },
-            styles: noStyles,
-            config: {},
-            initial: null,
-            transition: 'my-fade',
+    it('wraps the page swap in the browser View Transitions API', async () => {
+        // The browser snapshots the outgoing page, the swap commits, and the browser
+        // cross-fades between them in a single frame. The Vue `<transition>` wrapper
+        // was removed because two-phase mount/unmount was the source of the empty
+        // router-view flicker; the browser's snapshot mechanism does the same job
+        // without interleaving the two phases.
+        const start = vi.fn((update) => {
+            update();
         });
 
-        expect(page.template).toContain('name="my-fade"');
-        // Sequential, not overlapping: two pages in the DOM at once is a layout jump,
-        // which is the thing being fixed.
-        expect(page.template).toContain('mode="out-in"');
+        // jsdom provides `document` already. Adding `startViewTransition` to it
+        // exercises the path: the runtime checks for the API and uses it; the rest of
+        // the page (which still calls `document.dispatchEvent` to publish events) is
+        // untouched.
+        globalThis.document.startViewTransition = start;
+
+        const http = deferredServer();
+        const state = bind(
+            createPageComponent({
+                http,
+                styles: noStyles,
+                config: {},
+                initial: null,
+                transition: 'my-fade',
+            })
+        );
+
+        const visit = state.visit('/one');
+        http.settle();
+        await visit;
+
+        expect(start).toHaveBeenCalled();
+        expect(state.component).toBeTruthy();
+
+        delete globalThis.document.startViewTransition;
+    });
+
+    it('falls back to a synchronous swap when the View Transitions API is missing', async () => {
+        // Browsers without the API (Safari < 18, older Chrome) do not throw; the swap
+        // happens in the same call as the commit. The replacement is the previous
+        // behaviour preserved, which is a flicker but not a regression.
+        const original = globalThis.document?.startViewTransition;
+        if (original) {
+            delete globalThis.document.startViewTransition;
+        }
+
+        const http = deferredServer();
+        const state = bind(
+            createPageComponent({
+                http,
+                styles: noStyles,
+                config: {},
+                initial: null,
+                transition: 'my-fade',
+            })
+        );
+
+        const visit = state.visit('/one');
+        http.settle();
+        await visit;
+
+        expect(state.component).toBeTruthy();
+
+        if (original) {
+            globalThis.document.startViewTransition = original;
+        }
     });
 
     it('shows the loader only when there is nothing to keep', () => {

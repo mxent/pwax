@@ -147,6 +147,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `grep -rn 'middleware_js' config/` and a copy.
 
 
+- **Page transitions use the browser's View Transitions API.** The Vue
+  `<transition mode="out-in">` wrapper was the source of the empty router-view
+  flicker: even with `transition.duration: 0`, two-phase mount/unmount left a
+  frame where the outgoing page was gone and the incoming page had not yet
+  rendered. The runtime now wraps the swap in
+  `document.startViewTransition`, so the browser snapshots the outgoing page,
+  commits the new one, and cross-fades between them in a single frame. Browsers
+  without the API fall back to a synchronous swap, which is the previous
+  behaviour preserved. `transition.duration` is the cross-fade length rather
+  than a Vue transition class; `0` is now an instant swap, not a transition
+  with empty classes. `prefers-reduced-motion` is honoured by the browser
+  itself.
+
+
 - **A navigation that fails for a reason other than an HTTP status now says so in the
   console.** The visitor is still shown "this page needs an internet connection", which is
   what they can act on and is true nine times out of ten. The tenth is a bug or a

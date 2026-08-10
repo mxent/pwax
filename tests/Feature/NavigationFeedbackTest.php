@@ -117,8 +117,11 @@ class NavigationFeedbackTest extends TestCase
     {
         $html = (string) $this->get('/page')->getContent();
 
-        $this->assertStringContainsString('.pwax-page-enter-active', $html);
-        $this->assertStringContainsString('transition: opacity 150ms ease', $html);
+        // The browser's View Transitions API drives the swap, with `pwax.transition.duration`
+        // setting the cross-fade length. The Vue transition classes are gone; the
+        // pseudo-elements that the runtime now relies on are below.
+        $this->assertStringContainsString('::view-transition-old(root)', $html);
+        $this->assertStringContainsString('animation-duration: 150ms', $html);
         $this->assertSame('pwax-page', $this->runtimeConfig()['transition']);
     }
 
@@ -129,7 +132,7 @@ class NavigationFeedbackTest extends TestCase
 
         $this->assertSame('slide', $this->runtimeConfig()['transition']);
         $this->assertStringContainsString(
-            'transition: opacity 400ms ease',
+            'animation-duration: 400ms',
             (string) $this->get('/page')->getContent()
         );
     }

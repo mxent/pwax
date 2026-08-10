@@ -55,10 +55,11 @@ function deferredServer() {
 
 describe('what stays on screen during a navigation', () => {
     beforeEach(() => {
-        // `mount()` reaches for the global Vue. Only `markRaw` is used, and it can be
-        // the identity: the test is about *when* `component` changes, not what Vue then
-        // does with it.
-        globalThis.Vue = { markRaw: (value) => value };
+        // `mount()` reaches for the global Vue. `markRaw` can be the identity — the test
+        // is about *when* `component` changes, not what Vue then does with it — but
+        // `compile` has to be present, because that is how the runtime recognises the
+        // full Vue build and these payloads carry templates rather than render functions.
+        globalThis.Vue = { markRaw: (value) => value, compile: () => () => null };
     });
 
     afterEach(() => {

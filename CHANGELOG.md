@@ -9,6 +9,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`php artisan pwax:compile` — an opt-in precompile mode.** Templates are compiled to Vue
+  render functions at deploy time instead of in the browser, which buys back both of the
+  costs the README lists for the no-build model: `assets.vue_build => 'runtime'` then serves
+  `vue.runtime.global.prod.js` (40.6 kB gzipped against 60.7) and
+  `script-src 'unsafe-eval'` can go.
+
+  The render function is emitted **into the component module as source**, not handed over as
+  a string — the module loader evaluates it, so nothing calls the `Function` constructor,
+  which is the entire point. A page ships its script inline rather than at a URL, so its
+  render function travels inside that script.
+
+  Strictly opt-in, never added to `pwax:install`, and the zero-build path is untouched.
+  Never having compiled is not an outage: the store is empty, `Shell` serves the full build,
+  and the application behaves as though you had not opted in. Compiling and then editing a
+  component *is* one, so `pwax:doctor` checks for exactly that and names the components
+  whose templates no longer have a render function. It also warns when render functions are
+  compiled but unused, and errors when the runtime build is asked for with nothing compiled.
+
+  Needs Node and `@vue/compiler-dom` at the pinned Vue version — declared as an optional
+  peer dependency, refused by the compiler script when the versions disagree, because a
+  mismatched compiler emits code that fails at render time in the browser naming neither.
+  One constraint: a template must be the same for every visitor, so keep controller data in
+  `<script>` and out of `<template>`. `pwax:compile` names any view that breaks it.
+
 - **Prefetch on intent.** A visitor says where they are going before they go: the pointer
   lands on a link a few hundred milliseconds before the click, and a keyboard user focuses
   it first. That time now goes on the request, so the navigation feels instant — the same
@@ -74,8 +98,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A `<noscript>` that says what is wrong.** The application renders in the browser, so
   there is nothing to progressively enhance; saying so beats a spinner that never stops.
   The preloader is hidden alongside it.
-- **`php artisan about` reports Pwax**: version, whether the worker is on, the asset
-  strategy, the component cache store and the minifier.
+- **`php artisan about` reports Pwax**: version, whether the worker is on, where assets are
+  served from, which Vue build is being served, the component cache store and the minifier.
 - **Events.** `ComponentCompiled` fires on a real compile — never on a cache hit, so it
   counts what the compile cache is actually missing. `ManifestBuilt` fires on a real
   manifest build, roughly once per deploy, and carries the hash and the warning list.
@@ -160,6 +184,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A navigation that fails for a reason other than an HTTP status now says so in the
+  console.** The visitor is still shown "this page needs an internet connection", which is
+  what they can act on and is true nine times out of ten. The tenth is a bug or a
+  misconfiguration — a component that will not compile, a middleware that threw — and it was
+  reported to the developer as a network problem, which is the wrong place to start looking.
 - **The service worker is built, not templated.** It was 1,611 lines of JavaScript inside a
   Blade file — never linted, never formatted, never minified, and testable only through a
   hand-written Blade emulator that its own docblock admitted was crude. It is now
@@ -261,6 +290,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A CDN subresource-integrity map keyed only on the package name.** Vue publishes two
+  builds and Pwax can serve either, so `assets.cdn.integrity['vue']` would have sent the
+  full build's digest with `vue.runtime.global.prod.js` — and a browser refuses a script
+  whose digest does not match, which is the whole application failing to start. The map now
+  accepts a filename key, which wins over the package name, and ships the runtime build's
+  hash.
 - **The client runtime bundle could never update in a browser that had cached it.**
   `/__pwax__/pwax.js` carries no version in its URL and is served `immutable`, which tells
   a browser not to revalidate for a year — not even conditionally, so its ETag was never

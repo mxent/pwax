@@ -17,6 +17,7 @@ use Mxent\Pwax\Pwa\AssetManifest;
 use Mxent\Pwax\Pwa\ServiceWorker;
 use Mxent\Pwax\Pwa\WebManifest;
 use Mxent\Pwax\Pwax;
+use Mxent\Pwax\Support\RenderFunctionStore;
 use Mxent\Pwax\Support\Shell;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
@@ -36,6 +37,7 @@ class PwaxController extends Controller
         private readonly Config $config,
         private readonly ViewFactory $views,
         private readonly ServiceWorker $worker,
+        private readonly RenderFunctionStore $renderFunctions,
     ) {}
 
     /**
@@ -286,7 +288,12 @@ class PwaxController extends Controller
             JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG
         );
 
-        return implode("\n", [
+        // The precompiled render function, when `pwax:compile` has produced one. Emitted
+        // as source rather than a string: this is a real ES module, so the module loader
+        // evaluates it and no `Function` constructor is involved — which is what lets an
+        // application drop `script-src 'unsafe-eval'` and ship runtime-only Vue.
+        return implode("\n", array_filter([
+            $this->renderFunctions->bindings($component->template),
             'const __pwaxTemplate = ' . $encode($component->template) . ';',
             'const __pwaxStyle = ' . $encode($component->style) . ';',
             'const __pwaxScope = ' . $encode($component->scopeId) . ';',
@@ -294,7 +301,7 @@ class PwaxController extends Controller
             'const __pwaxScripts = ' . $encode($component->externalScripts) . ';',
             $component->script,
             'export { __pwaxTemplate, __pwaxStyle, __pwaxScope, __pwaxStyles, __pwaxScripts };',
-        ]);
+        ]));
     }
 
     /**

@@ -7,6 +7,9 @@ import { createStyleManager } from '../../src/js/styles.js';
 function stubVue() {
     const Vue = {
         defineAsyncComponent: vi.fn((loader) => ({ __asyncLoader: loader })),
+        // The default build has a template compiler, and the runtime checks for exactly
+        // this before it will hand Vue a component that still carries a template string.
+        compile: vi.fn(() => () => null),
     };
 
     vi.stubGlobal('Vue', Vue);

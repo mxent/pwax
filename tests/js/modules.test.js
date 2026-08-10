@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+    ensureRenderable,
     importModule,
     moduleCacheSize,
     resetModuleCache,
@@ -121,6 +122,121 @@ describe('toComponentOptions', () => {
         toComponentOptions(module);
 
         expect(module.default.template).toBeUndefined();
+    });
+});
+
+/**
+ * `php artisan pwax:compile` puts a compiled render function in the module. It is there to
+ * be used instead of the template — that is the whole saving — and it must never be used
+ * in place of markup the author wrote themselves.
+ */
+describe('precompiled render functions', () => {
+    const render = () => null;
+
+    it('prefers the render function over the blade template', () => {
+        const options = toComponentOptions({
+            default: { data: () => ({}) },
+            __pwaxRender: render,
+            __pwaxTemplate: '<div>blade</div>',
+        });
+
+        expect(options.render).toBe(render);
+        expect(options.template).toBeUndefined();
+    });
+
+    it('uses the blade template when nothing was precompiled', () => {
+        const options = toComponentOptions({ default: {}, __pwaxTemplate: '<div>blade</div>' });
+
+        expect(options.render).toBeUndefined();
+        expect(options.template).toBe('<div>blade</div>');
+    });
+
+    /**
+     * The render function was compiled from the Blade template, which is not the markup an
+     * author who wrote their own `template` is asking for.
+     */
+    it('does not override an author-declared template', () => {
+        const options = toComponentOptions({
+            default: { template: '<p>mine</p>' },
+            __pwaxRender: render,
+            __pwaxTemplate: '<div>blade</div>',
+        });
+
+        expect(options.template).toBe('<p>mine</p>');
+        expect(options.render).toBeUndefined();
+    });
+
+    it('does not override an author-declared render function', () => {
+        const own = () => null;
+
+        const options = toComponentOptions({
+            default: { render: own },
+            __pwaxRender: render,
+        });
+
+        expect(options.render).toBe(own);
+    });
+});
+
+/**
+ * Under `assets.vue_build => 'runtime'` there is no compiler in the browser. Vue's own
+ * failure for a template it cannot compile is a console warning and an empty element — a
+ * blank page with nothing pointing at the deploy step that was skipped.
+ */
+describe('ensureRenderable', () => {
+    const render = () => null;
+
+    afterEach(() => {
+        delete globalThis.Vue;
+    });
+
+    it('throws when a template has no compiler and no render function', () => {
+        globalThis.Vue = { markRaw: (v) => v };
+
+        expect(() => ensureRenderable({ template: '<p></p>' })).toThrow(/pwax:compile/);
+    });
+
+    it('allows a template when the full build is present', () => {
+        globalThis.Vue = { compile: () => () => null };
+
+        const options = { template: '<p></p>' };
+
+        expect(ensureRenderable(options)).toBe(options);
+    });
+
+    it('allows a render function under the runtime-only build', () => {
+        globalThis.Vue = { markRaw: (v) => v };
+
+        const options = { render: () => null };
+
+        expect(ensureRenderable(options)).toBe(options);
+    });
+
+    it('allows a component with no template at all', () => {
+        globalThis.Vue = { markRaw: (v) => v };
+
+        expect(() => ensureRenderable({ setup: () => () => null })).not.toThrow();
+    });
+
+    /**
+     * Vue is loaded by a render-blocking script before the runtime, so this should not
+     * happen — but refusing every component because a global is missing would turn one
+     * broken page into a broken application.
+     */
+    it('says nothing when Vue is not on the page', () => {
+        expect(() => ensureRenderable({ template: '<p></p>' })).not.toThrow();
+    });
+
+    it('reaches the same conclusion through toComponentOptions', () => {
+        globalThis.Vue = { markRaw: (v) => v };
+
+        expect(() => toComponentOptions({ default: {}, __pwaxTemplate: '<p></p>' })).toThrow(
+            /cannot compile one/
+        );
+
+        expect(() =>
+            toComponentOptions({ default: {}, __pwaxRender: render, __pwaxTemplate: '<p></p>' })
+        ).not.toThrow();
     });
 });
 

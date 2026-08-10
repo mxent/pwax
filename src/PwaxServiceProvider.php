@@ -20,6 +20,7 @@ use Mxent\Pwax\Compiler\ComponentCompiler;
 use Mxent\Pwax\Compiler\StyleScoper;
 use Mxent\Pwax\Compiler\TemplateStamper;
 use Mxent\Pwax\Console\Commands\ClearCommand;
+use Mxent\Pwax\Console\Commands\CompileCommand;
 use Mxent\Pwax\Console\Commands\ComponentMakeCommand;
 use Mxent\Pwax\Console\Commands\DoctorCommand;
 use Mxent\Pwax\Console\Commands\InstallCommand;
@@ -37,6 +38,7 @@ use Mxent\Pwax\Pwa\PublicAssets;
 use Mxent\Pwax\Pwa\ServiceWorker;
 use Mxent\Pwax\Pwa\WebManifest;
 use Mxent\Pwax\Support\ComponentId;
+use Mxent\Pwax\Support\RenderFunctionStore;
 use Mxent\Pwax\Support\Shell;
 
 class PwaxServiceProvider extends ServiceProvider
@@ -55,6 +57,7 @@ class PwaxServiceProvider extends ServiceProvider
                 ComponentMakeCommand::class,
                 DoctorCommand::class,
                 PrecacheCommand::class,
+                CompileCommand::class,
             ]);
         }
     }
@@ -91,7 +94,10 @@ class PwaxServiceProvider extends ServiceProvider
             'Service Worker' => $this->config()->get('pwax.service_worker.enabled')
                 ? '<fg=green;options=bold>ENABLED</>'
                 : '<fg=yellow;options=bold>DISABLED</>',
-            'Assets' => (string) $this->config()->get('pwax.assets.strategy', 'local'),
+            'Assets' => $this->app->make(Shell::class)->assetSource(),
+            'Vue Build' => $this->app->make(RenderFunctionStore::class)->active()
+                ? 'runtime (precompiled)'
+                : 'full',
             'Component Cache' => $this->config()->get('pwax.cache.components', true)
                 ? (string) ($this->config()->get('pwax.cache.store') ?: 'default')
                 : '<fg=yellow;options=bold>OFF</>',
@@ -182,6 +188,7 @@ class PwaxServiceProvider extends ServiceProvider
             $app->make(ComponentId::class),
             $app->make(Config::class),
             $app->make('url'),
+            $app->make(RenderFunctionStore::class),
         ));
 
         $this->app->alias(Pwax::class, 'pwax');
@@ -194,6 +201,7 @@ class PwaxServiceProvider extends ServiceProvider
             $app->make(Pwax::class),
             $app->make(ViewFactory::class),
             $app->bound('request') ? $app->make('request') : null,
+            $app->make(RenderFunctionStore::class),
         ));
 
         $this->registerPwa();
@@ -207,6 +215,11 @@ class PwaxServiceProvider extends ServiceProvider
         $this->app->singleton(WebManifest::class, fn ($app): WebManifest => new WebManifest(
             $app->make(Config::class),
             $app,
+        ));
+
+        $this->app->singleton(RenderFunctionStore::class, fn ($app): RenderFunctionStore => new RenderFunctionStore(
+            $app->make(Config::class),
+            $app->make(Filesystem::class),
         ));
 
         $this->app->singleton(HeadMeta::class, fn ($app): HeadMeta => new HeadMeta(

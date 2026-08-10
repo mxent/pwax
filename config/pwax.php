@@ -123,8 +123,8 @@ return [
     | Publish the local copies with:
     |     php artisan vendor:publish --tag=pwax-assets
     |
-    | NOTE: Pwax compiles templates in the browser, so it requires the *full* Vue
-    | build (vue.global.prod.js). vue.runtime.global.prod.js will not work.
+    | Pwax compiles templates in the browser by default, so it serves the *full* Vue
+    | build. See `vue_build` below for the opt-in alternative.
     |
     */
 
@@ -134,6 +134,35 @@ return [
         // put a fifth key by that name in a config where the other four choose a caching
         // behaviour. The old key still works; `pwax:doctor` names it.
         'source' => 'local',
+
+        /*
+        | 'full' or 'runtime'.
+        |
+        | 'full' ships Vue's template compiler, because compiling templates in the browser
+        | is what lets this package have no build step. It costs about 20 kB gzipped over
+        | the runtime-only build, and it is why `script-src 'unsafe-eval'` is required.
+        |
+        | 'runtime' is the opt-in trade in the other direction: run
+        | `php artisan pwax:compile` after each deploy, ship 40.6 kB gzipped instead of
+        | 60.7, and drop 'unsafe-eval'. It needs Node in your build, and
+        | `@vue/compiler-dom` as a dev dependency at the version pinned below.
+        |
+        | Never having compiled is not an outage: an empty or missing store makes Pwax
+        | serve the full build, and `pwax:doctor` reports it as an error so a silent
+        | fallback is not a regression nobody can find. Compiling once and then changing a
+        | component *is* an outage for that component, which is the other thing
+        | `pwax:doctor` checks — put `pwax:compile` in your deploy, not in your memory.
+        |
+        | One constraint comes with it: a template must be the same for every visitor.
+        | Keep controller data in <script> (`@json($user)`) and out of <template>, which
+        | is the idiomatic split anyway. `pwax:compile` names any view that breaks it.
+        */
+        'vue_build' => 'full',
+
+        // Where `pwax:compile` writes, and the Node binary it runs. Defaults are
+        // storage/app/pwax/render-functions.php and whatever `node` resolves to.
+        'render_functions' => null,
+        'node' => null,
 
         'local_path' => '/vendor/pwax',
 
@@ -151,8 +180,11 @@ return [
             //
             //   curl -sL <url> | openssl dgst -sha384 -binary | openssl base64 -A
             //
+            // Keyed by package name, or by filename where a package ships more than one
+            // build Pwax can serve. The filename wins.
             'integrity' => [
                 'vue' => 'sha384-arPHRzOKPl8g3Rbe/cQBWYPnq4HcxfPFSFWD3qvI/hc2XQf+4GkVqkOlWgjN5mD3',
+                'vue.runtime.global.prod.js' => 'sha384-RFxxAeahncPwNwUDUMprS/CVNUxKm7t0wLbqf3HZ+i5rvu2/QS+xB4Lo+eDZ75Fb',
                 'vue-router' => 'sha384-bPPzCqx4xLwbRx+Dz7Wg1pyZ2CoP5XkRxCR5yfuA/U/QNsKJ0G7zkbuqzLyQLDSR',
                 'pinia' => 'sha384-wg8sN8T2ZcZIv5vtyNApjm6zSpZ61ZgJEm5w3TXD7cGzWOhnNcNQkwvK39KIH5tp',
             ],

@@ -209,6 +209,36 @@ where Vue is served from — `local` or `cdn` — and has nothing to do with cac
 calling it `strategy` put a fifth key by that name in a config where the other four mean
 something else entirely.
 
+### 12. New, and optional: `pwax:compile`
+
+Nothing to do unless you want it. `php artisan pwax:compile` compiles every template to a
+Vue render function at deploy time, so `assets.vue_build => 'runtime'` can serve the
+smaller Vue build (40.6 kB gzipped against 60.7) and your CSP can drop
+`script-src 'unsafe-eval'`.
+
+```bash
+npm install --save-dev @vue/compiler-dom@3.5.41
+php artisan pwax:compile
+```
+
+```php
+'assets' => ['vue_build' => 'runtime'],
+```
+
+If you turn it on, **`php artisan pwax:compile` becomes a required deploy step** — put it
+beside `config:cache`. Forgetting it once is harmless (the store is empty, the full build is
+served, nothing changes); forgetting it after a component edit is not, because the store is
+then non-empty and the edited component has no render function. `pwax:doctor` reports both,
+the second as an error naming the components affected.
+
+It also requires that a template be the same for every visitor, since it is compiled with no
+request in flight. Keep controller data in `<script>` (`@json($user)`) and out of
+`<template>` — `pwax:compile` names any view that breaks the rule and exits non-zero.
+
+Also new: `assets.cdn.integrity` accepts a filename key alongside the package name, and
+ships one for `vue.runtime.global.prod.js`. If you have hand-written that map and use a CDN
+with the runtime build, add the filename entry or the browser will reject the script.
+
 ### Checklist
 
 - [ ] `service_worker.strategy` → `service_worker.runtime_strategy`, and decided on its value
@@ -219,6 +249,7 @@ something else entirely.
 - [ ] Published shell view updated, if you have one — announcer, mount attributes
 - [ ] Decided which routes need `->offline(false)`, now that caches are shared
 - [ ] Strategy names updated, or the doctor's warnings about them accepted
+- [ ] Decided about `pwax:compile` — and if you turned it on, it is in the deploy script
 - [ ] `php artisan pwax:doctor` is clean
 - [ ] Tested offline, signed in as two different users on one browser profile
 

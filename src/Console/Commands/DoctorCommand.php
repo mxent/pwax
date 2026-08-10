@@ -8,7 +8,10 @@ use Mxent\Pwax\Pwa\AssetManifest;
 use Mxent\Pwax\Pwa\ComponentRegistry;
 use Mxent\Pwax\Pwa\Strategy;
 use Mxent\Pwax\Pwa\WebManifest;
+use Mxent\Pwax\Pwax;
+use Mxent\Pwax\Support\RenderFunctionStore;
 use Mxent\Pwax\Support\Shell;
+use Throwable;
 
 /**
  * Checks the things that are easy to get wrong and hard to notice: a missing
@@ -29,11 +32,12 @@ class DoctorCommand extends Command
         private readonly WebManifest $manifest,
         private readonly AssetManifest $assets,
         private readonly ComponentRegistry $registry,
+        private readonly RenderFunctionStore $store,
     ) {
         parent::__construct();
     }
 
-    public function handle(Config $config): int
+    public function handle(Config $config, Pwax $pwax): int
     {
         $this->components->info('Checking your Pwax installation');
 
@@ -43,6 +47,7 @@ class DoctorCommand extends Command
         $this->checkAssets($config);
         $this->checkCrossOriginPolicy($config);
         $this->checkRuntimeBundle();
+        $this->checkPrecompiledTemplates($pwax);
         $this->checkManifest($config);
         $this->checkServiceWorker($config);
         $this->checkPrecache($config);
@@ -229,13 +234,25 @@ class DoctorCommand extends Command
             return;
         }
 
-        $path = public_path(trim((string) $config->get('pwax.assets.local_path', '/vendor/pwax'), '/') . '/vue.global.prod.js');
+        $directory = public_path(trim((string) $config->get('pwax.assets.local_path', '/vendor/pwax'), '/'));
 
-        $this->assert(
-            is_file($path),
-            'Vue is published locally',
-            sprintf('%s is missing. Run `php artisan vendor:publish --tag=pwax-assets`.', $path)
-        );
+        $builds = ['vue.global.prod.js'];
+
+        // The runtime-only build is served whenever precompiling is on and has produced
+        // something, so an application in that state needs both files present: the small
+        // one for the ordinary path, and the full one for the fallback when the store is
+        // empty. Publishing ships the directory, so a missing file means a partial copy.
+        if ($this->store->wanted()) {
+            $builds[] = 'vue.runtime.global.prod.js';
+        }
+
+        foreach ($builds as $build) {
+            $this->assert(
+                is_file($directory . '/' . $build),
+                sprintf('%s is published locally', $build),
+                sprintf('%s/%s is missing. Run `php artisan vendor:publish --tag=pwax-assets`.', $directory, $build)
+            );
+        }
     }
 
     /**
@@ -321,6 +338,79 @@ class DoctorCommand extends Command
             'Client runtime bundle is present',
             'dist/pwax.js is missing from the package. Reinstall with `composer reinstall mxent/pwax`.'
         );
+    }
+
+    /**
+     * The one configuration in this package that can produce a blank page.
+     *
+     * `assets.vue_build => 'runtime'` serves a Vue with no compiler in it. Every template
+     * therefore has to have been precompiled, and `pwax:compile` has to be re-run whenever
+     * a component changes — a deploy step that is easy to add once and easy to forget
+     * thereafter. Three states are worth separating:
+     *
+     *   - Asked for, nothing compiled. `Shell` falls back to the full build, so the site
+     *     works and is merely slower than intended. Reported as a problem all the same:
+     *     a silent fallback is a regression nobody can find.
+     *   - Asked for, compiled, but a component has changed since. This is the one that
+     *     breaks: the store is non-empty so the runtime-only build is served, and the
+     *     changed component has no render function under its new key.
+     *   - Compiled but not asked for. Harmless, just unused, so it is only a warning.
+     */
+    private function checkPrecompiledTemplates(Pwax $pwax): void
+    {
+        $store = $this->store;
+
+        if (! $store->wanted()) {
+            if ($store->count() > 0) {
+                $this->warn_(
+                    'Render functions are compiled but unused. Set pwax.assets.vue_build to '
+                    . '"runtime" to serve the smaller Vue build, or run `php artisan pwax:compile '
+                    . '--clear`.'
+                );
+            }
+
+            return;
+        }
+
+        if ($store->count() === 0) {
+            $this->fail_(
+                'pwax.assets.vue_build is "runtime" but no render functions are compiled, so the '
+                . 'full Vue build is being served instead. Run `php artisan pwax:compile`.'
+            );
+
+            return;
+        }
+
+        $stale = [];
+
+        foreach ($this->registry->precachable() as $component) {
+            $view = $component['view'];
+
+            try {
+                $template = $pwax->compile($view)->template;
+            } catch (Throwable) {
+                // A view that will not render without controller data cannot be
+                // precompiled, and `pwax:compile` already reported it as such.
+                continue;
+            }
+
+            if (trim($template) !== '' && $store->get($template) === null) {
+                $stale[] = $view;
+            }
+        }
+
+        if ($stale === []) {
+            $this->ok(sprintf('Render functions cover all %d component(s)', $store->count()));
+
+            return;
+        }
+
+        $this->fail_(sprintf(
+            '%d component(s) have changed since `php artisan pwax:compile` last ran (%s). '
+            . 'Under the runtime-only Vue build they will render nothing. Re-run pwax:compile.',
+            count($stale),
+            implode(', ', array_slice($stale, 0, 5)) . (count($stale) > 5 ? ', …' : '')
+        ));
     }
 
     private function checkManifest(Config $config): void
@@ -443,7 +533,7 @@ class DoctorCommand extends Command
 
         try {
             $manifest = $this->assets->build();
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $this->problems++;
             $this->components->twoColumnDetail(
                 'The asset manifest could not be built: ' . $e->getMessage(),
@@ -578,6 +668,16 @@ class DoctorCommand extends Command
     {
         $this->warnings++;
         $this->components->twoColumnDetail($message, '<fg=yellow>WARN</>');
+    }
+
+    /**
+     * Report a problem with no matching pass line, for checks whose success is reported
+     * separately or is simply the absence of anything to say.
+     */
+    private function fail_(string $message): void
+    {
+        $this->problems++;
+        $this->components->twoColumnDetail($message, '<fg=red>FAIL</>');
     }
 
     /**

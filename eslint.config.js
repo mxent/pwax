@@ -30,9 +30,21 @@ export default [
         rules: { 'no-console': ['warn', { allow: ['info', 'warn', 'error'] }] },
     },
     {
-        files: ['build.js'],
-        languageOptions: { globals: { ...globals.node } },
-        rules: { 'no-console': 'off' },
+        // Node scripts, not browser code: the build, and the optional template compiler
+        // `pwax:compile` shells out to. Both write to stdout on purpose.
+        files: ['build.js', 'bin/**/*.mjs'],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: 'module',
+            globals: { ...globals.node },
+        },
+        rules: {
+            'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+            'no-console': 'off',
+            'no-var': 'error',
+            'prefer-const': 'error',
+            eqeqeq: ['error', 'smart'],
+        },
     },
     {
         // The suites run under Vitest in jsdom, and the service-worker harness reaches for

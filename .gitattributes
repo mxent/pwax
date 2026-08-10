@@ -1,8 +1,9 @@
 * text=auto eol=lf
 
 # Keep `composer require` downloads small: exclude development-only files from
-# the distributed package. `dist/`, `resources/` and `types/` are NOT excluded —
-# they are what the package ships.
+# the distributed package. `bin/`, `dist/`, `resources/` and `types/` are NOT
+# excluded — they are what the package ships. `bin/` in particular: it holds the
+# Node script `pwax:compile` runs, which is useless if it is not installed.
 /.github            export-ignore
 /tests              export-ignore
 /workbench          export-ignore

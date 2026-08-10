@@ -7,7 +7,13 @@
 
 import { applyHead } from './head.js';
 import { HttpError } from './http.js';
-import { importInlineModule, importModule, styleMetadata, toComponentOptions } from './modules.js';
+import {
+    ensureRenderable,
+    importInlineModule,
+    importModule,
+    styleMetadata,
+    toComponentOptions,
+} from './modules.js';
 
 const PAGE_STYLE_KEY = 'pwax:page';
 
@@ -413,7 +419,7 @@ export function createPageComponent({
                     const options = toComponentOptions(module);
                     const meta = styleMetadata(module);
 
-                    if (!options.template && payload.template) {
+                    if (!options.template && !options.render && payload.template) {
                         options.template = payload.template;
                     }
 
@@ -421,11 +427,11 @@ export function createPageComponent({
                         payload.style = meta.style;
                     }
 
-                    return options;
+                    return ensureRenderable(options);
                 }
 
                 if (!payload.script) {
-                    return { template: payload.template || '' };
+                    return ensureRenderable({ template: payload.template || '' });
                 }
 
                 const module = await importInlineModule(
@@ -434,11 +440,14 @@ export function createPageComponent({
                 );
                 const options = toComponentOptions(module);
 
-                if (!options.template) {
+                // A page's precompiled render function travels inside its inline script,
+                // so `toComponentOptions` has already found it; the template is the
+                // fallback for when there is none.
+                if (!options.template && !options.render) {
                     options.template = payload.template || '';
                 }
 
-                return options;
+                return ensureRenderable(options);
             },
 
             /**
@@ -495,6 +504,15 @@ export function createPageComponent({
 
             fail(error) {
                 const status = error instanceof HttpError ? error.status : null;
+
+                // Anything that is not an HTTP failure is shown to the visitor as a
+                // connection problem, because nine times out of ten that is what it is.
+                // The tenth is a bug or a misconfiguration — a component that will not
+                // compile, a middleware that threw — and the console is the only place
+                // left where it can say what actually happened.
+                if (status === null) {
+                    console.error('pwax: navigation failed.', error);
+                }
 
                 this.error = {
                     status: status ?? 'Error',

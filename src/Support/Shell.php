@@ -29,6 +29,7 @@ class Shell
         private readonly Pwax $pwax,
         private readonly ViewFactory $views,
         private readonly ?Request $request = null,
+        private readonly ?RenderFunctionStore $renderFunctions = null,
     ) {}
 
     /**
@@ -162,9 +163,7 @@ class Shell
         $versions = $this->config->get('pwax.assets.versions', []);
 
         $files = [
-            // The FULL Vue build. The runtime-only build has no template compiler, and
-            // compiling templates in the browser is the whole premise of this package.
-            'vue' => 'vue.global.prod.js',
+            'vue' => $this->vueBuild(),
             'vue-router' => 'vue-router.global.prod.js',
         ];
 
@@ -181,6 +180,29 @@ class Shell
         }
 
         return $tags;
+    }
+
+    /**
+     * Which Vue build to serve.
+     *
+     * The full build by default, because compiling templates in the browser is the whole
+     * premise of the package and the runtime-only build has no compiler.
+     *
+     * `assets.vue_build => 'runtime'` opts into the smaller one — 40.7 kB gzipped against
+     * 60.8 kB — which is only safe once `php artisan pwax:compile` has produced a render
+     * function for every template. This is the safety net for when it has not: an empty or
+     * missing store serves the full build for that request. Slower than intended, never
+     * broken. `pwax:doctor` reports it as an error, because a silent fallback that nobody
+     * notices is a performance regression nobody can find.
+     *
+     * `isComplete()` is one cached boolean, not a per-component check — this runs on every
+     * page render.
+     */
+    private function vueBuild(): string
+    {
+        return $this->renderFunctions?->active() === true
+            ? 'vue.runtime.global.prod.js'
+            : 'vue.global.prod.js';
     }
 
     /**
@@ -472,7 +494,7 @@ class Shell
      */
     public function withoutRequest(): self
     {
-        return new self($this->config, $this->pwax, $this->views, null);
+        return new self($this->config, $this->pwax, $this->views, null, $this->renderFunctions);
     }
 
     /**
@@ -557,8 +579,14 @@ class Shell
 
         $attributes = ['src' => $src];
 
-        if (isset($hashes[$package])) {
-            $attributes['integrity'] = $hashes[$package];
+        // By filename first, then by package. Vue ships two builds and Pwax serves either
+        // of them, so a map keyed only on the package name would hand the full build's
+        // hash to the runtime-only file — and the browser refuses a script whose digest
+        // does not match, which is the whole app failing to start.
+        $integrity = $hashes[$file] ?? $hashes[$package] ?? null;
+
+        if (is_string($integrity) && $integrity !== '') {
+            $attributes['integrity'] = $integrity;
             $attributes['crossorigin'] = 'anonymous';
         }
 

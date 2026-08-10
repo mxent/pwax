@@ -91,12 +91,98 @@ export function toComponentOptions(module, exportName = '') {
 
     const options = { ...(module.default || {}) };
 
-    // An author who wrote their own `template` wins; otherwise use the Blade one.
-    if (!options.template && module.__pwaxTemplate) {
+    // An author who declared either wins outright, and neither the Blade template nor a
+    // render function compiled from it applies — the two describe the same markup, and
+    // that markup is not what this component renders.
+    if (options.render || options.template) {
+        return ensureRenderable(options);
+    }
+
+    // The precompiled render function, when `php artisan pwax:compile` produced one.
+    // Preferred over the template string for the reason the mode exists: no compiler in
+    // the browser, no `Function` constructor, no compile on the navigation.
+    if (module.__pwaxRender) {
+        options.render = module.__pwaxRender;
+
+        return options;
+    }
+
+    if (module.__pwaxTemplate) {
         options.template = module.__pwaxTemplate;
     }
 
-    return options;
+    return ensureRenderable(options);
+}
+
+/**
+ * The last Vue this module probed, and what the probe found.
+ *
+ * Keyed on the object rather than a boolean flag so that replacing the global — which
+ * only tests do — cannot leave a stale answer behind.
+ *
+ * @type {{vue: any, ok: boolean}|null}
+ */
+let probe = null;
+
+/**
+ * Can the Vue on this page turn a template string into a render function?
+ *
+ * Not `typeof Vue.compile === 'function'`. Both builds define `compile`: the runtime-only
+ * one defines it as `() => {}`, a stub that exists so the property is there and returns
+ * nothing. Testing for the property therefore answers "yes" on the build that cannot
+ * compile anything, which is the only build the question is being asked about.
+ *
+ * So ask it to compile something. Once per Vue, on a template the full build parses in
+ * microseconds and then caches.
+ */
+function hasCompiler() {
+    if (typeof Vue === 'undefined' || !Vue) {
+        return true;
+    }
+
+    if (probe && probe.vue === Vue) {
+        return probe.ok;
+    }
+
+    let ok = false;
+
+    try {
+        ok = typeof Vue.compile === 'function' && typeof Vue.compile('<i></i>') === 'function';
+    } catch {
+        // A CSP without `script-src 'unsafe-eval'` makes the full build's compiler throw.
+        // It is present and it cannot be used, which for this question is the same answer.
+        ok = false;
+    }
+
+    probe = { vue: Vue, ok };
+
+    return ok;
+}
+
+/**
+ * Refuse a component whose template nothing present can compile.
+ *
+ * `assets.vue_build => 'runtime'` serves a Vue build with no compiler in it, which is only
+ * safe once every template has a precompiled render function. When one does not, Vue's own
+ * failure is a warning in the console and an empty element — a blank page with no
+ * indication of why, and nothing pointing at the deploy step that was skipped.
+ *
+ * Asked of the Vue actually on the page rather than of a flag mirrored from the server,
+ * which could disagree with the script tag that was really loaded.
+ *
+ * @param {any} options
+ */
+export function ensureRenderable(options) {
+    if (!options || options.render || !options.template || hasCompiler()) {
+        return options;
+    }
+
+    throw new Error(
+        'pwax: this component has a template but no precompiled render function, and the ' +
+            'Vue on this page cannot compile one. Run `php artisan pwax:compile` after ' +
+            "every deploy that changes a component, or set pwax.assets.vue_build to 'full'. " +
+            "(If you are on the full build, check that your CSP allows script-src 'unsafe-eval'.)"
+    );
 }
 
 /**

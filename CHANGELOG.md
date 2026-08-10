@@ -147,6 +147,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `grep -rn 'middleware_js' config/` and a copy.
 
 
+- **Page transitions use the browser's View Transitions API.** The Vue
+  `<transition mode="out-in">` wrapper was the source of the empty router-view
+  flicker: even with `transition.duration: 0`, two-phase mount/unmount left a
+  frame where the outgoing page was gone and the incoming page had not yet
+  rendered. The runtime now wraps the swap in
+  `document.startViewTransition`, so the browser snapshots the outgoing page,
+  commits the new one, and cross-fades between them in a single frame. Browsers
+  without the API fall back to a synchronous swap, which is the previous
+  behaviour preserved. `transition.duration` is the cross-fade length rather
+  than a Vue transition class; `0` is now an instant swap, not a transition
+  with empty classes. `prefers-reduced-motion` is honoured by the browser
+  itself.
+
+
 - **A navigation that fails for a reason other than an HTTP status now says so in the
   console.** The visitor is still shown "this page needs an internet connection", which is
   what they can act on and is true nine times out of ten. The tenth is a bug or a
@@ -635,6 +649,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A lazily-cached asset is now bounded by `service_worker.max_entry_bytes` like every
   other stored response. It was the one write path that checked neither the size nor the
   cap, so a single large declared file went to disk whatever it weighed.
+
+### Removed
+
+- **`pwax.transition.name` config key.** Page transitions are now driven by the browser's
+  View Transitions API (`document.startViewTransition`); the name of a Vue `<transition>`
+  is no longer meaningful and the field was already ignored by the runtime. The
+  `transition.duration` key stays, because it is the cross-fade length the CSS reads
+  directly. A published `config/pwax.php` that still names a transition will not error —
+  Laravel's config repository ignores keys it is not asked for.
 
 ### Internal
 

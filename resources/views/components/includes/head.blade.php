@@ -380,17 +380,21 @@
     }
 
     /* Page transitions.
+       The runtime wraps the page swap in `document.startViewTransition` (see
+       `src/js/page.js`). The browser snapshots the outgoing page, commits the new one,
+       and cross-fades between them in a single frame — no empty router-view between
+       them, regardless of the duration. The default animation is a cross-fade; the
+       rules below only set the duration (`transition.duration`) and keep the eased
+       opacity curve the older Vue transition used.
+
        Opacity only — nothing that changes an element's size or position, because a
        transform on the outgoing page is a second kind of movement to look at, and the
-       reason this exists is that navigation felt unsettled. */
-    .pwax-page-enter-active,
-    .pwax-page-leave-active {
-        transition: opacity {{ $transitionMs }}ms ease;
-    }
-
-    .pwax-page-enter-from,
-    .pwax-page-leave-to {
-        opacity: 0;
+       reason this exists is that navigation felt unsettled. Browsers without the
+       View Transitions API do not match these pseudo-elements and the swap is
+       synchronous, which is the previous behaviour preserved. */
+    ::view-transition-old(root),
+    ::view-transition-new(root) {
+        animation-duration: {{ $transitionMs }}ms;
     }
 
     /* Motion is a preference, and both of these are motion. The progress bar keeps its
@@ -400,9 +404,9 @@
             transition: opacity 200ms linear;
         }
 
-        .pwax-page-enter-active,
-        .pwax-page-leave-active {
-            transition: none;
+        ::view-transition-old(root),
+        ::view-transition-new(root) {
+            animation: none;
         }
     }
 

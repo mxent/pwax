@@ -108,7 +108,6 @@ async function boot() {
         prefetcher,
         templates: config.templates || {},
         progress: progressBar,
-        transition: config.transition || 'pwax-page',
     });
 
     const app = Vue.createApp({

@@ -20,6 +20,33 @@ const PAGE_STYLE_KEY = 'pwax:page';
 const DEFAULT_LOADER = '<div class="pwax-loading" role="status">Loading…</div>';
 
 /**
+ * Run a DOM mutation inside `document.startViewTransition` when the browser supports it.
+ *
+ * The View Transitions API snapshots the current document, lets the callback commit a
+ * change, and cross-fades between the snapshot and the new state in a single frame. That
+ * is exactly what page transitions want: two frames painted at once, no empty
+ * router-view between them, and no interleaved unmount/mount that shows in a layout
+ * jump. Without the API, the callback runs synchronously, which is the previous
+ * behaviour preserved.
+ *
+ * The snapshot is taken immediately and the callback is awaited, so all of the page
+ * prep — fetch, compile, stylesheet, scripts — can finish before the new page is even
+ * drawn. `waitForReady` is the default: the browser holds the snapshot visible until
+ * the callback returns a promise that resolves, which is what makes the swap a single
+ * frame.
+ *
+ * `prefers-reduced-motion` is respected by the browser itself; the transition runs, but
+ * the cross-fade is replaced with a synchronous swap.
+ */
+function withViewTransition(update) {
+    if (typeof document !== 'undefined' && typeof document.startViewTransition === 'function') {
+        return document.startViewTransition(update);
+    }
+
+    return update();
+}
+
+/**
  * One reload per tab for an expired CSRF token.
  *
  * Reloading to pick up a fresh token assumes the reload reaches the server. It does not
@@ -87,7 +114,6 @@ export function createPageComponent({
     prefetcher = null,
     templates = {},
     progress = null,
-    transition = 'pwax-page',
 }) {
     let initialPayload = initial;
 
@@ -109,9 +135,14 @@ export function createPageComponent({
          * the one case that has nothing to keep: the very first paint of an application
          * whose landing page was not inlined.
          *
-         * Keyed on the path so Vue treats each page as a new element and runs the
-         * transition; `mode="out-in"` because two pages briefly overlapping is a layout
-         * jump, which is the thing being fixed.
+         * The DOM swap itself is wrapped in `document.startViewTransition` (see
+         * `withViewTransition` below) so the browser snapshots the outgoing page,
+         * commits the new one, and cross-fades between them in a single frame. Browsers
+         * without the API fall back to a synchronous swap, which is what the old
+         * `<transition mode="out-in">` did. The Vue transition component was removed
+         * because two-phase mount/unmount was the source of the "empty router-view"
+         * flicker; the browser's snapshot mechanism is the same idea, but it does not
+         * interleave the two phases.
          *
          * Loader and error markup come from the server so they stay customisable through
          * Blade, while this bundle itself remains static and cacheable.
@@ -120,9 +151,7 @@ export function createPageComponent({
             <template v-if="error">${templates.error || DEFAULT_ERROR}</template>
             <template v-else>
                 <template v-if="!component">${templates.loader || DEFAULT_LOADER}</template>
-                <transition name="${transition}" mode="out-in">
-                    <component v-if="component" :is="component" :key="renderedPath"></component>
-                </transition>
+                <component v-if="component" :is="component" :key="renderedPath"></component>
             </template>
         `,
 
@@ -328,9 +357,28 @@ export function createPageComponent({
                     //
                     // `markRaw` does what the `shallowRef` was reaching for: it keeps Vue
                     // from walking the options and making them reactive.
-                    this.component = Vue.markRaw(options);
-                    this.renderedPath = this.currentPath;
-                    this.loading = false;
+                    //
+                    // The three mutations are batched inside `withViewTransition` so the
+                    // browser snapshots the outgoing page, then commits the new page in
+                    // a single frame. Without that, Vue's reactivity would tear the
+                    // router-view down before the new component is in the DOM — that
+                    // single-frame empty state is the flicker that motivated this change.
+                    // With it, the browser holds the old page visible until the new one
+                    // is ready, even when `transition.duration` is 0.
+                    const swap = () => {
+                        this.component = Vue.markRaw(options);
+                        this.renderedPath = this.currentPath;
+                        this.loading = false;
+                    };
+
+                    const transitionReady = withViewTransition(swap);
+
+                    // The post-swap work — announcing the new page, dispatching the
+                    // event — depends on the transition having settled, so `await` it
+                    // before either. The browser resolves the returned promise once the
+                    // new pseudo-elements have been committed; without the API, the
+                    // await is a no-op on a synchronous value.
+                    await transitionReady;
 
                     this.$nextTick(() => {
                         this.announce();

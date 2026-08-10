@@ -474,14 +474,19 @@ renders its own skeleton into the mount element instead.
 ],
 
 'transition' => [
-    'name'     => 'pwax-page',   // any Vue transition name
-    'duration' => 150,           // must agree with the CSS
+    'duration' => 150,           // cross-fade length in milliseconds
 ],
 ```
 
-The bundled transition fades with opacity alone — anything that changes an element's size
-or position is a second kind of movement to follow. Name your own and define its classes
-in your stylesheet to replace it. Both defer to `prefers-reduced-motion`.
+The page swap is wrapped in the browser's [View Transitions API](https://developer.mozilla.org/en-US/docs/Web/API/View_Transitions_API):
+the outgoing page is snapshotted, the new page is committed in the same frame, and the
+browser cross-fades between them. The bundled transition fades with opacity alone —
+anything that changes an element's size or position is a second kind of movement to
+follow. `transition.duration` is the cross-fade length; `duration: 0` is an instant swap
+and means the new page is in the DOM before the screen has a chance to draw the empty
+router-view in between. Browsers without the API fall back to a synchronous swap, which
+is the previous behaviour preserved. `prefers-reduced-motion` is honoured by the browser
+itself: the transition runs but the cross-fade is replaced with a synchronous swap.
 
 Wrap your own slow work in the same indicator:
 
@@ -1629,7 +1634,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `progress.enabled` | `true` | Navigation progress bar |
 | `progress.color`, `.height` | `null`, `3` | Colour falls back to the spinner's; height in px |
 | `progress.delay`, `.trickle` | `250`, `true` | Silence before it appears, and whether it eases while waiting |
-| `transition.name`, `.duration` | `pwax-page`, `150` | The page transition and how long its CSS runs |
+| `transition.name`, `.duration` | `pwax-page`, `150` | Page transition name (kept for back-compat) and cross-fade length in ms |
 | `manifest_path`, `manifest` | see config | Web App Manifest (all spec members) |
 | `head.title`, `.title_template` | `null` | Document title and its wrapper |
 | `head.description`, `.icon` | `null` | Fall back to the manifest's |

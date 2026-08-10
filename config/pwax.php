@@ -432,6 +432,41 @@ return [
     |
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Web Push
+    |--------------------------------------------------------------------------
+    |
+    | Pwax handles the browser half of push: asking permission, subscribing with your
+    | VAPID key, handing the subscription to your endpoint, and showing the notification
+    | in the worker.
+    |
+    | It deliberately does not handle the server half. Storing subscriptions and sending
+    | to them is what `laravel-notification-channels/webpush` does, it does it well, and a
+    | second implementation inside a PWA package would be a worse one. Install it, point
+    | `endpoint` at a route that persists what the browser posts, and the two halves meet.
+    |
+    | public_key  Your VAPID public key. Without it `pwax.push.subscribe()` does nothing.
+    | endpoint    A route of yours. It receives POST with the PushSubscription as JSON
+    |             when someone subscribes, and DELETE with the same when they leave.
+    | title/icon  Fallbacks for a push whose payload omits them. Every browser that
+    |             implements push requires a notification to be shown for every message,
+    |             so a payload that says nothing must still produce something.
+    |
+    | Nothing is asked of the visitor automatically. `subscribe()` must be called from a
+    | user gesture, because browsers reject permission requests that are not — and a page
+    | that asks on load is the reason they do.
+    |
+    */
+
+    'push' => [
+        'public_key' => env('VAPID_PUBLIC_KEY'),
+        'endpoint' => null,
+        'title' => null,
+        'icon' => null,
+        'badge' => null,
+    ],
+
     'manifest_path' => '/manifest.json',
 
     /*

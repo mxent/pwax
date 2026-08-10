@@ -104,6 +104,13 @@ class ServiceWorker
                 'crossOrigin' => array_values((array) ($manifest['crossOrigin'] ?? [])),
                 'concurrency' => (int) $this->config->get('pwax.service_worker.concurrency', 6),
                 'offlineHtml' => $this->offlineHtml(),
+                // Fallbacks for a push whose payload omits them. A browser that receives
+                // a push and shows nothing eventually loses the origin's permission.
+                'push' => array_filter([
+                    'title' => $this->config->get('pwax.push.title'),
+                    'icon' => $this->config->get('pwax.push.icon'),
+                    'badge' => $this->config->get('pwax.push.badge'),
+                ], static fn (mixed $v): bool => is_string($v) && $v !== ''),
             ],
         ];
 

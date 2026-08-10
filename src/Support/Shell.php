@@ -49,6 +49,14 @@ class Shell
                 ? (string) $this->config->get('pwax.service_worker.path', '/sw.js')
                 : null,
             'serviceWorkerScope' => (string) $this->config->get('pwax.service_worker.scope', '/'),
+            // Distinct from `prefix` above, which is the route prefix. This one names the
+            // worker's caches, so the page-side queue and the worker agree on where
+            // requests waiting for a connection are kept.
+            'cachePrefix' => (string) $this->config->get('pwax.service_worker.cache_name', 'pwax'),
+            'push' => [
+                'publicKey' => $this->config->get('pwax.push.public_key') ?: null,
+                'endpoint' => $this->config->get('pwax.push.endpoint') ?: null,
+            ],
             'csrf' => $this->csrfToken(),
             'home' => $this->pwax->homeUrl(),
             'progress' => $this->progress(),

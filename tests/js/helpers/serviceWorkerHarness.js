@@ -239,6 +239,7 @@ export function render(manifest) {
             pageHeaders: manifest.pageHeaders || PAGE_HEADERS,
             crossOrigin: manifest.crossOrigin,
             concurrency: manifest.concurrency,
+            push: manifest.push || {},
             // Stands in for `pwax::js.offline`, which the server renders. Kept to the
             // same copy so the tests about what a visitor is shown still mean something;
             // a PHP test asserts the view itself says it.
@@ -260,18 +261,44 @@ export function render(manifest) {
  *
  * @param {{manifest: object, caches?: FakeCaches, routes: (path: string) => Response|null}} options
  */
-export function createWorker({ manifest, caches = new FakeCaches(), routes }) {
+export function createWorker(options) {
+    const { manifest, caches = new FakeCaches(), routes } = options;
     const listeners = {};
     const fetches = [];
     const requests = [];
     const log = [];
 
+    /** Notifications the worker asked to show, and windows it touched. */
+    const notifications = [];
+    const windows = [];
+    const syncTags = [];
+
     const self = {
         location: new URL('/service-worker.js', ORIGIN),
         addEventListener: (name, fn) => (listeners[name] ||= []).push(fn),
         skipWaiting: () => log.push('skipWaiting'),
-        clients: { claim: async () => log.push('claim') },
-        registration: { navigationPreload: { enable: async () => log.push('preload') } },
+        clients: {
+            claim: async () => log.push('claim'),
+            matchAll: async () => options.clients || [],
+            openWindow: async (url) => {
+                windows.push({ opened: url });
+
+                return { url };
+            },
+        },
+        registration: {
+            navigationPreload: { enable: async () => log.push('preload') },
+            showNotification: async (title, opts) => notifications.push({ title, ...opts }),
+            sync: {
+                register: async (tag) => {
+                    if (options.backgroundSync === false) {
+                        throw new Error('unsupported');
+                    }
+
+                    syncTags.push(tag);
+                },
+            },
+        },
     };
 
     const sandbox = {
@@ -388,5 +415,8 @@ export function createWorker({ manifest, caches = new FakeCaches(), routes }) {
         sentRequest,
         log,
         failed,
+        notifications,
+        windows,
+        syncTags,
     };
 }

@@ -18,6 +18,8 @@
  * after it and share its scope.
  */
 
+import { registerPush, registerSync } from './push.js';
+
 /**
  * Everything the server decided, injected ahead of this bundle.
  *
@@ -132,6 +134,12 @@ self.addEventListener('message', (event) => {
         return;
     }
 });
+
+// Registered unconditionally. A `push` listener that never receives a push costs nothing,
+// and gating registration on config would mean push cannot start working until the deploy
+// *after* the one that enabled it.
+registerPush(CONFIG);
+registerSync(CONFIG, syncName());
 
 self.addEventListener('fetch', (event) => {
     const request = event.request;
@@ -372,6 +380,7 @@ async function activate() {
         documentsName(manifest),
         runtimeName(),
         lazyName(),
+        syncName(),
         STATE_CACHE,
     ]);
 
@@ -1637,6 +1646,16 @@ function runtimeName() {
  */
 function lazyName() {
     return `${PREFIX}-lazy`;
+}
+
+/**
+ * Where requests queued while offline wait.
+ *
+ * Not keyed by the build. Work queued before a deploy still has to be sent after it, and
+ * discarding it because a component changed would lose a visitor's writes.
+ */
+function syncName() {
+    return `${PREFIX}-sync`;
 }
 
 /**

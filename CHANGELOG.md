@@ -9,6 +9,32 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Install prompt, badge and storage.** `pwax.install.prompt()` shows the browser's
+  install prompt at a moment the application chooses; `beforeinstallprompt` is captured
+  before the runtime does anything else, because it fires once, early, and is never
+  replayed. `pwax.install.standalone` answers whether this window is an installed app —
+  `display-mode` where it exists, `navigator.standalone` for iOS, which has neither the
+  media query nor a programmatic install. Events: `pwax:installable`, `pwax:installed`.
+
+  `pwax.badge.set()/clear()` for the app-icon badge, a no-op where the platform has none.
+  `pwax.storage.estimate()/persisted()/persist()` — worth knowing about here specifically,
+  because a precache evicted under quota pressure is what users report as "it stopped
+  working offline". Persistence is never requested for you: on some platforms it is a real
+  prompt, and spending it is the application's decision.
+- **Web Push.** `pwax.push.subscribe()/unsubscribe()`, the VAPID key conversion, and
+  `push` / `notificationclick` handlers in the worker — a click focuses a window already on
+  the target rather than opening a second one. Configure `push.public_key` and an endpoint
+  that persists what the browser posts.
+
+  Deliberately only the browser half: storing subscriptions and sending to them is what
+  `laravel-notification-channels/webpush` does, and a second implementation inside a PWA
+  package would be a worse one.
+- **Background Sync.** `pwax.sync.enqueue()` stores a write when there is no network and
+  the worker replays it when there is — falling back to an immediate replay on browsers
+  without Background Sync, which is both Safari and Firefox. Nothing is queued
+  automatically: intercepting failed writes would replay a payment as readily as a draft,
+  and only the application knows which of its requests repeat safely. `pwax.sync.pending()`
+  is there to build "3 changes will send when you're back online".
 - **Per-page document metadata.** `->description()`, `->canonical()`, `->meta()` and
   `->property()` on the response, alongside the existing `->title()`. Open Graph and
   Twitter card tags are derived from the title, description and canonical URL — nothing is

@@ -3,7 +3,7 @@
  *
  * The token is baked into the document, so it cannot be refreshed in place — the page has
  * to be reloaded. That assumes the reload reaches the server, which it does not under
- * `navigation_strategy => 'app-shell'`: the worker answers navigations from disk, the same
+ * `navigation_strategy => 'cache-first'`: the worker answers navigations from disk, the same
  * stale token comes back, and the page reloads forever. Now that a navigation's HTML is
  * also cached as it is visited, there are more documents that can carry a dead token.
  */

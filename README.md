@@ -343,7 +343,7 @@ outside the middleware pipeline — so the client handles them instead, by treat
 followed redirect that returns HTML as an instruction to reload.
 
 **One** reload for a `419`, per tab. The reload only helps if it returns a different
-document, and under `navigation_strategy => 'app-shell'` it does not: the worker answers
+document, and under `navigation_strategy => 'cache-first'` it does not: the worker answers
 that navigation from disk, so the same expired token comes back and the page would reload
 forever. A second `419` renders the error template instead.
 
@@ -684,7 +684,7 @@ hash:
     { "name": "assets", "installMode": "lazy", "kind": "asset",
       "urls": ["/images/logo.svg"], "patterns": ["^\\/images\\/.*$"] },
     { "name": "pages", "installMode": "prefetch", "kind": "page",
-      "strategy": "freshness", "credentials": "omit", "urls": ["/", "/about"] }
+      "strategy": "network-first", "credentials": "omit", "urls": ["/", "/about"] }
   ],
   "dataGroups": [],
   "hashTable": {
@@ -753,10 +753,10 @@ Requests to an API get their own groups, which are about responses rather than f
         [
             'name' => 'posts',
             'urls' => ['/api/posts', '/api/posts/**'],
-            'strategy' => 'freshness',   // or 'performance' to serve the cache first
+            'strategy' => 'network-first',   // or 'cache-first' to serve the cache first
             'max_entries' => 50,
-            'max_age' => 3600,           // seconds, for 'performance'
-            'timeout' => 3000,           // ms before 'freshness' falls back to the cache
+            'max_age' => 3600,           // seconds, for 'cache-first'
+            'timeout' => 3000,           // ms before 'network-first' falls back to the cache
         ],
     ],
 ],
@@ -961,7 +961,7 @@ every visitor's IP address to that CDN.
 To use a CDN anyway, with subresource integrity:
 
 ```php
-'assets' => ['strategy' => 'cdn'],
+'assets' => ['source' => 'cdn'],
 ```
 
 Pinia can be dropped if you do not use a store:
@@ -1162,10 +1162,10 @@ application looks healthy because everybody is being served yesterday's copy of 
 To prefer the stored copy even when the network is fine, make pages cache-first:
 
 ```php
-'service_worker' => ['pages' => ['strategy' => 'performance']],
+'service_worker' => ['pages' => ['strategy' => 'cache-first']],
 ```
 
-That is faster and can be a version behind. `'freshness'` — the default — goes to the
+That is faster and can be a version behind. `'network-first'` — the default — goes to the
 network but gives up on it after `pages.timeout` (2000 ms) and uses the copy.
 
 Two things this does not cover, and both are worth deciding about rather than discovering:
@@ -1217,7 +1217,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `components.allowed` | `[]` | Allowlist of servable view patterns |
 | `components.scoped_styles` | `true` | Honour `<style scoped>` |
 | `blade.*` | `null` | Override bundled partials |
-| `assets.strategy` | `'local'` | `local` or `cdn` |
+| `assets.source` | `'local'` | `local` or `cdn` (was `assets.strategy`) |
 | `assets.local_path` | `'/vendor/pwax'` | Where published assets live |
 | `assets.versions` | see config | Pinned Vue / Router / Pinia versions |
 | `assets.pinia` | `true` | Load Pinia at all |
@@ -1265,11 +1265,11 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `service_worker.pages.urls` | `[]` | Extra routes to precache, beyond the discovered ones |
 | `service_worker.pages.discover` | `true` | Find every route that renders a page, scoped by `components` |
 | `service_worker.pages.runtime` | `true` | Cache pages as they are visited — payload, and HTML when anonymous |
-| `service_worker.pages.strategy`, `.timeout` | `freshness`, `2000` | How a page payload is fetched |
+| `service_worker.pages.strategy`, `.timeout` | `network-first`, `2000` | How a page payload is fetched |
 | `service_worker.pages.credentials` | `'omit'` | Precache the guest rendering, not one visitor's |
 | `service_worker.pages.as_components` | `false` | Also precache page views as importable modules |
 | `service_worker.data_groups` | `[]` | API response caching |
-| `service_worker.navigation_strategy` | `network-first` | Or `app-shell` for zero-round-trip navigation |
+| `service_worker.navigation_strategy` | `network-first` | Or `cache-first` for zero-round-trip navigation |
 | `service_worker.navigation_urls` | see config | Which navigations the worker claims |
 | `service_worker.offline_url` | `null` | Page shown offline; defaults to the shell |
 | `service_worker.navigation_preload` | `true` | Start the network request before the worker boots |

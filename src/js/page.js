@@ -17,7 +17,7 @@ const DEFAULT_LOADER = '<div class="pwax-loading" role="status">Loading…</div>
  * One reload per tab for an expired CSRF token.
  *
  * Reloading to pick up a fresh token assumes the reload reaches the server. It does not
- * under `navigation_strategy => 'app-shell'`, where the worker answers navigations from
+ * under `navigation_strategy => 'cache-first'`, where the worker answers navigations from
  * disk — so the same stale token comes back and the page reloads in a loop. `sessionStorage`
  * because the flag has to survive the reload it guards, and has to be gone in the next tab.
  */
@@ -223,7 +223,7 @@ export function createPageComponent({
                     // never reaches Pwax's middleware.
                     //
                     // Once, though. The reload only helps if it returns a *different*
-                    // document, and under `navigation_strategy => 'app-shell'` it does
+                    // document, and under `navigation_strategy => 'cache-first'` it does
                     // not: the worker answers that navigation from disk, the same stale
                     // token comes back, and the page reloads forever. One attempt, then
                     // the error is shown like any other.

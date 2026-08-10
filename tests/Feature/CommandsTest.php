@@ -78,7 +78,7 @@ class CommandsTest extends TestCase
             ['src' => '/i-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
             ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
         ]);
-        config()->set('pwax.assets.strategy', 'cdn');
+        config()->set('pwax.assets.source', 'cdn');
 
         $this->artisan('pwax:doctor')->assertSuccessful();
     }
@@ -121,7 +121,7 @@ class CommandsTest extends TestCase
             ['src' => '/i-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
             ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
         ]);
-        config()->set('pwax.assets.strategy', 'cdn');
+        config()->set('pwax.assets.source', 'cdn');
         config()->set('pwax.scripts', ['https://cdn.example.test/analytics.js']);
 
         $this->artisan('pwax:doctor')
@@ -138,7 +138,7 @@ class CommandsTest extends TestCase
             ['src' => '/i-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
             ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
         ]);
-        config()->set('pwax.assets.strategy', 'cdn');
+        config()->set('pwax.assets.source', 'cdn');
         config()->set('pwax.scripts', ['/js/local.js']);
 
         $this->artisan('pwax:doctor')->assertSuccessful();

@@ -458,7 +458,7 @@ describe('navigation preload', () => {
 
     it('settles the preload it does not use', async () => {
         const current = manifest({
-            overrides: { navigationStrategy: 'app-shell', navigationUrls: [] },
+            overrides: { navigationStrategy: 'cache-first', navigationUrls: [] },
         });
         const worker = await boot(current);
 

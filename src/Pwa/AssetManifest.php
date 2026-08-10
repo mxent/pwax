@@ -594,10 +594,12 @@ class AssetManifest
      */
     private function pageDefaults(): array
     {
-        $strategy = (string) $this->config->get('pwax.service_worker.pages.strategy', 'freshness');
-
         return [
-            'strategy' => $strategy === 'performance' ? 'performance' : 'freshness',
+            'strategy' => Strategy::resolve(
+                $this->config->get('pwax.service_worker.pages.strategy', Strategy::NETWORK_FIRST),
+                [Strategy::NETWORK_FIRST, Strategy::CACHE_FIRST],
+                Strategy::NETWORK_FIRST,
+            ),
             'timeout' => (int) $this->config->get('pwax.service_worker.pages.timeout', 2000),
             // Cookies are passed through. Caches are shared across visitors, so what is
             // stored is what the server returned for whoever fetched the page last; the
@@ -632,14 +634,16 @@ class AssetManifest
                 continue;
             }
 
-            $strategy = (string) ($declaration['strategy'] ?? 'freshness');
-
             $groups[] = [
                 'name' => is_string($declaration['name'] ?? null) ? $declaration['name'] : 'data-' . $index,
                 'version' => (int) ($declaration['version'] ?? 1),
                 'patterns' => Glob::compile($patterns),
                 'cacheConfig' => [
-                    'strategy' => $strategy === 'performance' ? 'performance' : 'freshness',
+                    'strategy' => Strategy::resolve(
+                        $declaration['strategy'] ?? Strategy::NETWORK_FIRST,
+                        [Strategy::NETWORK_FIRST, Strategy::CACHE_FIRST],
+                        Strategy::NETWORK_FIRST,
+                    ),
                     'maxSize' => (int) ($declaration['max_entries'] ?? 50),
                     'maxAge' => (int) ($declaration['max_age'] ?? 3600),
                     'timeout' => (int) ($declaration['timeout'] ?? 3000),
@@ -664,18 +668,20 @@ class AssetManifest
      */
     private function runtimeStrategy(): string
     {
-        $strategy = (string) $this->config->get('pwax.service_worker.runtime_strategy', 'network-only');
-
-        return in_array($strategy, ['network-first', 'stale-while-revalidate'], true)
-            ? $strategy
-            : 'network-only';
+        return Strategy::resolve(
+            $this->config->get('pwax.service_worker.runtime_strategy', Strategy::NETWORK_ONLY),
+            [Strategy::NETWORK_ONLY, Strategy::NETWORK_FIRST, Strategy::STALE_WHILE_REVALIDATE],
+            Strategy::NETWORK_ONLY,
+        );
     }
 
     private function navigationStrategy(): string
     {
-        $strategy = (string) $this->config->get('pwax.service_worker.navigation_strategy', 'network-first');
-
-        return $strategy === 'app-shell' ? 'app-shell' : 'network-first';
+        return Strategy::resolve(
+            $this->config->get('pwax.service_worker.navigation_strategy', Strategy::NETWORK_FIRST),
+            [Strategy::NETWORK_FIRST, Strategy::CACHE_FIRST],
+            Strategy::NETWORK_FIRST,
+        );
     }
 
     /**

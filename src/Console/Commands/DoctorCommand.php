@@ -6,7 +6,9 @@ use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as Config;
 use Mxent\Pwax\Pwa\AssetManifest;
 use Mxent\Pwax\Pwa\ComponentRegistry;
+use Mxent\Pwax\Pwa\Strategy;
 use Mxent\Pwax\Pwa\WebManifest;
+use Mxent\Pwax\Support\Shell;
 
 /**
  * Checks the things that are easy to get wrong and hard to notice: a missing
@@ -99,6 +101,57 @@ class DoctorCommand extends Command
         }
 
         $this->checkDataGroupShape($config);
+        $this->checkStrategyNames($config);
+    }
+
+    /**
+     * Strategy names from before the vocabularies were merged.
+     *
+     * These still work and are meant to keep working for this major cycle, so each is a
+     * warning rather than a problem. Naming them is the point: a config that says
+     * `freshness` in one place and `network-first` in another describes the same behaviour
+     * twice and reads like it describes two.
+     */
+    private function checkStrategyNames(Config $config): void
+    {
+        $keys = [
+            'pwax.service_worker.runtime_strategy',
+            'pwax.service_worker.navigation_strategy',
+            'pwax.service_worker.pages.strategy',
+        ];
+
+        foreach ((array) $config->get('pwax.service_worker.data_groups', []) as $index => $group) {
+            if (is_array($group) && Strategy::isDeprecated($group['strategy'] ?? null)) {
+                $this->warn_(sprintf(
+                    'Data group "%s" uses the old strategy name "%s". It still works; the current '
+                        . 'name is "%s".',
+                    is_string($group['name'] ?? null) ? $group['name'] : (string) $index,
+                    $group['strategy'],
+                    Strategy::ALIASES[strtolower(trim((string) $group['strategy']))],
+                ));
+            }
+        }
+
+        foreach ($keys as $key) {
+            $value = $config->get($key);
+
+            if (Strategy::isDeprecated($value)) {
+                $this->warn_(sprintf(
+                    '%s uses the old strategy name "%s". It still works; the current name is "%s".',
+                    $key,
+                    $value,
+                    Strategy::ALIASES[strtolower(trim((string) $value))],
+                ));
+            }
+        }
+
+        if ($config->get('pwax.assets.source') === null && $config->get('pwax.assets.strategy') !== null) {
+            $this->warn_(
+                'pwax.assets.strategy is now pwax.assets.source. It chooses where the framework '
+                . 'is served from, not how anything is cached, and the old name put a fifth '
+                . '"strategy" key in a config where the others choose a caching behaviour.'
+            );
+        }
     }
 
     /**
@@ -160,12 +213,12 @@ class DoctorCommand extends Command
 
     private function checkAssets(Config $config): void
     {
-        $strategy = (string) $config->get('pwax.assets.strategy', 'local');
+        $strategy = $this->laravel->make(Shell::class)->assetSource();
 
         if ($strategy === 'cdn') {
             $this->warn_(
                 'Assets load from a CDN. The app cannot start offline, and every visitor\'s IP '
-                . 'is disclosed to the CDN. Set pwax.assets.strategy to "local" and run '
+                . 'is disclosed to the CDN. Set pwax.assets.source to "local" and run '
                 . '`php artisan vendor:publish --tag=pwax-assets`.'
             );
 

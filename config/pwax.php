@@ -113,8 +113,8 @@ return [
     | Frontend assets
     |--------------------------------------------------------------------------
     |
-    | strategy  'local' serves Vue, Vue Router and Pinia from your own origin;
-    |           'cdn' loads them from the configured CDN with subresource integrity.
+    | source  'local' serves Vue, Vue Router and Pinia from your own origin;
+    |         'cdn' loads them from the configured CDN with subresource integrity.
     |
     | A progressive web app that fetches its framework from a third-party CDN cannot
     | work offline — which is the entire point of a PWA — and discloses every
@@ -129,7 +129,11 @@ return [
     */
 
     'assets' => [
-        'strategy' => 'local',
+        // 'local' or 'cdn'. Named `source` because that is what it chooses — where the
+        // framework is served from, not how anything is cached. It was `strategy`, which
+        // put a fifth key by that name in a config where the other four choose a caching
+        // behaviour. The old key still works; `pwax:doctor` names it.
+        'source' => 'local',
 
         'local_path' => '/vendor/pwax',
 
@@ -606,6 +610,12 @@ return [
         | 'network-first'           store a copy, and serve that copy when offline
         | 'stale-while-revalidate'  serve the copy first and refresh behind it
         |
+        | No 'cache-first' here, deliberately. This governs URLs the application never
+        | declared, and serving one from disk in preference to the network means serving
+        | it stale forever — there is no hash to notice it changed. A URL that should be
+        | answered from cache first belongs in an asset group, where it is listed and
+        | content-addressed.
+        |
         | The default is the conservative one because the alternative kept everything: a
         | one-off PDF, a CSV export, a file under /storage — URLs the application never
         | declared, taking up someone's disk and never asked for offline. What an
@@ -641,11 +651,17 @@ return [
         |
         | 'network-first'  Go to the network, fall back to the precached shell. Safe
         |                  alongside any server-rendered route inside the worker's scope.
-        | 'app-shell'      Serve the precached shell immediately, with no network wait,
+        | 'cache-first'    Serve the precached shell immediately, with no network wait,
         |                  and let the runtime fetch the page payload. Much faster, but
         |                  every navigation this worker claims becomes the SPA — check
         |                  `navigation_urls` first if Horizon, Telescope, Nova or a
-        |                  Filament panel share this domain.
+        |                  Filament panel share this domain. Spelled 'app-shell' before
+        |                  4.1; that still works.
+        |
+        | One vocabulary across every strategy key in this file — `runtime_strategy`,
+        | this one, `pages.strategy` and each data group's. 'freshness' is now
+        | 'network-first' and 'performance' is 'cache-first'; the old names still work
+        | and `pwax:doctor` names them.
         */
         'navigation_strategy' => 'network-first',
 
@@ -855,7 +871,7 @@ return [
             | view into another component with @pwaxImport.
             */
             'as_components' => false,
-            'strategy' => 'freshness',   // 'freshness' | 'performance'
+            'strategy' => 'network-first',   // or 'cache-first'
             'timeout' => 2000,
             'max_entries' => 60,
 
@@ -876,8 +892,8 @@ return [
         | Runtime caching for API responses. Without them an offline page renders but
         | every fetch it makes fails.
         |
-        |   freshness    go to the network, fall back to the cache after `timeout` ms
-        |   performance  serve the cache while it is younger than `max_age`
+        |   network-first  go to the network, fall back to the cache after `timeout` ms
+        |   cache-first    serve the cache while it is younger than `max_age`
         |
         | `version` names the group's cache. Bump it to discard what is stored for that
         | group and nothing else — after changing the shape of a response, say. Deploys
@@ -895,7 +911,7 @@ return [
             //     'name' => 'posts',
             //     'urls' => ['/api/posts', '/api/posts/**'],
             //     'version' => 1,
-            //     'strategy' => 'freshness',
+            //     'strategy' => 'network-first',
             //     'max_entries' => 50,
             //     'max_age' => 3600,
             //     'timeout' => 3000,

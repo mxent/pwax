@@ -187,6 +187,28 @@ without meaning it.
 Existing caches from 4.0.x are swept on the first activate of the new worker, so there is
 nothing to clear by hand.
 
+### 11. One vocabulary for every strategy
+
+Four keys chose a caching behaviour in three different languages, and a fifth called
+`strategy` chose a hostname. They now share one set of names, taken from the ones the rest
+of the web uses:
+
+| Was | Now |
+| --- | --- |
+| `freshness` | `network-first` |
+| `performance` | `cache-first` |
+| `app-shell` (navigations) | `cache-first` |
+| `pwax.assets.strategy` | `pwax.assets.source` |
+
+**Nothing breaks.** Every old spelling still resolves, and `pwax:doctor` names the ones you
+are still using. The manifest only ever carries the new vocabulary, so the service worker
+knows one set of words regardless of what your config says.
+
+`assets.source` is the odd one out and the reason the rename was worth doing: it chooses
+where Vue is served from — `local` or `cdn` — and has nothing to do with caching, so
+calling it `strategy` put a fifth key by that name in a config where the other four mean
+something else entirely.
+
 ### Checklist
 
 - [ ] `service_worker.strategy` → `service_worker.runtime_strategy`, and decided on its value
@@ -196,6 +218,7 @@ nothing to clear by hand.
 - [ ] `pwax.sw.registration` → `.controller` or `.registration()`
 - [ ] Published shell view updated, if you have one — announcer, mount attributes
 - [ ] Decided which routes need `->offline(false)`, now that caches are shared
+- [ ] Strategy names updated, or the doctor's warnings about them accepted
 - [ ] `php artisan pwax:doctor` is clean
 - [ ] Tested offline, signed in as two different users on one browser profile
 
@@ -374,6 +397,28 @@ it and use `pwax.head.title` or `pwaxRender(...)->title('…')` instead, or you 
 
 `<base href>` is available through `pwax.head.base` and is off by default — it changes how
 every relative URL in the document resolves, and routing does not need it.
+
+### 11. One vocabulary for every strategy
+
+Four keys chose a caching behaviour in three different languages, and a fifth called
+`strategy` chose a hostname. They now share one set of names, taken from the ones the rest
+of the web uses:
+
+| Was | Now |
+| --- | --- |
+| `freshness` | `network-first` |
+| `performance` | `cache-first` |
+| `app-shell` (navigations) | `cache-first` |
+| `pwax.assets.strategy` | `pwax.assets.source` |
+
+**Nothing breaks.** Every old spelling still resolves, and `pwax:doctor` names the ones you
+are still using. The manifest only ever carries the new vocabulary, so the service worker
+knows one set of words regardless of what your config says.
+
+`assets.source` is the odd one out and the reason the rename was worth doing: it chooses
+where Vue is served from — `local` or `cdn` — and has nothing to do with caching, so
+calling it `strategy` put a fifth key by that name in a config where the other four mean
+something else entirely.
 
 ### Checklist
 

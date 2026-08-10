@@ -756,7 +756,7 @@ function pageGroupFor(manifest, key, request) {
     // A page the runtime asked for that no group claims is still a page, and caching it as
     // one is what makes "everywhere you have been works offline" true rather than
     // "everywhere you listed in config". `runtime: false` turns this off.
-    return manifest.pageRuntime === false ? null : manifest.pageDefaults || { strategy: 'freshness' };
+    return manifest.pageRuntime === false ? null : manifest.pageDefaults || { strategy: 'network-first' };
 }
 
 /**
@@ -769,7 +769,7 @@ function pageGroupFor(manifest, key, request) {
 async function page(event, manifest, group) {
     const request = event.request;
 
-    if (group.strategy === 'performance') {
+    if (group.strategy === 'cache-first') {
         const hit = await storedPage(request, manifest);
 
         if (hit) {
@@ -1000,7 +1000,7 @@ async function dataResponse(event, manifest, group) {
         return response;
     };
 
-    if (config.strategy === 'performance') {
+    if (config.strategy === 'cache-first') {
         const hit = await stored();
 
         if (hit) {
@@ -1115,7 +1115,7 @@ async function navigate(event, manifest) {
         return (await settled(preload)) || fetch(event.request);
     }
 
-    if (manifest.navigationStrategy === 'app-shell') {
+    if (manifest.navigationStrategy === 'cache-first') {
         const cached = (await storedDocument(manifest, path)) || (await shellDocument(manifest));
 
         if (cached) {

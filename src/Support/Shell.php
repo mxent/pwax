@@ -129,7 +129,7 @@ class Shell
      */
     public function frameworkScripts(): array
     {
-        $strategy = (string) $this->config->get('pwax.assets.strategy', 'local');
+        $strategy = $this->assetSource();
         /** @var array<string, string> $versions */
         $versions = $this->config->get('pwax.assets.versions', []);
 
@@ -323,6 +323,22 @@ class Shell
         }
 
         return array_values(array_unique($urls));
+    }
+
+    /**
+     * Where the framework scripts come from: `local` or `cdn`.
+     *
+     * `assets.source` since 4.1. It was `assets.strategy`, which put a fifth key called
+     * "strategy" in a config where the other four choose a caching behaviour and this one
+     * chooses a hostname. The old key still works and `pwax:doctor` names it.
+     */
+    public function assetSource(): string
+    {
+        $source = $this->config->get('pwax.assets.source')
+            ?? $this->config->get('pwax.assets.strategy')
+            ?? 'local';
+
+        return strtolower(trim((string) $source)) === 'cdn' ? 'cdn' : 'local';
     }
 
     /**

@@ -76,7 +76,7 @@ class ShellTest extends TestCase
 
     public function test_cdn_mode_emits_integrity_and_crossorigin(): void
     {
-        config()->set('pwax.assets.strategy', 'cdn');
+        config()->set('pwax.assets.source', 'cdn');
 
         $vue = $this->shell()->vendorScripts()[0];
 
@@ -133,7 +133,7 @@ class ShellTest extends TestCase
      */
     public function test_preloads_carry_integrity_and_crossorigin(): void
     {
-        config()->set('pwax.assets.strategy', 'cdn');
+        config()->set('pwax.assets.source', 'cdn');
 
         $vue = $this->shell()->vendorPreloads()[0];
 

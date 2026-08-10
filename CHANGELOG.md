@@ -42,6 +42,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   counts what the compile cache is actually missing. `ManifestBuilt` fires on a real
   manifest build, roughly once per deploy, and carries the hash and the warning list.
 
+### Changed
+
+- **One vocabulary for every strategy.** Four config keys answered "when do we go to the
+  network?" in three different languages — `runtime_strategy` said `network-first` where
+  `pages.strategy` said `freshness` for the same behaviour, and `navigation_strategy` said
+  `app-shell` where both meant `cache-first`. They now share one set of names, the ones the
+  rest of the web uses. `freshness` is `network-first`, `performance` is `cache-first`, and
+  `app-shell` is `cache-first`.
+
+  Every old spelling still resolves and will for this major cycle; `pwax:doctor` names the
+  ones still in use. Normalising happens server-side, so the manifest only ever carries the
+  new vocabulary and the worker knows one set of words.
+- **`pwax.assets.strategy` is `pwax.assets.source`.** It chooses where the framework is
+  served from — `local` or `cdn` — and nothing about caching, so it was the fifth key called
+  "strategy" in a config where the other four mean something else. The old key still works.
+
 ### Security
 
 - **Caches are shared across visitors, and the package now says so plainly.** 2.x named

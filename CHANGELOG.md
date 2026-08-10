@@ -9,6 +9,52 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The manifest members that hand your app to the operating system now work.**
+  `share_target`, `file_handlers` and `protocol_handlers` passed straight through to the
+  manifest and nothing else happened: the browser registered the app for them, and the
+  launch that followed was discarded. A file the user double-clicked never arrived, and
+  following a `web+thing:` link brought the window forward showing whatever page it had been
+  left on.
+
+  The runtime now consumes the launch queue — before anything is awaited, because a launch
+  lands before the document finishes loading and the queue holds it only until a consumer is
+  set. `pwax.launch.consume()` receives the `FileSystemFileHandle`s, including any buffered
+  before the app booted, and a launch carrying a URL and no files is routed to. Return
+  `false`, or cancel the `pwax:launch` event, to route it yourself.
+
+  Nothing reads or uploads a file: those handles are a capability the user granted this
+  application, and handing them anywhere else is the application's decision.
+
+- **`pwax:doctor` resolves every declared manifest target against the real route table**,
+  with the method the browser will actually use. A target that matches no route, refuses
+  that method, or sits outside `scope` is now a failed check rather than a user who shared a
+  photo to an installed app and got a 404 hours after the deploy that caused it. It also
+  checks the shapes the route table cannot speak to: a share target accepting files must
+  POST as `multipart/form-data`, a file handler needs a non-empty `accept` map, and a custom
+  protocol must begin with `web+`.
+
+- **`pwax.share()`**, the other direction — the platform share sheet, resolving
+  `'shared' | 'dismissed' | 'unavailable'` so a caller can fall back to copying a link
+  without feature-detecting, and separating a cancelled sheet from a broken one.
+
+### Fixed
+
+- **`/manifest.json` had no `Vary: Accept-Language`.** Its `lang`, `name` and `description`
+  all follow the application locale and it is served `public, max-age=86400`. The route sits
+  outside the `web` group, so today nothing sets a locale before it renders — but that is a
+  property of `routes.static_middleware`, which is a config key, and one header is cheaper
+  than the shared-cache bug that adding locale middleware there would otherwise create.
+
+- **The "Vue is not loaded" error still said the runtime-only build could never work.** It
+  has been serviceable since `pwax:compile` landed.
+
+### Documentation
+
+- The README documented none of `pwax.install`, `pwax.badge`, `pwax.storage`, `pwax.push` or
+  `pwax.sync` — they shipped with an entry in this file and nothing a reader would find.
+  The JavaScript API table now lists the whole surface, and there is a section on what an
+  installed app can do and on being opened by the operating system.
+
 - **`php artisan pwax:compile` — an opt-in precompile mode.** Templates are compiled to Vue
   render functions at deploy time instead of in the browser, which buys back both of the
   costs the README lists for the no-build model: `assets.vue_build => 'runtime'` then serves

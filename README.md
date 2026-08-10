@@ -62,6 +62,7 @@ table in JavaScript.
 - [Scoped styles](#scoped-styles)
 - [Plugins, directives and middleware](#plugins-directives-and-middleware)
 - [Progressive web app](#progressive-web-app)
+- [Being opened by the operating system](#being-opened-by-the-operating-system)
 - [Frontend assets](#frontend-assets)
 - [Performance](#performance)
 - [Precompiling templates](#precompiling-templates)
@@ -649,6 +650,94 @@ dropped — `false` and `0` are not, so `prefer_related_applications => false` s
 Pwax also emits the tags iOS needs, which are not in the manifest at all:
 `apple-touch-icon` (chosen from your non-maskable icons), `apple-mobile-web-app-capable`,
 `apple-mobile-web-app-title` and `application-name`.
+
+### Installed-app capabilities
+
+An installed app can do things a tab cannot. Each of these is exposed and none of them
+happens on its own — when to prompt, when to badge, when to ask for storage are all
+decisions the application makes.
+
+```js
+// Your own install button, shown when the browser says it is possible.
+document.addEventListener('pwax:installable', () => showMyInstallButton());
+await window.pwax.install.prompt();          // 'accepted' | 'dismissed' | 'unavailable'
+window.pwax.install.standalone;              // running as an installed app?
+
+await window.pwax.badge.set(3);              // the count on the app icon
+await window.pwax.storage.persist();         // ask to be exempt from eviction
+
+await window.pwax.push.subscribe();          // Web Push, using push.public_key
+await window.pwax.sync.enqueue('/notes', { method: 'POST', body: note });
+
+await window.pwax.share({ title, url });     // the platform share sheet
+```
+
+`storage.persist()` is worth a thought in this package specifically. Pwax precaches the
+whole application, and a browser under storage pressure evicts whole origins — so the
+failure mode is not a slow page, it is "it stopped working offline" with nothing in the app
+to explain it. Persistence is never requested for you: on some platforms it is a real
+prompt, and spending it is the application's decision.
+
+`sync.enqueue()` queues nothing automatically. Intercepting failed writes would replay a
+payment as readily as a draft, and only the application knows which of its requests repeat
+safely.
+
+### Being opened by the operating system
+
+Three manifest members hand your application an entry point from outside the browser, and
+all three arrive as one thing — a launch:
+
+```php
+'manifest' => [
+    // Opened when the user picks your app from the share sheet.
+    'share_target' => [
+        'action' => '/share',
+        'method' => 'POST',
+        'enctype' => 'multipart/form-data',
+        'params' => ['title' => 'title', 'text' => 'text', 'url' => 'url'],
+    ],
+
+    // Opened when the user opens a file your app claims.
+    'file_handlers' => [
+        ['action' => '/import', 'accept' => ['text/csv' => ['.csv']]],
+    ],
+
+    // Opened when something follows a web+invoice: link.
+    'protocol_handlers' => [
+        ['protocol' => 'web+invoice', 'url' => '/invoices/open?ref=%s'],
+    ],
+],
+```
+
+**The routes are yours to write.** The manifest tells the operating system to send the app
+to those URLs; nothing in the package answers them. `php artisan pwax:doctor` resolves every
+declared target against your real route table, with the method the browser will use, and
+fails if one matches no route, refuses that method, or sits outside `scope` — because
+otherwise the first you hear of it is a user who shared a photo to your app and got a 404.
+
+A file handler and a protocol handler deliver through the launch queue, which the runtime
+consumes for you:
+
+```js
+window.pwax.launch.consume(({ files, targetURL }) => {
+    for (const handle of files) {
+        readAndImport(handle);          // FileSystemFileHandle
+    }
+});
+```
+
+A launch carrying a URL and no files — a protocol handler, a shared link — is routed to for
+you. Under `launch_handler: focus-existing` the browser only brings the window forward, so
+without that, following a `web+invoice:` link would open the app on whatever page it was
+left on. Return `false` from the consumer, or call `preventDefault()` on the cancelable
+`pwax:launch` event, to route it yourself.
+
+A **POST** share target is not a launch — it is a real form POST from outside your
+application, so its route needs CSRF exemption and its own validation. The service worker
+leaves every non-GET request to the network, which means a share received offline fails
+rather than being queued. That is deliberate: replaying an arbitrary POST is not something
+a package can decide on your behalf. `pwax.sync.enqueue()` is there if your application
+decides it.
 
 ### Offline
 
@@ -1375,6 +1464,15 @@ The runtime publishes `window.pwax`:
 | `pwax.sw.applyUpdate()` | Let a waiting build take over now, and reload |
 | `pwax.sw.clearCaches()` | Delete every Pwax cache, framework included |
 | `pwax.sw.unregister()` | Remove the service worker entirely |
+| `pwax.install.*` | `available`, `installed`, `standalone`, `prompt()` |
+| `pwax.badge.set(n)` / `.clear()` | The count on the installed app's icon |
+| `pwax.storage.*` | `estimate()`, `persisted()`, `persist()` |
+| `pwax.push.*` | `subscribe()`, `unsubscribe()`, `subscription()`, `permission` |
+| `pwax.sync.*` | `enqueue(url, options)`, `pending()`, `flush()` |
+| `pwax.launch.consume(fn)` | Files and URLs the operating system launched the app with |
+| `pwax.share(data)` | The platform share sheet |
+| `pwax.prefetch(path)` | Fetch a page's payload before it is asked for |
+| `pwax.progress` | The navigation progress bar, for your own long tasks |
 | `pwax.app`, `pwax.router` | The Vue app and router instances |
 | `pwax.config`, `pwax.version` | Runtime configuration and package version |
 
@@ -1388,6 +1486,10 @@ Events on `document`:
 | `pwax:error` | A page failed to load |
 | `pwax:update-available` | A new service worker is waiting |
 | `pwax:online`, `pwax:offline` | The connection came back or went away |
+| `pwax:installable`, `pwax:installed` | The browser will offer installation, or it happened |
+| `pwax:push-subscribed`, `pwax:push-unsubscribed` | A push subscription changed |
+| `pwax:queued` | A write went to the background-sync queue |
+| `pwax:launch` | The OS opened the app with files or a URL (cancelable) |
 
 ## Upgrading
 

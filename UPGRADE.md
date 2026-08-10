@@ -239,6 +239,16 @@ Also new: `assets.cdn.integrity` accepts a filename key alongside the package na
 ships one for `vue.runtime.global.prod.js`. If you have hand-written that map and use a CDN
 with the runtime build, add the filename entry or the browser will reject the script.
 
+### 13. If you declare share_target, file_handlers or protocol_handlers
+
+These used to pass through to the manifest and do nothing else. They now work — the runtime
+consumes the launch queue, so a file handler actually receives its files — and
+`pwax:doctor` now checks them, which may fail a build that was previously green.
+
+It fails for a reason: a declared target whose route does not exist, refuses the method the
+browser uses, or sits outside `scope` is a capability your app advertises and cannot honour.
+Point it at a real route, or remove the member.
+
 ### Checklist
 
 - [ ] `service_worker.strategy` → `service_worker.runtime_strategy`, and decided on its value
@@ -250,6 +260,7 @@ with the runtime build, add the filename entry or the browser will reject the sc
 - [ ] Decided which routes need `->offline(false)`, now that caches are shared
 - [ ] Strategy names updated, or the doctor's warnings about them accepted
 - [ ] Decided about `pwax:compile` — and if you turned it on, it is in the deploy script
+- [ ] Any declared `share_target` / `file_handlers` / `protocol_handlers` point at real routes
 - [ ] `php artisan pwax:doctor` is clean
 - [ ] Tested offline, signed in as two different users on one browser profile
 

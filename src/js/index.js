@@ -11,6 +11,7 @@ import { loadConfig, loadInitialPayload } from './config.js';
 import { resolveExtensions } from './extensions.js';
 import { createHttp } from './http.js';
 import { createBadgeApi, createInstallApi, createStorageApi, watchInstall } from './install.js';
+import { createLaunchApi, createShareApi, watchLaunch } from './launch.js';
 import { importModule } from './modules.js';
 import { createPushApi } from './push.js';
 import { createPageComponent } from './page.js';
@@ -31,6 +32,11 @@ async function boot() {
     // replayed — a listener added after it has fired never sees it, and with it goes the
     // application's only chance to offer installation on this page load.
     watchInstall();
+
+    // Same reason, different API. A launch — a file opened, a `web+thing:` link followed, a
+    // page shared to the app — happens before the document has finished loading, and the
+    // queue holds it only until a consumer is set. Set late, the files are gone.
+    watchLaunch();
 
     const http = createHttp(config);
     const styles = createStyleManager(document);
@@ -63,6 +69,8 @@ async function boot() {
         storage: createStorageApi(),
         push: createPushApi(config.push || {}, http),
         sync: createSyncApi(config, http),
+        launch: createLaunchApi(),
+        share: createShareApi().share,
         prefetch: prefetcher.prefetch,
         // Exposed so an application can wrap its own long-running work — a form
         // submission, a report — in the same indicator its navigations use.
@@ -71,8 +79,9 @@ async function boot() {
 
     if (typeof Vue === 'undefined') {
         throw new Error(
-            'pwax: Vue is not loaded. The Vue script tag must come before pwax.js, and it must be ' +
-                'the full build (vue.global.prod.js) — the runtime-only build cannot compile templates.'
+            'pwax: Vue is not loaded. The Vue script tag must come before pwax.js. Use the full ' +
+                'build (vue.global.prod.js) unless you run `php artisan pwax:compile`, which is ' +
+                'what makes the runtime-only build safe to serve.'
         );
     }
 

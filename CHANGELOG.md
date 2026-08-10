@@ -43,6 +43,61 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `'shared' | 'dismissed' | 'unavailable'` so a caller can fall back to copying a link
   without feature-detecting, and separating a cancelled sheet from a broken one.
 
+
+- **`pwax:doctor` now checks the four things that fail silently today.** Every
+  `service_worker.extend` entry resolves to a view or a file the worker can read; the
+  VAPID public key is a 65-byte uncompressed P-256 point and the private key a 32-byte
+  scalar; the configured cache store round-trips a value; the worker URL is served as
+  JavaScript rather than an HTML login page. The first three were features whose
+  misconfigurations shipped, and the fourth is the "nothing happens when I reload offline"
+  failure mode. A bad key, a missing controller endpoint, or a typo in an extend list
+  is now a failed check rather than a user who enabled push and got nothing.
+
+
+- **`pwax:component` now scaffolds plugins, directives and middleware.** The three
+  additions are mutually exclusive flags, each emits the correct export shape with a
+  comment block listing the API, and the command names the `pwax.plugins` /
+  `pwax.directives` / `pwax.middleware_js` key the new view belongs under. A developer
+  reading the codebase no longer has to copy the export shape from somewhere else — and
+  somewhere else is the server-side renderer inside the package, which is not the place
+  they would have looked.
+
+
+- **`pwax:precache --verify` covers pages.** Rendering each component was the first half
+  of "everything in the manifest will load". `pages.urls` and `pages.discover` are the
+  other half, and they were the half that 5xx's offline for a first-time visitor — a
+  route that throws here throws the same way with no connection. `--verify` now issues a
+  guest GET to every page the manifest will precache, with the same `X-Pwax-Component`
+  header the worker uses, and reports any 5xx as a failed row.
+
+
+- **`php artisan pwax:push-endpoint`.** A push-subscription controller scaffold. Every
+  application reaches for the same shape — validate the subscription that arrived, store
+  it keyed on the endpoint, on `DELETE` remove it — and putting the boilerplate on disk
+  means a developer can read it next to the README example rather than rewriting it
+  from the prose. The command writes the controller only when missing, and `--force`
+  overwrites.
+
+
+- **`php artisan pwax:routes`.** Every Pwax-served route, with its method, name and
+  URL. `--all` includes the application's own routes. The package's routes are the ones
+  a developer reaches for when a 404 lands on `/__pwax__/manifest.json`, and a
+  `pwax:routes` style answer belongs next to `route:list`.
+
+
+- **`pwax:install --push` and `--service-worker` flags.** `--push` publishes the
+  annotated push-endpoint Blade view (`pwax-push` tag); `--service-worker` publishes
+  the offline document the worker serves. Tags already existed; the flags are the
+  way a developer reaches them without remembering the tag name.
+
+
+- **`pwax:doctor` covers the rest of the silent failures.** `service_worker.scope` is
+  `/` or `/<segment>` and contains no fragment; `manifest.id` does not contain a
+  fragment or query string; `manifest.display` is one of the installable values
+  browsers actually offer for; `service_worker.source_maps` is off in production;
+  the `push_subscriptions` table exists when VAPID is configured. Each is a check
+  that previously failed silently or in a place the developer was not looking.
+
 ### Changed
 
 - **A navigation that fails for a reason other than an HTTP status now says so in the
@@ -299,6 +354,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from the one it emitted, so a configured manifest path went unhashed.
 - The `Pwax` facade documented `payload()`'s second argument as `$includeScript`; it has
   been `$addressable` since 2.0.
+
+### Deprecated
+
+- **`$pwaxTitle` in the shell view.** The published `ComponentResponse` passes both
+  `pwaxHead` and `pwaxTitle` to the shell; the second is always equal to
+  `head->title` and exists only so a shell published before `pwaxHead` was added
+  still has a variable to read. It will be removed in the next major version. The
+  published shell already reads `pwaxHead->title`; an application that has
+  customised `resources/views/vendor/pwax/layouts/shell.blade.php` should do the
+  same now.
 
 ### Documentation
 

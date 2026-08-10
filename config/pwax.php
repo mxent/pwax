@@ -364,7 +364,7 @@ return [
     'security' => [
         'referrer_policy' => 'no-referrer',
         'frame_options' => 'SAMEORIGIN',
-        'permissions_policy' => 'accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()',
+        'permissions_policy' => 'accelerometer=(), ambient-light-sensor=(), autoplay=(), battery=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), document-domain=(), encrypted-media=(), execution-while-not-rendered=(), execution-while-out-of-viewport=(), fullscreen=(), gamepad=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), interest-cohort=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), speaker-selection=(), sync-xhr=(), unoptimized-images=(), unsized-media=(), usb=(), web-share=(), xr-spatial-tracking=()',
         'cross_origin_opener_policy' => 'same-origin',
         'cross_origin_embedder_policy' => 'require-corp',
     ],

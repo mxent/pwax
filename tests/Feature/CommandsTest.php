@@ -3,6 +3,7 @@
 namespace Mxent\Pwax\Tests\Feature;
 
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Schema;
 use Mxent\Pwax\Facades\Pwax;
 use Mxent\Pwax\Tests\TestCase;
 
@@ -198,5 +199,280 @@ class CommandsTest extends TestCase
         $this->assertFileExists(config_path('pwax.php'));
 
         File::delete(config_path('pwax.php'));
+    }
+
+    public function test_the_component_command_scaffolds_a_plugin(): void
+    {
+        $this->artisan('pwax:component', ['name' => 'scratch.toast', '--plugin' => true])->assertSuccessful();
+
+        $contents = File::get(resource_path('views/scratch/toast.blade.php'));
+
+        $this->assertStringContainsString('install(app', $contents);
+        $this->assertStringNotContainsString('<template>', $contents);
+    }
+
+    public function test_the_component_command_scaffolds_a_directive(): void
+    {
+        $this->artisan('pwax:component', ['name' => 'scratch.focus', '--directive' => true])->assertSuccessful();
+
+        $contents = File::get(resource_path('views/scratch/focus.blade.php'));
+
+        $this->assertStringContainsString('name:', $contents);
+        $this->assertStringContainsString('bind(el)', $contents);
+    }
+
+    public function test_the_component_command_scaffolds_a_middleware(): void
+    {
+        $this->artisan('pwax:component', ['name' => 'scratch.guard', '--middleware' => true])->assertSuccessful();
+
+        $contents = File::get(resource_path('views/scratch/guard.blade.php'));
+
+        $this->assertStringContainsString('before(next)', $contents);
+    }
+
+    public function test_the_component_command_rejects_multiple_scaffold_flags(): void
+    {
+        $this->artisan('pwax:component', [
+            'name' => 'scratch.x',
+            '--plugin' => true,
+            '--directive' => true,
+        ])->assertFailed();
+    }
+
+    /**
+     * A misconfigured `service_worker.extend` entry fails silently at build time. The
+     * doctor is the only place that surfaces it before the runtime calls a handler
+     * that never got registered.
+     */
+    public function test_the_doctor_command_flags_an_unresolvable_extend_entry(): void
+    {
+        config()->set('pwax.manifest.icons', [
+            ['src' => '/i-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
+            ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
+        ]);
+        config()->set('pwax.assets.source', 'cdn');
+        config()->set('pwax.service_worker.extend', ['sw.does-not-exist']);
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('service_worker.extend')
+            ->assertFailed();
+    }
+
+    public function test_the_doctor_command_reports_well_formed_vapid_keys(): void
+    {
+        config()->set('pwax.manifest.icons', [
+            ['src' => '/i-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
+            ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
+        ]);
+        config()->set('pwax.assets.source', 'cdn');
+
+        // 32 bytes of zeroes, base64url-encoded — not a valid public key, but a
+        // useful shape for the negative test.
+        $badPublic = rtrim(strtr(base64_encode(str_repeat("\0", 32)), '+/', '-_'), '=');
+
+        config()->set('pwax.push.public_key', $badPublic);
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('public_key')
+            ->assertFailed();
+    }
+
+    public function test_the_doctor_command_silently_consents_to_empty_push_config(): void
+    {
+        config()->set('pwax.manifest.icons', [
+            ['src' => '/i-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
+            ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
+        ]);
+        config()->set('pwax.assets.source', 'cdn');
+
+        $this->artisan('pwax:doctor')->assertSuccessful();
+    }
+
+    public function test_the_doctor_command_warns_when_a_public_key_has_no_endpoint(): void
+    {
+        config()->set('pwax.manifest.icons', [
+            ['src' => '/i-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
+            ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
+        ]);
+        config()->set('pwax.assets.source', 'cdn');
+        $this->withPushSubscriptionsTable();
+
+        // 65 bytes starting with 0x04 is the shape the Push API expects.
+        $goodPublic = rtrim(strtr(base64_encode("\x04" . str_repeat("\0", 64)), '+/', '-_'), '=');
+
+        config()->set('pwax.push.public_key', $goodPublic);
+        // pwax.push.endpoint deliberately left null.
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('pwax.push.endpoint')
+            ->assertSuccessful();
+    }
+
+    public function test_the_precache_command_verify_covers_pages(): void
+    {
+        config()->set('pwax.service_worker.enabled', true);
+        config()->set('pwax.service_worker.components', ['pages.home']);
+        config()->set('pwax.service_worker.pages.urls', ['/about']);
+
+        $this->artisan('pwax:precache', ['--verify' => true])
+            ->expectsOutputToContain('Probing')
+            ->assertSuccessful();
+    }
+
+    public function test_the_push_endpoint_command_scaffolds_a_controller(): void
+    {
+        $this->artisan('pwax:push-endpoint')->assertSuccessful();
+
+        $path = app_path('Http/Controllers/PushSubscriptionController.php');
+        $this->assertFileExists($path);
+
+        $contents = File::get($path);
+
+        $this->assertStringContainsString('subscribe', $contents);
+        $this->assertStringContainsString('unsubscribe', $contents);
+        $this->assertStringContainsString('PushSubscriptionController', $contents);
+
+        File::delete($path);
+    }
+
+    public function test_the_push_endpoint_command_refuses_to_overwrite(): void
+    {
+        $path = app_path('Http/Controllers/PushSubscriptionController.php');
+
+        File::ensureDirectoryExists(dirname($path));
+        File::put($path, '<?php // existing');
+
+        try {
+            $this->artisan('pwax:push-endpoint')->assertFailed();
+            $this->assertSame('<?php // existing', File::get($path));
+
+            $this->artisan('pwax:push-endpoint', ['--force' => true])->assertSuccessful();
+        } finally {
+            File::delete($path);
+        }
+    }
+
+    public function test_the_routes_command_lists_pwax_routes(): void
+    {
+        $this->artisan('pwax:routes')
+            ->expectsOutputToContain('pwax.')
+            ->assertSuccessful();
+    }
+
+    public function test_the_routes_command_can_include_application_routes(): void
+    {
+        $this->artisan('pwax:routes', ['--all' => true])
+            ->expectsOutputToContain('pwax.test.home')
+            ->assertSuccessful();
+    }
+
+    /**
+     * The manifest `id` value is a URL fragment identifier per spec — a `#` in it is a
+     * bug, not a literal anchor.
+     */
+    public function test_the_doctor_command_flags_a_manifest_id_with_a_fragment(): void
+    {
+        $this->manifest_clean();
+
+        config()->set('pwax.manifest.id', '/app#fragment');
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('fragment')
+            ->assertFailed();
+    }
+
+    public function test_the_doctor_command_accepts_a_clean_manifest_id(): void
+    {
+        $this->manifest_clean();
+
+        config()->set('pwax.manifest.id', '/stable-id');
+
+        $this->artisan('pwax:doctor')->assertSuccessful();
+    }
+
+    /**
+     * `display` outside the installable set is silent otherwise — the install prompt
+     * simply never appears.
+     */
+    public function test_the_doctor_command_warns_when_display_is_not_installable(): void
+    {
+        $this->manifest_clean();
+
+        config()->set('pwax.manifest.display', 'browser');
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('standalone')
+            ->assertSuccessful();
+    }
+
+    public function test_the_doctor_command_warns_on_a_bad_scope(): void
+    {
+        $this->manifest_clean();
+
+        config()->set('pwax.service_worker.enabled', true);
+        config()->set('pwax.service_worker.scope', '/admin#frag');
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('fragment')
+            ->assertFailed();
+    }
+
+    public function test_the_doctor_command_warns_when_source_maps_are_set_in_production(): void
+    {
+        $this->manifest_clean();
+
+        $this->app->detectEnvironment(fn () => 'production');
+        config()->set('pwax.service_worker.source_maps', true);
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('source map')
+            ->assertSuccessful();
+    }
+
+    public function test_the_doctor_command_warns_when_subscriptions_table_is_missing(): void
+    {
+        $this->manifest_clean();
+
+        $publicKey = rtrim(strtr(base64_encode("\x04" . str_repeat("\0", 64)), '+/', '-_'), '=');
+        config()->set('pwax.push.public_key', $publicKey);
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('push_subscriptions')
+            ->assertFailed();
+    }
+
+    /**
+     * The shared `pwax:doctor` config baseline every `check*` method needs.
+     *
+     * Every new check has a positive path that requires a populated, valid manifest. The
+     * baseline below is the smallest set that satisfies every check we have — kept here
+     * and applied by every other test in this file rather than scattered through the
+     * suite, so a doctor change that adds a new check only has to update one place.
+     */
+    private function manifest_clean(): void
+    {
+        config()->set('pwax.manifest.icons', [
+            ['src' => '/i-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
+            ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
+        ]);
+        config()->set('pwax.assets.source', 'cdn');
+    }
+
+    /**
+     * Create the `push_subscriptions` table that the push doctor checks look for.
+     */
+    private function withPushSubscriptionsTable(): void
+    {
+        if (Schema::hasTable('push_subscriptions')) {
+            return;
+        }
+
+        Schema::create('push_subscriptions', function ($t) {
+            $t->id();
+            $t->string('endpoint');
+            $t->string('p256dh', 256);
+            $t->string('auth', 64);
+            $t->timestamps();
+        });
     }
 }

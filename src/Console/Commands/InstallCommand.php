@@ -9,6 +9,8 @@ class InstallCommand extends Command
     protected $signature = 'pwax:install
         {--force : Overwrite any existing files}
         {--views : Also publish the Blade views}
+        {--push : Also publish the worked push-endpoint Blade view (the controller is created by pwax:push-endpoint)}
+        {--service-worker : Also publish the offline document the worker serves}
         {--no-assets : Skip publishing Vue, Vue Router and Pinia}';
 
     protected $description = 'Install Pwax: publish the config, the frontend assets and (optionally) the views';
@@ -27,6 +29,14 @@ class InstallCommand extends Command
 
         if ($this->option('views')) {
             $this->publish('pwax-views', $force);
+        }
+
+        if ($this->option('push')) {
+            $this->publish('pwax-push', $force);
+        }
+
+        if ($this->option('service-worker')) {
+            $this->publish('pwax-service-worker', $force);
         }
 
         $this->newLine();

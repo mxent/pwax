@@ -5,6 +5,7 @@ namespace Mxent\Pwax\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 use Mxent\Pwax\Pwa\AssetManifest;
 use Mxent\Pwax\Pwa\ComponentRegistry;
 use Mxent\Pwax\Pwa\Strategy;
@@ -55,6 +56,15 @@ class DoctorCommand extends Command
         $this->checkServiceWorker($config);
         $this->checkPrecache($config);
         $this->checkRouting($config);
+        $this->checkExtend($config);
+        $this->checkPush($config);
+        $this->checkCacheStore($config);
+        $this->checkServiceWorkerPath($config);
+        $this->checkScope($config);
+        $this->checkManifestId($config);
+        $this->checkDisplayMode($config);
+        $this->checkWorkerSourceMap($config);
+        $this->checkPushSubscriptionsTable($config);
 
         $this->newLine();
 
@@ -900,6 +910,226 @@ class DoctorCommand extends Command
         }
     }
 
+    /**
+     * Every `service_worker.extend` entry resolves to something the worker can read.
+     *
+     * An entry that misses is not fatal — `ServiceWorker::build()` writes a comment in
+     * its place rather than bringing the whole offline application down — so the only
+     * way a typo surfaces is the developer spotting the comment in a checked-in
+     * `dist/pwax.js`. That, and the runtime calls a handler that never got registered.
+     */
+    private function checkExtend(Config $config): void
+    {
+        $entries = (array) $config->get('pwax.service_worker.extend', []);
+
+        if ($entries === []) {
+            return;
+        }
+
+        $views = $this->laravel->make('view');
+
+        $broken = 0;
+
+        foreach ($entries as $index => $entry) {
+            if (! is_string($entry) || $entry === '') {
+                continue;
+            }
+
+            // Views are resolved by the View factory; raw files are read from disk.
+            if ($views->exists($entry)) {
+                continue;
+            }
+
+            if (is_file($entry) && is_readable($entry)) {
+                continue;
+            }
+
+            $this->fail_(sprintf(
+                'service_worker.extend entry "%s" resolves to neither a view nor a readable file. '
+                . 'The worker will skip it.',
+                $entry
+            ));
+            $broken++;
+        }
+
+        if ($broken === 0) {
+            $this->ok(sprintf('All %d service_worker.extend entry(ies) resolve', count($entries)));
+        }
+    }
+
+    /**
+     * VAPID keys are well-formed, and `push.endpoint` is reachable when set.
+     *
+     * The Push API rejects a subscription whose public key will not decode to a valid
+     * uncompressed point, and rejects a server whose private key will not match it. A
+     * typo in either is a 401 from the push service that is hard to tell from "the
+     * service is having a bad day". Both keys are validated here at the same shape
+     * `pwax:vapid` emits.
+     */
+    private function checkPush(Config $config): void
+    {
+        $publicKey = (string) $config->get('pwax.push.public_key', '');
+        $privateKey = (string) $config->get('pwax.push.private_key', '');
+        $endpoint = (string) $config->get('pwax.push.endpoint', '');
+
+        if ($publicKey === '' && $privateKey === '' && $endpoint === '') {
+            return;
+        }
+
+        if ($publicKey !== '') {
+            $bytes = self::base64urlDecode($publicKey);
+
+            $this->assert(
+                is_string($bytes) && strlen($bytes) === 65 && $bytes[0] === "\x04",
+                'Push public key is a valid uncompressed P-256 point',
+                'pwax.push.public_key must be base64url-encoded and decode to 65 bytes (an '
+                . 'uncompressed P-256 point, starting with 0x04). Run `php artisan pwax:vapid` '
+                . 'to generate a fresh pair.'
+            );
+        }
+
+        if ($privateKey !== '') {
+            $bytes = self::base64urlDecode($privateKey);
+
+            $this->assert(
+                is_string($bytes) && strlen($bytes) === 32,
+                'Push private key is a 32-byte scalar',
+                'pwax.push.private_key must be base64url-encoded and decode to 32 bytes. Run '
+                . '`php artisan pwax:vapid` to generate a fresh pair.'
+            );
+        }
+
+        if ($publicKey !== '' && $endpoint === '') {
+            $this->warn_(
+                'pwax.push.public_key is set but pwax.push.endpoint is not. Subscriptions will '
+                . 'have nowhere to deliver to — every push will fail server-side.'
+            );
+        }
+
+        if ($endpoint !== '') {
+            $this->probe($endpoint, 'Push subscription endpoint is reachable');
+        }
+    }
+
+    /**
+     * The configured cache store is alive enough to round-trip a value.
+     *
+     * A store that throws on every read makes every render hit the Blade compiler, the
+     * CSS scoper and the inline-block extractor. The `pwax:doctor` pass is the only time
+     * such a misconfiguration is reported in a place the developer is looking.
+     */
+    private function checkCacheStore(Config $config): void
+    {
+        $store = (string) $config->get('cache.default', 'array');
+
+        try {
+            $cache = $this->laravel->make('cache')->store($store);
+            $key = 'pwax-doctor-probe';
+            $cache->put($key, '1', 30);
+            $value = $cache->get($key);
+            $cache->forget($key);
+
+            $this->assert(
+                $value === '1',
+                sprintf('Cache store "%s" round-trips', $store),
+                sprintf('Cache store "%s" did not return the value just written.', $store)
+            );
+        } catch (Throwable $e) {
+            $this->fail_(sprintf(
+                'Cache store "%s" threw: %s. Every render will be uncached.',
+                $store,
+                $e->getMessage()
+            ));
+        }
+    }
+
+    /**
+     * The service worker is served at all, and as JavaScript.
+     *
+     * A worker registration that points at a 404 — or at an HTML login page — is the
+     * "nothing happens when I reload offline" failure mode. The request that hits
+     * `/sw.js` here is the same shape the browser sends, so a missing route or a
+     * `<a>` tag named `sw.js` is visible before the install attempt.
+     */
+    private function checkServiceWorkerPath(Config $config): void
+    {
+        if (! $config->get('pwax.service_worker.enabled', false)) {
+            return;
+        }
+
+        $path = '/' . trim((string) $config->get('pwax.service_worker.path', '/sw.js'), '/');
+        $url = rtrim((string) $config->get('app.url'), '/') . $path;
+
+        try {
+            $response = Http::timeout(5)->get($url);
+        } catch (Throwable $e) {
+            $this->fail_(sprintf('Service worker URL %s could not be fetched: %s', $url, $e->getMessage()));
+
+            return;
+        }
+
+        $contentType = $response->header('Content-Type') ?? '';
+
+        $this->assert(
+            $response->successful(),
+            'Service worker URL responds 2xx',
+            sprintf('Service worker URL %s returned %d.', $url, $response->status())
+        );
+
+        $this->assert(
+            str_contains($contentType, 'javascript'),
+            'Service worker URL serves JavaScript',
+            $response->status() === 200
+                ? sprintf('Service worker URL %s responded with Content-Type "%s" — a browser will '
+                    . 'refuse to register it as a worker.', $url, $contentType)
+                : 'Worker URL did not respond 2xx, so its Content-Type is not meaningful.'
+        );
+    }
+
+    /**
+     * Decode a base64url string. Returns the decoded bytes, or `null` on invalid input.
+     */
+    private static function base64urlDecode(string $value): ?string
+    {
+        $padded = strtr($value, '-_', '+/');
+        $padded .= str_repeat('=', (4 - strlen($padded) % 4) % 4);
+
+        $decoded = base64_decode($padded, true);
+
+        return $decoded === false ? null : $decoded;
+    }
+
+    /**
+     * Head-check a URL. Treats non-2xx as a problem, network failures as a warning —
+     * a config that points at the right host but the wrong path is a clear typo;
+     * a host that is down for five seconds is not something `pwax:doctor` should
+     * pretend to know about.
+     */
+    private function probe(string $url, string $pass): void
+    {
+        try {
+            $response = Http::timeout(5)->get($url);
+        } catch (Throwable $e) {
+            $this->warn_(sprintf('Could not reach %s: %s', $url, $e->getMessage()));
+
+            return;
+        }
+
+        if ($response->status() >= 500) {
+            $this->fail_(sprintf('%s returned %d — push subscriptions will fail.', $url, $response->status()));
+
+            return;
+        }
+
+        if ($response->status() >= 400) {
+            $this->warn_(sprintf('%s returned %d — the URL exists but does not accept this request.', $url, $response->status()));
+
+            return;
+        }
+
+        $this->ok($pass);
+    }
+
     private function assert(bool $ok, string $pass, string $fail): void
     {
         if ($ok) {
@@ -935,5 +1165,161 @@ class DoctorCommand extends Command
     private function ok(string $message): void
     {
         $this->components->twoColumnDetail($message, '<fg=green>OK</>');
+    }
+
+    /**
+     * The service worker's scope must be `/` or `/<segment>` and contain no fragment.
+     *
+     * A scope the worker cannot claim — a path that has its own URL resolution, a
+     * fragment, a value that begins with the worker's own path — is silently ignored
+     * by `navigator.serviceWorker.register()`. The browser installs the worker but
+     * leaves it controlling nothing, and the symptom is "the worker is on according to
+     * DevTools but a network navigation never reaches it."
+     */
+    private function checkScope(Config $config): void
+    {
+        $scope = (string) $config->get('pwax.service_worker.scope', '/');
+
+        if (str_contains($scope, '#')) {
+            $this->fail_(sprintf(
+                'pwax.service_worker.scope (%s) contains a fragment. Browsers reject the '
+                . 'registration and the worker will not control anything.',
+                $scope
+            ));
+
+            return;
+        }
+
+        if ($scope !== '/' && ! preg_match('#^/[A-Za-z0-9_.\-]*$#', $scope)) {
+            $this->warn_(sprintf(
+                'pwax.service_worker.scope (%s) is not absolute or contains characters a '
+                . 'browser will reject at registration.',
+                $scope
+            ));
+
+            return;
+        }
+
+        $this->ok(sprintf('Service worker scope is %s', $scope));
+    }
+
+    /**
+     * The manifest `id` is a URL fragment identifier, and a fragment is a bug.
+     *
+     * The existing `id is empty` check is the common case; this one catches a value
+     * that is set but broken — a hash, a query string, a same-origin URL the user meant
+     * to paste into `start_url`. Set once and never change, and the spec treats it as a
+     * string with that property.
+     */
+    private function checkManifestId(Config $config): void
+    {
+        $id = (string) $config->get('pwax.manifest.id', '');
+
+        if ($id === '') {
+            // Empty id is already covered by `checkManifest`.
+            return;
+        }
+
+        if (str_contains($id, '#')) {
+            $this->fail_(sprintf(
+                'pwax.manifest.id (%s) contains a fragment. The Web App Manifest spec '
+                . 'treats `id` as an opaque identifier, not a URL.',
+                $id
+            ));
+
+            return;
+        }
+
+        if (str_contains($id, '?')) {
+            $this->warn_(sprintf(
+                'pwax.manifest.id (%s) contains a query string. Most browsers do not strip '
+                . 'it, and an installed app will be keyed on the whole string.',
+                $id
+            ));
+        }
+
+        $this->ok(sprintf('Manifest id is %s', $id));
+    }
+
+    /**
+     * `display` value the browser will accept for an install prompt.
+     *
+     * `standalone`, `fullscreen` and `minimal-ui` are the only installable values in
+     * Chromium. Anything else is allowed by the manifest spec but the install prompt
+     * silently refuses to appear, and the developer only finds out when a user reports
+     * that they cannot install the app.
+     */
+    private function checkDisplayMode(Config $config): void
+    {
+        $display = (string) $config->get('pwax.manifest.display', '');
+
+        if ($display === '') {
+            return;
+        }
+
+        $installable = ['standalone', 'fullscreen', 'minimal-ui'];
+
+        if (in_array($display, $installable, true)) {
+            $this->ok(sprintf('Manifest display is %s', $display));
+
+            return;
+        }
+
+        $this->warn_(sprintf(
+            'pwax.manifest.display is "%s". Browsers offer an install prompt only for '
+            . 'standalone, fullscreen and minimal-ui.',
+            $display
+        ));
+    }
+
+    /**
+     * Service worker source maps are debug-only artifacts.
+     *
+     * The map file reveals the entire unminified source, which sometimes includes
+     * comments, sometimes secrets left in dev. With the service worker that target
+     * is every visitor of the application, not just the developer holding DevTools.
+     */
+    private function checkWorkerSourceMap(Config $config): void
+    {
+        if (! $config->get('pwax.service_worker.source_maps', false)) {
+            return;
+        }
+
+        if ($this->laravel->environment('production')) {
+            $this->warn_(
+                'pwax.service_worker.source_maps is true in production. The source map is '
+                . 'served publicly and reveals the unminified service worker to anyone who '
+                . 'asks for it.'
+            );
+
+            return;
+        }
+
+        $this->ok('Service worker source maps are enabled in a non-production environment');
+    }
+
+    /**
+     * VAPID is configured but there is no `push_subscriptions` table to write to.
+     *
+     * `php artisan pwax:push-endpoint` scaffolds the controller only; the schema is
+     * the application's decision. A doctor run that wires push end-to-end and stops
+     * only on the missing table is the same doctor that prevents the "subscribed
+     * cleanly but the server 500s on every push" failure mode.
+     */
+    private function checkPushSubscriptionsTable(Config $config): void
+    {
+        if (! $config->get('pwax.push.public_key')) {
+            return;
+        }
+
+        $connection = $config->get('database.default');
+
+        $this->assert(
+            $this->laravel->make('db')->connection($connection)
+                ->getSchemaBuilder()->hasTable('push_subscriptions'),
+            'push_subscriptions table exists',
+            'pwax.push.public_key is set but the database has no `push_subscriptions` '
+                . 'table. The endpoint from `pwax:push-endpoint` will throw on every write.'
+        );
     }
 }

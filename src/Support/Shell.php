@@ -21,8 +21,8 @@ use Throwable;
  */
 class Shell
 {
-    /** The bundle's digest once resolved; `false` until then, `null` if unreadable. */
-    private string|false|null $runtimeVersion = false;
+    /** The bundle's digest once resolved; `?string` covers both "unreadable" and "haven't checked yet". */
+    private ?string $runtimeVersion = null;
 
     public function __construct(
         private readonly Config $config,
@@ -100,12 +100,14 @@ class Shell
     {
         $mode = $this->config->get('pwax.prefetch.mode', 'hover');
 
-        if ($mode === false || $mode === 'off' || $mode === null) {
+        // Anything outside this set means "off" — `false`, `null`, `'off'`, and any
+        // unrecognised string all fall through to the same branch.
+        if (! is_string($mode) || ! in_array($mode, ['hover', 'visible', 'load'], true)) {
             return false;
         }
 
         return [
-            'mode' => (string) $mode,
+            'mode' => $mode,
             'delay' => (int) $this->config->get('pwax.prefetch.delay', 65),
         ];
     }
@@ -237,12 +239,17 @@ class Shell
      */
     private function runtimeVersion(): ?string
     {
-        if ($this->runtimeVersion !== false) {
+        if ($this->runtimeVersion !== null) {
             return $this->runtimeVersion;
         }
 
         $path = dirname(__DIR__, 2) . '/dist/pwax.js';
-        $hash = is_file($path) ? @hash_file('xxh128', $path) : false;
+
+        if (! is_file($path)) {
+            return $this->runtimeVersion = null;
+        }
+
+        $hash = @hash_file('xxh128', $path);
 
         return $this->runtimeVersion = $hash === false ? null : substr($hash, 0, 12);
     }

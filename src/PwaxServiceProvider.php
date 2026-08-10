@@ -25,6 +25,8 @@ use Mxent\Pwax\Console\Commands\ComponentMakeCommand;
 use Mxent\Pwax\Console\Commands\DoctorCommand;
 use Mxent\Pwax\Console\Commands\InstallCommand;
 use Mxent\Pwax\Console\Commands\PrecacheCommand;
+use Mxent\Pwax\Console\Commands\PushEndpointCommand;
+use Mxent\Pwax\Console\Commands\RoutesCommand;
 use Mxent\Pwax\Console\Commands\VapidCommand;
 use Mxent\Pwax\Contracts\Minifier;
 use Mxent\Pwax\Http\Middleware\HandlePwaxRequests;
@@ -60,6 +62,8 @@ class PwaxServiceProvider extends ServiceProvider
                 PrecacheCommand::class,
                 CompileCommand::class,
                 VapidCommand::class,
+                PushEndpointCommand::class,
+                RoutesCommand::class,
             ]);
         }
     }
@@ -411,6 +415,15 @@ class PwaxServiceProvider extends ServiceProvider
                 'views/vendor/pwax/js/offline.blade.php'
             ),
         ], 'pwax-service-worker');
+
+        // An annotated push-endpoint controller, the shape `pwax:push-endpoint` emits
+        // without the comments. Reading it next to the README example is the difference
+        // between "I think I understand" and "I have something concrete to read."
+        $this->publishes([
+            __DIR__ . '/../resources/views/push/example.blade.php' => resource_path(
+                'views/vendor/pwax/push/example.blade.php'
+            ),
+        ], 'pwax-push');
 
         // Vue, Vue Router and Pinia, so the app works offline and leaks nothing to a CDN.
         $this->publishes([

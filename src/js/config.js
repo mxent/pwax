@@ -11,7 +11,6 @@ const DEFAULTS = {
     prefix: '__pwax__',
     hashRouting: false,
     serviceWorker: null,
-    csrf: null,
     home: '/',
 };
 

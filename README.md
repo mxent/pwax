@@ -171,6 +171,26 @@ php artisan pwax:install
 `pwax:install` publishes `config/pwax.php` and copies Vue, Vue Router and Pinia into
 `public/vendor/pwax`. Add `--views` to publish the Blade views as well.
 
+#### Flags
+
+| Flag | Purpose |
+| --- | --- |
+| `--force` | Overwrite anything that already exists in the publish targets |
+| `--views` | Also publish the Blade views (the SPA shell, the loader and error templates) |
+| `--no-assets` | Skip the framework copy; the application serves Vue itself |
+
+#### Publish tags
+
+`pwax:install` is a thin wrapper around `vendor:publish`, and the same tags are
+available at any time:
+
+| Tag | Publishes |
+| --- | --- |
+| `pwax-config` | `config/pwax.php` |
+| `pwax-assets` | Vue, Vue Router, Pinia into `public/vendor/pwax` |
+| `pwax-views` | The shell, loader, error and offline Blade views |
+| `pwax-service-worker` | The offline document the worker serves |
+
 Then point a route at a component and create it:
 
 ```bash
@@ -324,7 +344,10 @@ Link between pages with `<RouterLink>`, using `pwaxRoute()` to resolve named rou
 
 `pwaxRoute()` returns a path (`/posts/1`); pass `true` as the third argument for an
 absolute URL. Unlike 1.x's `router()`, an unknown route name **throws** when
-`APP_DEBUG` is on rather than silently sending the link to your home page.
+`APP_DEBUG` is on rather than silently sending the link to your home page. With
+debug off, `pwaxRoute()` logs and falls back to the route named in `pwax.home`,
+which itself falls back to `/` if it is missing — so a typo never breaks a build,
+it just sends everyone home until you notice in the log.
 
 ### History mode
 
@@ -614,6 +637,14 @@ export default {
 > Client middleware is for user experience, not for access control. It runs in the
 > browser and can be bypassed. Enforce authorisation with Laravel middleware and
 > policies.
+
+> **`pwax.import`, `@pwaxImport`, and `pwax.importModule` are the same thing.** The
+> Blade directive `@pwaxImport('foo.bar')` is the only way to write a component
+> reference in a config value — you cannot reach for an `import('foo')` expression
+> instead. At runtime it resolves to the client-side `pwax.component(url)` (sync)
+> or `pwax.load(url)` (async with options), and the service worker calls the same
+> function internally as `pwax.importModule`. One name on the page, three spellings
+> for three places you might meet it.
 
 ## Progressive web app
 
@@ -1041,7 +1072,17 @@ document.addEventListener('pwax:online', () => banner.hidden = true);
 
 ### Push notifications
 
-Four steps, and the first one is the one every other guide assumes you already have.
+Five steps, and the first one is the one every other guide assumes you already have.
+
+**0. Scaffold the endpoint.** `pwax:push-endpoint` writes the controller — the
+`subscribe` and `unsubscribe` actions, the validation, the upsert by endpoint. It
+prints the routes to add to `routes/web.php` and a starter migration. Reading the
+file next to the shape below is the difference between "I think I understand" and
+"I have something concrete to read."
+
+```bash
+php artisan pwax:push-endpoint
+```
 
 **1. Generate a VAPID key pair.** No Node needed — this uses `ext-openssl`, which Laravel
 already requires.
@@ -1199,6 +1240,19 @@ serves. Nothing else in the package is involved after that, including the fixes.
 
 Either way `php artisan pwax:precache` shows what the manifest will tell your worker to
 install, and `/sw.js` in a browser shows exactly what is being served.
+
+#### Scope
+
+A service worker can only control paths at or below its own URL. `pwax:doctor` checks
+the obvious misconfigurations — a worker served at `/static/sw.js` cannot control
+`/`, and the browser will quietly leave the worker uninstalled — but the design
+principle is the same: the worker's URL sets the upper bound of what it can claim,
+and `service_worker.scope` cannot extend that.
+
+The default (`/`) covers everything. Set it to `/admin` only when the worker is
+itself served at `/admin/sw.js`; otherwise the browser truncates the scope to the
+worker's path and the symptoms are the same as if `scope` were wrong. Run
+`php artisan pwax:routes` to see which Pwax routes the worker can claim.
 
 ## Frontend assets
 
@@ -1394,6 +1448,7 @@ any injected string executable.)
 Content-Security-Policy:
     default-src 'self';
     script-src 'self' blob: 'unsafe-eval';   /* drop 'unsafe-eval' with pwax:compile */
+    worker-src 'self';                       /* the service worker is registered same-origin */
     style-src 'self' 'nonce-{NONCE}';
     connect-src 'self';
     img-src 'self' data:;
@@ -1402,6 +1457,11 @@ Content-Security-Policy:
     frame-ancestors 'none';
     object-src 'none'
 ```
+
+A `worker-src 'self'` is the line most policies forget to add. Without it, a strict
+policy refuses to register the service worker at all and the application is offline
+*as far as the worker is concerned* without anything in the dev console to point at
+the policy.
 
 Supply the nonce for Pwax's inline `<style>` and JSON blocks:
 
@@ -1593,6 +1653,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `service_worker.pages.urls` | `[]` | Extra routes to precache, beyond the discovered ones |
 | `service_worker.pages.discover` | `true` | Find every route that renders a page, scoped by `components` |
 | `service_worker.pages.runtime` | `true` | Cache pages as they are visited — payload, and HTML when anonymous |
+| `service_worker.pages.documents` | `true` | Precache each page's HTML alongside its JSON payload at install |
 | `service_worker.pages.strategy`, `.timeout` | `network-first`, `2000` | How a page payload is fetched |
 | `service_worker.pages.credentials` | `'omit'` | Precache the guest rendering, not one visitor's |
 | `service_worker.pages.as_components` | `false` | Also precache page views as importable modules |
@@ -1606,11 +1667,13 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 
 | Command | Purpose |
 | --- | --- |
-| `pwax:install` | Publish config and frontend assets (`--views`, `--force`, `--no-assets`) |
-| `pwax:component <name>` | Scaffold a component view (`--plain`, `--force`) |
-| `pwax:precache` | List everything available offline (`--verify`, `--json`) |
+| `pwax:install` | Publish config and frontend assets (`--views`, `--push`, `--service-worker`, `--force`, `--no-assets`) |
+| `pwax:component <name>` | Scaffold a component view (`--plain`, `--force`, `--plugin`, `--directive`, `--middleware`) |
+| `pwax:precache` | List everything available offline (`--verify`, `--json`) — `--verify` renders every component and probes every page |
 | `pwax:compile` | Precompile templates to render functions — optional, needs Node (`--clear`, `--json`) |
 | `pwax:vapid` | Generate a VAPID key pair for Web Push (`--json`) |
+| `pwax:push-endpoint` | Scaffold the push-subscription controller (`--force`) |
+| `pwax:routes` | List every Pwax-served route (`--all` includes application routes) |
 | `pwax:doctor` | Check for common misconfigurations |
 | `pwax:clear` | Flush compiled caches and the offline manifest |
 

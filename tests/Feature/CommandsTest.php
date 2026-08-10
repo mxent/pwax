@@ -3,6 +3,7 @@
 namespace Mxent\Pwax\Tests\Feature;
 
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Schema;
 use Mxent\Pwax\Facades\Pwax;
 use Mxent\Pwax\Tests\TestCase;
 
@@ -294,6 +295,7 @@ class CommandsTest extends TestCase
             ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
         ]);
         config()->set('pwax.assets.source', 'cdn');
+        $this->withPushSubscriptionsTable();
 
         // 65 bytes starting with 0x04 is the shape the Push API expects.
         $goodPublic = rtrim(strtr(base64_encode("\x04" . str_repeat("\0", 64)), '+/', '-_'), '=');
@@ -315,5 +317,162 @@ class CommandsTest extends TestCase
         $this->artisan('pwax:precache', ['--verify' => true])
             ->expectsOutputToContain('Probing')
             ->assertSuccessful();
+    }
+
+    public function test_the_push_endpoint_command_scaffolds_a_controller(): void
+    {
+        $this->artisan('pwax:push-endpoint')->assertSuccessful();
+
+        $path = app_path('Http/Controllers/PushSubscriptionController.php');
+        $this->assertFileExists($path);
+
+        $contents = File::get($path);
+
+        $this->assertStringContainsString('subscribe', $contents);
+        $this->assertStringContainsString('unsubscribe', $contents);
+        $this->assertStringContainsString('PushSubscriptionController', $contents);
+
+        File::delete($path);
+    }
+
+    public function test_the_push_endpoint_command_refuses_to_overwrite(): void
+    {
+        $path = app_path('Http/Controllers/PushSubscriptionController.php');
+
+        File::ensureDirectoryExists(dirname($path));
+        File::put($path, '<?php // existing');
+
+        try {
+            $this->artisan('pwax:push-endpoint')->assertFailed();
+            $this->assertSame('<?php // existing', File::get($path));
+
+            $this->artisan('pwax:push-endpoint', ['--force' => true])->assertSuccessful();
+        } finally {
+            File::delete($path);
+        }
+    }
+
+    public function test_the_routes_command_lists_pwax_routes(): void
+    {
+        $this->artisan('pwax:routes')
+            ->expectsOutputToContain('pwax.')
+            ->assertSuccessful();
+    }
+
+    public function test_the_routes_command_can_include_application_routes(): void
+    {
+        $this->artisan('pwax:routes', ['--all' => true])
+            ->expectsOutputToContain('pwax.test.home')
+            ->assertSuccessful();
+    }
+
+    /**
+     * The manifest `id` value is a URL fragment identifier per spec — a `#` in it is a
+     * bug, not a literal anchor.
+     */
+    public function test_the_doctor_command_flags_a_manifest_id_with_a_fragment(): void
+    {
+        $this->manifest_clean();
+
+        config()->set('pwax.manifest.id', '/app#fragment');
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('fragment')
+            ->assertFailed();
+    }
+
+    public function test_the_doctor_command_accepts_a_clean_manifest_id(): void
+    {
+        $this->manifest_clean();
+
+        config()->set('pwax.manifest.id', '/stable-id');
+
+        $this->artisan('pwax:doctor')->assertSuccessful();
+    }
+
+    /**
+     * `display` outside the installable set is silent otherwise — the install prompt
+     * simply never appears.
+     */
+    public function test_the_doctor_command_warns_when_display_is_not_installable(): void
+    {
+        $this->manifest_clean();
+
+        config()->set('pwax.manifest.display', 'browser');
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('standalone')
+            ->assertSuccessful();
+    }
+
+    public function test_the_doctor_command_warns_on_a_bad_scope(): void
+    {
+        $this->manifest_clean();
+
+        config()->set('pwax.service_worker.enabled', true);
+        config()->set('pwax.service_worker.scope', '/admin#frag');
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('fragment')
+            ->assertFailed();
+    }
+
+    public function test_the_doctor_command_warns_when_source_maps_are_set_in_production(): void
+    {
+        $this->manifest_clean();
+
+        $this->app->detectEnvironment(fn () => 'production');
+        config()->set('pwax.service_worker.source_maps', true);
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('source map')
+            ->assertSuccessful();
+    }
+
+    public function test_the_doctor_command_warns_when_subscriptions_table_is_missing(): void
+    {
+        $this->manifest_clean();
+
+        $publicKey = rtrim(strtr(base64_encode("\x04" . str_repeat("\0", 64)), '+/', '-_'), '=');
+        config()->set('pwax.push.public_key', $publicKey);
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('push_subscriptions')
+            ->assertFailed();
+    }
+
+    /**
+     * The shared `pwax:doctor` config baseline every `check*` method needs.
+     *
+     * Every new check has a positive path that requires a populated, valid manifest. The
+     * baseline below is the smallest set that satisfies every check we have — kept here
+     * and applied by every other test in this file rather than scattered through the
+     * suite, so a doctor change that adds a new check only has to update one place.
+     */
+    private function manifest_clean(): void
+    {
+        config()->set('pwax.manifest.icons', [
+            ['src' => '/i-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
+            ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
+        ]);
+        config()->set('pwax.assets.source', 'cdn');
+    }
+
+    /**
+     * Create the `push_subscriptions` table that the push doctor checks look for.
+     */
+    private function withPushSubscriptionsTable(): void
+    {
+        if (Schema::hasTable('push_subscriptions')) {
+            return;
+        }
+
+        Schema::create('push_subscriptions', function ($t) {
+            $t->id();
+            $t->string('endpoint');
+            $t->string('p256dh', 256);
+            $t->string('auth', 64);
+            $t->timestamps();
+        });
     }
 }

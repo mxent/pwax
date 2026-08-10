@@ -60,6 +60,11 @@ class DoctorCommand extends Command
         $this->checkPush($config);
         $this->checkCacheStore($config);
         $this->checkServiceWorkerPath($config);
+        $this->checkScope($config);
+        $this->checkManifestId($config);
+        $this->checkDisplayMode($config);
+        $this->checkWorkerSourceMap($config);
+        $this->checkPushSubscriptionsTable($config);
 
         $this->newLine();
 
@@ -1160,5 +1165,161 @@ class DoctorCommand extends Command
     private function ok(string $message): void
     {
         $this->components->twoColumnDetail($message, '<fg=green>OK</>');
+    }
+
+    /**
+     * The service worker's scope must be `/` or `/<segment>` and contain no fragment.
+     *
+     * A scope the worker cannot claim — a path that has its own URL resolution, a
+     * fragment, a value that begins with the worker's own path — is silently ignored
+     * by `navigator.serviceWorker.register()`. The browser installs the worker but
+     * leaves it controlling nothing, and the symptom is "the worker is on according to
+     * DevTools but a network navigation never reaches it."
+     */
+    private function checkScope(Config $config): void
+    {
+        $scope = (string) $config->get('pwax.service_worker.scope', '/');
+
+        if (str_contains($scope, '#')) {
+            $this->fail_(sprintf(
+                'pwax.service_worker.scope (%s) contains a fragment. Browsers reject the '
+                . 'registration and the worker will not control anything.',
+                $scope
+            ));
+
+            return;
+        }
+
+        if ($scope !== '/' && ! preg_match('#^/[A-Za-z0-9_.\-]*$#', $scope)) {
+            $this->warn_(sprintf(
+                'pwax.service_worker.scope (%s) is not absolute or contains characters a '
+                . 'browser will reject at registration.',
+                $scope
+            ));
+
+            return;
+        }
+
+        $this->ok(sprintf('Service worker scope is %s', $scope));
+    }
+
+    /**
+     * The manifest `id` is a URL fragment identifier, and a fragment is a bug.
+     *
+     * The existing `id is empty` check is the common case; this one catches a value
+     * that is set but broken — a hash, a query string, a same-origin URL the user meant
+     * to paste into `start_url`. Set once and never change, and the spec treats it as a
+     * string with that property.
+     */
+    private function checkManifestId(Config $config): void
+    {
+        $id = (string) $config->get('pwax.manifest.id', '');
+
+        if ($id === '') {
+            // Empty id is already covered by `checkManifest`.
+            return;
+        }
+
+        if (str_contains($id, '#')) {
+            $this->fail_(sprintf(
+                'pwax.manifest.id (%s) contains a fragment. The Web App Manifest spec '
+                . 'treats `id` as an opaque identifier, not a URL.',
+                $id
+            ));
+
+            return;
+        }
+
+        if (str_contains($id, '?')) {
+            $this->warn_(sprintf(
+                'pwax.manifest.id (%s) contains a query string. Most browsers do not strip '
+                . 'it, and an installed app will be keyed on the whole string.',
+                $id
+            ));
+        }
+
+        $this->ok(sprintf('Manifest id is %s', $id));
+    }
+
+    /**
+     * `display` value the browser will accept for an install prompt.
+     *
+     * `standalone`, `fullscreen` and `minimal-ui` are the only installable values in
+     * Chromium. Anything else is allowed by the manifest spec but the install prompt
+     * silently refuses to appear, and the developer only finds out when a user reports
+     * that they cannot install the app.
+     */
+    private function checkDisplayMode(Config $config): void
+    {
+        $display = (string) $config->get('pwax.manifest.display', '');
+
+        if ($display === '') {
+            return;
+        }
+
+        $installable = ['standalone', 'fullscreen', 'minimal-ui'];
+
+        if (in_array($display, $installable, true)) {
+            $this->ok(sprintf('Manifest display is %s', $display));
+
+            return;
+        }
+
+        $this->warn_(sprintf(
+            'pwax.manifest.display is "%s". Browsers offer an install prompt only for '
+            . 'standalone, fullscreen and minimal-ui.',
+            $display
+        ));
+    }
+
+    /**
+     * Service worker source maps are debug-only artifacts.
+     *
+     * The map file reveals the entire unminified source, which sometimes includes
+     * comments, sometimes secrets left in dev. With the service worker that target
+     * is every visitor of the application, not just the developer holding DevTools.
+     */
+    private function checkWorkerSourceMap(Config $config): void
+    {
+        if (! $config->get('pwax.service_worker.source_maps', false)) {
+            return;
+        }
+
+        if ($this->laravel->environment('production')) {
+            $this->warn_(
+                'pwax.service_worker.source_maps is true in production. The source map is '
+                . 'served publicly and reveals the unminified service worker to anyone who '
+                . 'asks for it.'
+            );
+
+            return;
+        }
+
+        $this->ok('Service worker source maps are enabled in a non-production environment');
+    }
+
+    /**
+     * VAPID is configured but there is no `push_subscriptions` table to write to.
+     *
+     * `php artisan pwax:push-endpoint` scaffolds the controller only; the schema is
+     * the application's decision. A doctor run that wires push end-to-end and stops
+     * only on the missing table is the same doctor that prevents the "subscribed
+     * cleanly but the server 500s on every push" failure mode.
+     */
+    private function checkPushSubscriptionsTable(Config $config): void
+    {
+        if (! $config->get('pwax.push.public_key')) {
+            return;
+        }
+
+        $connection = $config->get('database.default');
+
+        $this->assert(
+            $this->laravel->make('db')->connection($connection)
+                ->getSchemaBuilder()->hasTable('push_subscriptions'),
+            'push_subscriptions table exists',
+            'pwax.push.public_key is set but the database has no `push_subscriptions` '
+                . 'table. The endpoint from `pwax:push-endpoint` will throw on every write.'
+        );
     }
 }

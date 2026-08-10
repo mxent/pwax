@@ -70,6 +70,34 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   guest GET to every page the manifest will precache, with the same `X-Pwax-Component`
   header the worker uses, and reports any 5xx as a failed row.
 
+
+- **`php artisan pwax:push-endpoint`.** A push-subscription controller scaffold. Every
+  application reaches for the same shape — validate the subscription that arrived, store
+  it keyed on the endpoint, on `DELETE` remove it — and putting the boilerplate on disk
+  means a developer can read it next to the README example rather than rewriting it
+  from the prose. The command writes the controller only when missing, and `--force`
+  overwrites.
+
+
+- **`php artisan pwax:routes`.** Every Pwax-served route, with its method, name and
+  URL. `--all` includes the application's own routes. The package's routes are the ones
+  a developer reaches for when a 404 lands on `/__pwax__/manifest.json`, and a
+  `pwax:routes` style answer belongs next to `route:list`.
+
+
+- **`pwax:install --push` and `--service-worker` flags.** `--push` publishes the
+  annotated push-endpoint Blade view (`pwax-push` tag); `--service-worker` publishes
+  the offline document the worker serves. Tags already existed; the flags are the
+  way a developer reaches them without remembering the tag name.
+
+
+- **`pwax:doctor` covers the rest of the silent failures.** `service_worker.scope` is
+  `/` or `/<segment>` and contains no fragment; `manifest.id` does not contain a
+  fragment or query string; `manifest.display` is one of the installable values
+  browsers actually offer for; `service_worker.source_maps` is off in production;
+  the `push_subscriptions` table exists when VAPID is configured. Each is a check
+  that previously failed silently or in a place the developer was not looking.
+
 ### Changed
 
 - **A navigation that fails for a reason other than an HTTP status now says so in the

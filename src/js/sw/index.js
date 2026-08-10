@@ -201,9 +201,16 @@ async function install() {
     // Opened together. Nothing here depends on anything else here — the cache and pages
     // are named from the manifest and the previous precaches are found by listing — so
     // awaiting them in turn only added the storage layer's latency up.
-    const [cache, pages, previous] = await Promise.all([
+    const [cache, pages, documents, previous] = await Promise.all([
         caches.open(cacheName),
         caches.open(pagesName(manifest)),
+        // `pages.runtime => false` is the stronger statement of the two — it is documented
+        // as keeping rendered page markup off disk entirely, and `rememberDocument` already
+        // honours it — so it overrides `pages.documents` rather than being ignored by a
+        // deploy that then writes a document for every route.
+        manifest.pageDocuments === false || manifest.pageRuntime === false
+            ? null
+            : caches.open(documentsName(manifest)),
         previousPrecaches(cacheName),
     ]);
 
@@ -222,15 +229,26 @@ async function install() {
     // produces a hundred requests, and `php artisan serve` handles one at a time — so an
     // install would queue behind itself until connections started being refused, which
     // looks exactly like the app being broken.
-    const results = await settleWithLimit(entries, CONCURRENCY, (entry) =>
-        store(entry.kind === 'page' ? pages : cache, entry.url, {
+    const results = await settleWithLimit(entries, CONCURRENCY, async (entry) => {
+        const stored = await store(entry.kind === 'page' ? pages : cache, entry.url, {
             hash: (manifest.hashTable || {})[entry.url],
             inherited,
             crossOrigin: crossOrigin.has(entry.url),
             kind: entry.kind,
             credentials: entry.credentials,
-        })
-    );
+        });
+
+        // Both halves, not one. A page answers two ways — a payload to the runtime, a
+        // document to a browser navigation — and precaching only the payload meant a route
+        // the visitor had never opened had no HTML at all. Offline, and on a cold start,
+        // that is a shell and a spinner while the runtime fetches a payload it already
+        // has, instead of the document the server already rendered.
+        if (entry.kind === 'page' && documents) {
+            await storeDocument(documents, entry.url, entry.credentials);
+        }
+
+        return stored;
+    });
 
     const failures = urls.filter((_, i) => results[i].status === 'rejected');
 
@@ -471,6 +489,46 @@ async function store(cache, url, { hash, inherited, crossOrigin, kind, credentia
     await cache.put(page ? pageKey(url) : url, response);
 
     return true;
+}
+
+/**
+ * Fetch a page's *document* — the HTML a browser navigation gets — and keep it.
+ *
+ * The other half of {@link store} for a page entry. Same URL, no `X-Pwax-Component`
+ * header, so the application renders the shell with the component inlined rather than
+ * returning a JSON payload.
+ *
+ * Never throws. A document is an improvement on a page that already works offline through
+ * its payload, so nothing here is allowed to fail an install: a route behind `auth` that
+ * redirects to a login screen, a page that opted out with `->offline(false)`, a disk that
+ * is full — all of them mean "no document for this route", and the payload is still there.
+ */
+async function storeDocument(cache, url, credentials) {
+    try {
+        const response = await fetch(
+            new Request(url, {
+                credentials: credentials || 'same-origin',
+                cache: 'reload',
+                headers: { Accept: 'text/html' },
+            })
+        );
+
+        // `redirected` is the login-screen case: `fetch` follows it silently, so the
+        // response is a perfectly `ok` document for the wrong URL. Storing it would serve
+        // the login page under this route until the next deploy.
+        if (!response.ok || response.redirected || !isHtml(response) || !storablePage(response)) {
+            return false;
+        }
+
+        // Keyed by path, which is what `storedDocument()` looks up and what
+        // `rememberDocument()` writes on a real visit — so an install and a visit put the
+        // same thing in the same place.
+        await cache.put(new URL(url, self.location.origin).pathname, response);
+
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 /**

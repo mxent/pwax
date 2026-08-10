@@ -1012,6 +1012,25 @@ return [
             'runtime' => true,
 
             /*
+            | A page answers two ways: a JSON payload to the client runtime, and an HTML
+            | document to a browser navigation. Both are precached.
+            |
+            | Precaching only the payload — which is what happened before 4.2 — leaves a
+            | route the visitor has never opened with no document at all. It still works
+            | offline, because the runtime boots from the shell and finds the payload in
+            | the cache; it just paints a spinner first and takes an extra hop to do what
+            | the server had already rendered.
+            |
+            | The cost is one extra request per page at install. `false` halves that, at
+            | the price of that spinner on any cold start of an unvisited route. Note that
+            | documents are stored as visited either way — this is about the install.
+            |
+            | A page that must not have its HTML on disk at all says so per route, with
+            | `->offline(false)`, which is honoured here as everywhere else.
+            */
+            'documents' => true,
+
+            /*
             | A view rendered as a page is precached as a page, not as an importable
             | module. The page payload carries its script inline, so the module URL is
             | never fetched to render that page — precaching it costs a request and, for

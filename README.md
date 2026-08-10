@@ -606,10 +606,10 @@ component reference or a dotted path to a global:
 
 ### Client middleware
 
-`middleware_js` entries run before a page component mounts, and may redirect:
+`client_middleware` entries run before a page component mounts, and may redirect:
 
 ```php
-'middleware_js' => [
+'client_middleware' => [
     'confirmed' => "@pwaxImport('middleware.confirmed')",
 ],
 ```
@@ -1577,7 +1577,7 @@ code.
 
 ### Your responsibilities
 
-- **Never put user input in `plugins`, `directives` or `middleware_js`.** They describe
+- **Never put user input in `plugins`, `directives` or `client_middleware`.** They describe
   what the page loads.
 - **Never interpolate unescaped user input into a `<template>`.** Blade's `{{ }}`
   escapes; `{!! !!}` and Vue's `v-html` do not.
@@ -1610,7 +1610,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `assets.versions` | see config | Pinned Vue / Router / Pinia versions |
 | `assets.pinia` | `true` | Load Pinia at all |
 | `styles`, `scripts` | `[]` | Extra tags; string or attribute array |
-| `plugins`, `directives`, `middleware_js` | `[]` | Vue extensions |
+| `plugins`, `directives`, `client_middleware` | `[]` | Vue extensions |
 | `minify.enabled` | production only | Minify component sources |
 | `minify.store`, `minify.ttl` | `null` | Cache for minified output |
 | `cache.asset_ttl` | `3600` | `max-age` for component assets |

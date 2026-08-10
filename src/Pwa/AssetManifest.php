@@ -862,7 +862,7 @@ class AssetManifest
             (string) json_encode($this->config->get('pwax.scripts', [])),
             (string) json_encode($this->config->get('pwax.plugins', [])),
             (string) json_encode($this->config->get('pwax.directives', [])),
-            (string) json_encode($this->config->get('pwax.middleware_js', [])),
+            (string) json_encode($this->config->get('pwax.client_middleware', $this->config->get('pwax.middleware_js', []))),
             $this->webManifest->hash(),
             (string) $this->hashFile(dirname(__DIR__, 2) . '/dist/pwax.js'),
         ];

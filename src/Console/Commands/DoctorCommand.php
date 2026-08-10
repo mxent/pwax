@@ -65,6 +65,7 @@ class DoctorCommand extends Command
         $this->checkDisplayMode($config);
         $this->checkWorkerSourceMap($config);
         $this->checkPushSubscriptionsTable($config);
+        $this->checkMiddlewareJsRenamed($config);
 
         $this->newLine();
 
@@ -120,6 +121,25 @@ class DoctorCommand extends Command
 
         $this->checkDataGroupShape($config);
         $this->checkStrategyNames($config);
+    }
+
+    /**
+     * Detect the legacy `pwax.middleware_js` key so a renamed config does not
+     * silently keep working forever.
+     *
+     * The runtime still reads it as a fallback, but staying on it means the
+     * published config drifts further from the canonical one every release.
+     */
+    private function checkMiddlewareJsRenamed(Config $config): void
+    {
+        if (! is_array($config->get('pwax.middleware_js'))) {
+            return;
+        }
+
+        $this->warn_(
+            'pwax.middleware_js is deprecated. Rename it to pwax.client_middleware in '
+            . 'config/pwax.php; the old key still works for one major cycle.'
+        );
     }
 
     /**

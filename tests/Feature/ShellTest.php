@@ -232,6 +232,38 @@ class ShellTest extends TestCase
         $this->assertSame([], $this->shell()->runtimeConfig()['plugins']);
     }
 
+    public function test_client_middleware_config_is_resolved_from_the_new_key(): void
+    {
+        config()->set('pwax.client_middleware', ['admin' => "@pwaxImport('middleware.admin')"]);
+
+        $entry = $this->shell()->runtimeConfig()['middleware']['admin'];
+
+        $this->assertSame('module', $entry['type']);
+        $this->assertStringEndsWith('.js', $entry['url']);
+    }
+
+    public function test_client_middleware_falls_back_to_the_legacy_key(): void
+    {
+        config()->set('pwax.middleware_js', ['admin' => "@pwaxImport('middleware.admin')"]);
+
+        $entry = $this->shell()->runtimeConfig()['middleware']['admin'];
+
+        $this->assertSame('module', $entry['type']);
+        $this->assertStringEndsWith('.js', $entry['url']);
+    }
+
+    public function test_client_middleware_new_key_wins_when_both_are_set(): void
+    {
+        config()->set('pwax.client_middleware', ['admin' => "@pwaxImport('middleware.admin')"]);
+        config()->set('pwax.middleware_js', ['legacy' => "@pwaxImport('middleware.legacy')"]);
+
+        $runtime = $this->shell()->runtimeConfig();
+
+        // The new key contributes `admin`; the legacy key's `legacy` entry is dropped.
+        $this->assertArrayHasKey('admin', $runtime['middleware']);
+        $this->assertArrayNotHasKey('legacy', $runtime['middleware']);
+    }
+
     public function test_runtime_config_carries_what_the_client_needs(): void
     {
         $config = $this->shell()->runtimeConfig();

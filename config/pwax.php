@@ -232,7 +232,15 @@ return [
 
     'directives' => [],
 
-    'middleware_js' => [],
+    /*
+     * Client middleware, run before a page component mounts. Renamed from
+     * `middleware_js` in 4.1 — the old `_js` suffix only existed to
+     * disambiguate from the server-side `middleware` config above; the new
+     * `client_middleware` name reads as clearly Vue-side. The old key still
+     * works for one major cycle.
+     */
+
+    'client_middleware' => [],
 
     /*
     |--------------------------------------------------------------------------

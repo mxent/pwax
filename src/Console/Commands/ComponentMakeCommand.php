@@ -95,7 +95,7 @@ class ComponentMakeCommand extends Command
         return match ($kind) {
             'plugin' => 'plugins',
             'directive' => 'directives',
-            'middleware' => 'middleware_js',
+            'middleware' => 'client_middleware',
             default => throw new \InvalidArgumentException('Unknown scaffold kind: ' . $kind),
         };
     }
@@ -212,7 +212,7 @@ class ComponentMakeCommand extends Command
     }
 
     /**
-     * A client middleware — registered under `middleware_js` in the config.
+     * A client middleware — registered under `client_middleware` in the config.
      */
     private function middlewareStub(string $name): string
     {
@@ -221,7 +221,7 @@ class ComponentMakeCommand extends Command
         return <<<BLADE
             <script>
             /**
-             * A client middleware. Registered under `middleware_js` in
+             * A client middleware. Registered under `client_middleware` in
              * config/pwax.php, and referenced from a page's `meta.middleware`
              * array by the value of `name` below.
              *

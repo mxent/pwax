@@ -5,6 +5,7 @@ namespace Mxent\Pwax\Support;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\View\Factory as ViewFactory;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\HtmlString;
 use Mxent\Pwax\Data\Component;
 use Mxent\Pwax\Pwax;
@@ -65,9 +66,40 @@ class Shell
             'transition' => (string) $this->config->get('pwax.transition.name', 'pwax-page'),
             'plugins' => $this->extensions('pwax.plugins'),
             'directives' => $this->extensions('pwax.directives'),
-            'middleware' => $this->extensions('pwax.middleware_js'),
+            'middleware' => $this->middlewareExtensions(),
             'templates' => $this->templates(),
         ];
+    }
+
+    /**
+     * Client middleware extensions, read from `pwax.client_middleware` with a
+     * fallback to the renamed `pwax.middleware_js` for one major cycle.
+     *
+     * The two names cover the same thing; the rename is to drop the `_js` suffix
+     * (which only existed to disambiguate from the server-side `pwax.middleware`
+     * config that names Laravel middleware groups) and replace it with a name that
+     * reads as clearly Vue-side. A deprecation warning is logged once per request
+     * when the old name is in use, so the developer finds the entry point to the
+     * migration in the log rather than by reading the doctor alone.
+     *
+     * @return array<string, array<string, string>>
+     */
+    private function middlewareExtensions(): array
+    {
+        $new = $this->config->get('pwax.client_middleware');
+        $old = $this->config->get('pwax.middleware_js');
+
+        if (is_array($new) && $new !== []) {
+            return $this->extensions('pwax.client_middleware');
+        }
+
+        if (is_array($old) && $old !== []) {
+            Log::warning('pwax: config "pwax.middleware_js" is deprecated; rename it to "pwax.client_middleware" in config/pwax.php.');
+
+            return $this->extensions('pwax.middleware_js');
+        }
+
+        return [];
     }
 
     /**

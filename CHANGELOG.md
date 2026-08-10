@@ -357,6 +357,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Deprecated
 
+- **`pwax.middleware_js` config key renamed to `pwax.client_middleware`.** The old
+  `_js` suffix only existed to disambiguate from the server-side `pwax.middleware`
+  config above; the new `client_middleware` name reads as clearly Vue-side. The old
+  key still works for one major cycle — the runtime falls back to it, and
+  `pwax:doctor` flags a published config that still uses it.
+
 - **`$pwaxTitle` in the shell view.** The published `ComponentResponse` passes both
   `pwaxHead` and `pwaxTitle` to the shell; the second is always equal to
   `head->title` and exists only so a shell published before `pwaxHead` was added

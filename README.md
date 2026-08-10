@@ -171,6 +171,26 @@ php artisan pwax:install
 `pwax:install` publishes `config/pwax.php` and copies Vue, Vue Router and Pinia into
 `public/vendor/pwax`. Add `--views` to publish the Blade views as well.
 
+#### Flags
+
+| Flag | Purpose |
+| --- | --- |
+| `--force` | Overwrite anything that already exists in the publish targets |
+| `--views` | Also publish the Blade views (the SPA shell, the loader and error templates) |
+| `--no-assets` | Skip the framework copy; the application serves Vue itself |
+
+#### Publish tags
+
+`pwax:install` is a thin wrapper around `vendor:publish`, and the same tags are
+available at any time:
+
+| Tag | Publishes |
+| --- | --- |
+| `pwax-config` | `config/pwax.php` |
+| `pwax-assets` | Vue, Vue Router, Pinia into `public/vendor/pwax` |
+| `pwax-views` | The shell, loader, error and offline Blade views |
+| `pwax-service-worker` | The offline document the worker serves |
+
 Then point a route at a component and create it:
 
 ```bash
@@ -324,7 +344,10 @@ Link between pages with `<RouterLink>`, using `pwaxRoute()` to resolve named rou
 
 `pwaxRoute()` returns a path (`/posts/1`); pass `true` as the third argument for an
 absolute URL. Unlike 1.x's `router()`, an unknown route name **throws** when
-`APP_DEBUG` is on rather than silently sending the link to your home page.
+`APP_DEBUG` is on rather than silently sending the link to your home page. With
+debug off, `pwaxRoute()` logs and falls back to the route named in `pwax.home`,
+which itself falls back to `/` if it is missing — so a typo never breaks a build,
+it just sends everyone home until you notice in the log.
 
 ### History mode
 
@@ -614,6 +637,14 @@ export default {
 > Client middleware is for user experience, not for access control. It runs in the
 > browser and can be bypassed. Enforce authorisation with Laravel middleware and
 > policies.
+
+> **`pwax.import`, `@pwaxImport`, and `pwax.importModule` are the same thing.** The
+> Blade directive `@pwaxImport('foo.bar')` is the only way to write a component
+> reference in a config value — you cannot reach for an `import('foo')` expression
+> instead. At runtime it resolves to the client-side `pwax.component(url)` (sync)
+> or `pwax.load(url)` (async with options), and the service worker calls the same
+> function internally as `pwax.importModule`. One name on the page, three spellings
+> for three places you might meet it.
 
 ## Progressive web app
 
@@ -1593,6 +1624,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `service_worker.pages.urls` | `[]` | Extra routes to precache, beyond the discovered ones |
 | `service_worker.pages.discover` | `true` | Find every route that renders a page, scoped by `components` |
 | `service_worker.pages.runtime` | `true` | Cache pages as they are visited — payload, and HTML when anonymous |
+| `service_worker.pages.documents` | `true` | Precache each page's HTML alongside its JSON payload at install |
 | `service_worker.pages.strategy`, `.timeout` | `network-first`, `2000` | How a page payload is fetched |
 | `service_worker.pages.credentials` | `'omit'` | Precache the guest rendering, not one visitor's |
 | `service_worker.pages.as_components` | `false` | Also precache page views as importable modules |
@@ -1607,8 +1639,8 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | Command | Purpose |
 | --- | --- |
 | `pwax:install` | Publish config and frontend assets (`--views`, `--force`, `--no-assets`) |
-| `pwax:component <name>` | Scaffold a component view (`--plain`, `--force`) |
-| `pwax:precache` | List everything available offline (`--verify`, `--json`) |
+| `pwax:component <name>` | Scaffold a component view (`--plain`, `--force`, `--plugin`, `--directive`, `--middleware`) |
+| `pwax:precache` | List everything available offline (`--verify`, `--json`) — `--verify` renders every component and probes every page |
 | `pwax:compile` | Precompile templates to render functions — optional, needs Node (`--clear`, `--json`) |
 | `pwax:vapid` | Generate a VAPID key pair for Web Push (`--json`) |
 | `pwax:doctor` | Check for common misconfigurations |

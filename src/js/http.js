@@ -3,6 +3,10 @@
  *
  * Every request carries the header that tells the server to answer with a component
  * payload rather than the SPA shell, plus the CSRF token when one is available.
+ *
+ * The two header constants below are the client-side mirror of `Pwax::HEADER` and
+ * `Pwax::LOCATION_HEADER` in `src/Pwax.php`. They must agree; the
+ * `HeaderConstantsTest` feature test asserts that.
  */
 
 export const COMPONENT_HEADER = 'X-Pwax-Component';

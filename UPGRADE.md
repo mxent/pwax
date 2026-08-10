@@ -332,7 +332,7 @@ Named exports keep the same spelling: `@pwaxImport('Backdrop from components.mod
 
 `pwax.components.directive` renames it if you want a different spelling — but it replaces
 the default rather than joining it, so there is exactly one name in an application.
-`plugins`, `directives` and `client_middleware` config values follow whatever that name is.
+`vue.plugins`, `vue.directives` and `vue.middleware` config values follow whatever that name is.
 
 `Pwax::importExpression()` is now `Pwax::import()`. You are unlikely to have called it
 directly — it is what the directive compiles to.

@@ -183,10 +183,11 @@ it.
 `HandlePwaxRequests` is appended to the groups named in
 `pwax.middleware` (default: `['web']`). The package never aliases itself
 under a route's middleware list — the developer chooses the group. The
-**server-side** `pwax.middleware` config (Laravel middleware groups) and
-the **client-side** `pwax.client_middleware` config (Vue middleware modules)
-are distinct keys by design; a previous name collision was the reason for
-the rename.
+server-side `pwax.middleware` config (Laravel middleware groups) and the
+client-side `pwax.vue.middleware` config (Vue route middleware) live in
+distinct namespaces by design; the two were once confused for each other,
+and grouping all client-side Vue extensions under `pwax.vue.*` was the
+fix.
 
 ### Components are Blade views, but their compile output is JavaScript
 
@@ -208,9 +209,11 @@ fine; removing from them is a major version.
 - All commands under `php artisan pwax:*`.
 - The `Pwax` facade and the underlying `Mxent\Pwax\Pwax` class.
 - `pwaxRender()`, `pwax_route()`, `pwax_component()` global helpers.
-- The configuration keys in `config/pwax.php`. Renames go through one
-  major cycle of fallback + doctor warning (see `Shell::middlewareExtensions()`
-  for the canonical example).
+- The configuration keys in `config/pwax.php`. A rename is a breaking change
+  unless the old key continues to work; if it doesn't, document the
+  migration in `CHANGELOG.md` under `### Changed` with a copy-pasteable
+  diff (see the `plugins` / `directives` / `middleware_js` →
+  `vue.*` move for the canonical recipe).
 - The HTTP routes registered by `routes/web.php` (the `__pwax__/*` prefix).
 - The HTTP headers `X-Pwax-Component` and `X-Pwax-Location`.
 
@@ -235,9 +238,9 @@ the public API and document it, not to keep the internal shape stable.
   `{{ }}` escapes; `{!! !!}` and Vue's `v-html` do not. The runtime config
   embeds in a `<script type="application/json">` block, so it is parsed as
   data, not executed.
-- **Never put user input in `pwax.plugins`, `pwax.directives`, or
-  `pwax.client_middleware`.** They are emitted into the page as
-  JavaScript. They are configuration, never a place for a request parameter.
+- **Never put user input in `pwax.vue.*`.** They are emitted into the
+  page as JavaScript. They are configuration, never a place for a request
+  parameter.
 - **The component endpoints are protected by Laravel middleware.** The
   default is `['web']`. A developer who removes that gets a doctor warning.
   CSRF tokens are sent with every runtime request automatically.
@@ -247,21 +250,27 @@ the public API and document it, not to keep the internal shape stable.
   must be loaded with `crossorigin`; the doctor catches this.
 - **Authorisation belongs on the server.** Client middleware is a UX
   affordance, not access control. Document this in any user-facing note
-  about `pwax.client_middleware`.
+  about `pwax.vue.middleware`.
 
 ---
 
 ## 8. Configuration key renames
 
-A renamed config key always follows this pattern (see
-`pwax.middleware_js` → `pwax.client_middleware` in `src/Support/Shell.php`):
+A renamed config key is a breaking change for published
+`config/pwax.php` files — the package cannot rewrite them. The recipe:
 
-1. The runtime reads the **new** key, falls back to the **old** key.
-2. A one-line `Log::warning` is emitted per request when the fallback fires.
-3. `pwax:doctor` has a `check*Renamed()` method that flags the legacy key.
-4. The CHANGELOG entry lives under `### Deprecated` and names the new key
-   in the headline.
-5. The old key works for one major cycle, then is removed.
+1. Pick a new name that does not collide with anything still in use. If the
+   old name was a forced workaround (e.g. `middleware_js` because
+   `middleware` was already taken by the server side), the right fix is
+   usually to give the whole group its own namespace (`vue.*`) so neither
+   side needs a suffix again.
+2. Update the runtime, the manifest hash, the scaffolder, and the doctor in
+   one commit. There is no "old key still works" half-measure: the user said
+   *change it*, so change it.
+3. CHANGELOG entry under `### Changed` (not `### Deprecated`) with a
+   copy-pasteable diff showing the move, and the upgrade recipe
+   (`grep -rn 'old_key' config/`).
+4. README mentions the new name in the configuration reference table.
 
 Do not skip the doctor check — a published `config/pwax.php` is the
 application's file, not the package's, so an upgrade cannot rewrite it.

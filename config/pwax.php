@@ -215,32 +215,31 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Vue extensions
+    | Vue
     |--------------------------------------------------------------------------
     |
-    | Keyed by name. Each value is either a raw JavaScript expression or an
-    | "@pwaxImport('view.name')" string referencing a component that default-exports one.
+    | All client-side Vue configuration. Each entry is keyed by name; the value
+    | is either a raw JavaScript expression or an "@pwaxImport('view.name')"
+    | string referencing a component that default-exports one.
     |
-    |     'plugins' => ['toast' => "@pwaxImport('plugins.toast')"],
+    |     'plugins'    => ['toast' => "@pwaxImport('plugins.toast')"],
+    |     'directives' => ['focus' => "@pwaxImport('directives.focus')"],
+    |     'middleware' => ['admin' => "@pwaxImport('middleware.admin-guard')"],
+    |
+    | The whole group lives under `vue` so the server-side `middleware` config
+    | above (Laravel middleware groups) and the client-side `middleware`
+    | (Vue route middleware) keep their natural names and never collide.
     |
     | SECURITY: these values are emitted into the page as JavaScript. They are
     | configuration, never a place for user input.
     |
     */
 
-    'plugins' => [],
-
-    'directives' => [],
-
-    /*
-     * Client middleware, run before a page component mounts. Renamed from
-     * `middleware_js` in 4.1 — the old `_js` suffix only existed to
-     * disambiguate from the server-side `middleware` config above; the new
-     * `client_middleware` name reads as clearly Vue-side. The old key still
-     * works for one major cycle.
-     */
-
-    'client_middleware' => [],
+    'vue' => [
+        'plugins' => [],
+        'directives' => [],
+        'middleware' => [],
+    ],
 
     /*
     |--------------------------------------------------------------------------

@@ -135,22 +135,27 @@ is a deliberate choice with a real reason — comment why.
 
 ## 5. Config keys that cross the runtime boundary
 
-Three config keys are emitted into the page as JavaScript:
+The three Vue extensions are emitted into the page as JavaScript; they all
+live under `pwax.vue.*`:
 
-| Key | Shape | Purpose |
-| --- | --- | --- |
-| `pwax.plugins` | `['name' => '@pwaxImport(...)' \| 'dotted.path']` | Vue plugins to install before mounting |
-| `pwax.directives` | same shape | Vue directives to register |
-| `pwax.client_middleware` | same shape | Client middleware to run before mount |
+```php
+'vue' => [
+    'plugins'    => ['toast' => "@pwaxImport('plugins.toast')"],
+    'directives' => ['focus' => "@pwaxImport('directives.focus')"],
+    'middleware' => ['admin' => "@pwaxImport('middleware.admin')"],
+],
+```
 
-Values are configuration, **never** a place for request input. They are
-emitted verbatim into a `<script type="application/json">` block.
+Each value is either a `@pwaxImport('view.name')` reference or a dotted
+path to a global on `window`. Values are configuration, **never** a place
+for request input. They are emitted verbatim into a `<script
+type="application/json">` block.
 
 The `pwax.middleware` config is a **different** key — it lists Laravel
 middleware groups to inject the package's HTTP middleware into. The two
-have never been the same; the `client_middleware` rename in 4.1 made the
-distinction explicit. A previous `pwax.middleware_js` is still read as a
-fallback for one major cycle, with a doctor warning.
+have never been the same; putting the client-side one under `vue.*` lets
+it keep its natural name (`vue.middleware`) and groups every piece of
+client-side Vue configuration in one place.
 
 ---
 
@@ -224,8 +229,6 @@ The doctor names the problem and the fix. Read the warning in full:
   releases are recognised and warned about, not failed.
 - **"Component routes have middleware"** —
   `pwax.middleware` is empty. Set it to `['web']`.
-- **"pwax.middleware_js is deprecated"** — rename it to
-  `pwax.client_middleware` (see section 5).
 - **"no application key"** — `APP_KEY` is not set. `php artisan key:generate`.
 - **"manifest has no icons"** — a PWA without icons is not installable.
 

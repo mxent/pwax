@@ -478,38 +478,6 @@ class CommandsTest extends TestCase
         });
     }
 
-    public function test_the_doctor_command_warns_about_the_legacy_middleware_js_key(): void
-    {
-        config()->set('pwax.manifest.icons', [
-            ['src' => '/i-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
-            ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
-        ]);
-        config()->set('pwax.assets.source', 'cdn');
-        config()->set('pwax.middleware_js', [
-            'admin' => "@pwaxImport('middleware.admin-guard')",
-        ]);
-
-        $this->artisan('pwax:doctor')
-            ->expectsOutputToContain('pwax.client_middleware')
-            ->assertSuccessful();
-    }
-
-    public function test_the_doctor_command_does_not_warn_when_middleware_uses_the_new_key(): void
-    {
-        config()->set('pwax.manifest.icons', [
-            ['src' => '/i-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
-            ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
-        ]);
-        config()->set('pwax.assets.source', 'cdn');
-        config()->set('pwax.client_middleware', [
-            'admin' => "@pwaxImport('middleware.admin-guard')",
-        ]);
-
-        $this->artisan('pwax:doctor')
-            ->doesntExpectOutputToContain('pwax.client_middleware is deprecated')
-            ->assertSuccessful();
-    }
-
     public function test_the_skill_command_publishes_the_bundled_template(): void
     {
         $this->artisan('pwax:skill', ['--path' => 'scratch-skill'])

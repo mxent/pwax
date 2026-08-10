@@ -585,20 +585,26 @@ with `pwax.components.scoped_styles => false`.
 
 ## Plugins, directives and middleware
 
-Register Vue plugins and directives in `config/pwax.php`. Each value is either a
-component reference or a dotted path to a global:
+Register Vue plugins, directives and route middleware in `config/pwax.php`. Each value
+is either a component reference or a dotted path to a global:
 
 ```php
-'plugins' => [
-    // A Pwax component whose default export is a Vue plugin.
-    'toast' => "@pwaxImport('plugins.toast')",
+'vue' => [
+    'plugins' => [
+        // A Pwax component whose default export is a Vue plugin.
+        'toast' => "@pwaxImport('plugins.toast')",
 
-    // A UMD library already loaded by a <script> tag.
-    'i18n'  => 'VueI18n.createI18n',
-],
+        // A UMD library already loaded by a <script> tag.
+        'i18n'  => 'VueI18n.createI18n',
+    ],
 
-'directives' => [
-    'focus' => "@pwaxImport('directives.focus')",
+    'directives' => [
+        'focus' => "@pwaxImport('directives.focus')",
+    ],
+
+    'middleware' => [
+        'confirmed' => "@pwaxImport('middleware.confirmed')",
+    ],
 ],
 ```
 
@@ -607,15 +613,14 @@ component reference or a dotted path to a global:
 > page inside `{!! !!}`, so a stray quote broke the whole application and any path by
 > which config could be influenced was remote code execution.
 
-### Client middleware
+### Why the `vue` group
 
-`client_middleware` entries run before a page component mounts, and may redirect:
-
-```php
-'client_middleware' => [
-    'confirmed' => "@pwaxImport('middleware.confirmed')",
-],
-```
+The package has two configs that share the word "middleware": `pwax.middleware` (the
+Laravel middleware groups a page route runs through, set by `HandlePwaxRequests`)
+and the client's route middleware. The two were always going to be confused.
+Putting the three Vue extensions under `pwax.vue.*` lets the client-side one
+keep its natural name — `vue.middleware` — and groups all client-side Vue
+configuration in one place.
 
 ```blade
 {{-- resources/views/middleware/confirmed.blade.php --}}
@@ -1580,8 +1585,7 @@ code.
 
 ### Your responsibilities
 
-- **Never put user input in `plugins`, `directives` or `client_middleware`.** They describe
-  what the page loads.
+- **Never put user input in `pwax.vue.*`.** They describe what the page loads.
 - **Never interpolate unescaped user input into a `<template>`.** Blade's `{{ }}`
   escapes; `{!! !!}` and Vue's `v-html` do not.
 - **Authorise on the server.** Client middleware is a UX affordance, not access control.
@@ -1613,7 +1617,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `assets.versions` | see config | Pinned Vue / Router / Pinia versions |
 | `assets.pinia` | `true` | Load Pinia at all |
 | `styles`, `scripts` | `[]` | Extra tags; string or attribute array |
-| `plugins`, `directives`, `client_middleware` | `[]` | Vue extensions |
+| `vue.plugins`, `vue.directives`, `vue.middleware` | `[]` | Vue extensions |
 | `minify.enabled` | production only | Minify component sources |
 | `minify.store`, `minify.ttl` | `null` | Cache for minified output |
 | `cache.asset_ttl` | `3600` | `max-age` for component assets |

@@ -122,6 +122,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`plugins`, `directives` and the client-side middleware now live under `pwax.vue.*`.**
+  The two configs that shared the word "middleware" — `pwax.middleware` (the Laravel
+  groups a page route runs through, server-side) and `pwax.middleware_js` (the Vue
+  route middleware, client-side) — were always going to be confused. Putting the
+  three Vue extensions under one group lets the client-side one keep its natural
+  name (`vue.middleware`), groups every piece of client-side Vue configuration in
+  one place, and means no rename ever has to disambiguate from the server side
+  again.
+
+  ```diff
+  - 'plugins' => [...],
+  - 'directives' => [...],
+  - 'middleware_js' => [...],
+  + 'vue' => [
+  +     'plugins' => [...],
+  +     'directives' => [...],
+  +     'middleware' => [...],
+  + ],
+  ```
+
+  The rename is straightforward: a published `config/pwax.php` is the application's
+  file, not the package's, so an upgrade cannot rewrite it. The migration is one
+  `grep -rn 'middleware_js' config/` and a copy.
+
+
 - **A navigation that fails for a reason other than an HTTP status now says so in the
   console.** The visitor is still shown "this page needs an internet connection", which is
   what they can act on and is true nine times out of ten. The tenth is a bug or a
@@ -378,12 +403,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   been `$addressable` since 2.0.
 
 ### Deprecated
-
-- **`pwax.middleware_js` config key renamed to `pwax.client_middleware`.** The old
-  `_js` suffix only existed to disambiguate from the server-side `pwax.middleware`
-  config above; the new `client_middleware` name reads as clearly Vue-side. The old
-  key still works for one major cycle — the runtime falls back to it, and
-  `pwax:doctor` flags a published config that still uses it.
 
 - **`$pwaxTitle` in the shell view.** The published `ComponentResponse` passes both
   `pwaxHead` and `pwaxTitle` to the shell; the second is always equal to

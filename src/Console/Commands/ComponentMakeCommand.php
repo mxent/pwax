@@ -88,14 +88,15 @@ class ComponentMakeCommand extends Command
     }
 
     /**
-     * The config key under which a Vue plugin / directive / middleware is registered.
+     * The dot-suffix under which a Vue plugin / directive / middleware is registered
+     * inside the `pwax.vue.*` config group.
      */
     private function configKeyFor(string $kind): string
     {
         return match ($kind) {
             'plugin' => 'plugins',
             'directive' => 'directives',
-            'middleware' => 'client_middleware',
+            'middleware' => 'middleware',
             default => throw new \InvalidArgumentException('Unknown scaffold kind: ' . $kind),
         };
     }
@@ -212,7 +213,7 @@ class ComponentMakeCommand extends Command
     }
 
     /**
-     * A client middleware — registered under `client_middleware` in the config.
+     * A client middleware — registered under `vue.middleware` in the config.
      */
     private function middlewareStub(string $name): string
     {
@@ -221,7 +222,7 @@ class ComponentMakeCommand extends Command
         return <<<BLADE
             <script>
             /**
-             * A client middleware. Registered under `client_middleware` in
+             * A client middleware. Registered under `vue.middleware` in
              * config/pwax.php, and referenced from a page's `meta.middleware`
              * array by the value of `name` below.
              *

@@ -66,9 +66,50 @@ class AccessibilityTest extends TestCase
         $this->assertStringContainsString('clip-path: inset(50%)', $html);
     }
 
-    public function test_the_document_declares_its_language(): void
+    public function test_the_document_declares_its_language_and_direction(): void
     {
-        $this->assertStringContainsString('<html lang="en">', (string) $this->get('/page')->getContent());
+        // Both, not just the language. Declaring the language of a right-to-left locale
+        // and then laying it out left-to-right is the half-measure this guards against.
+        $this->assertStringContainsString('<html lang="en" dir="auto">', (string) $this->get('/page')->getContent());
+    }
+
+    public function test_the_direction_comes_from_the_manifest(): void
+    {
+        config()->set('pwax.manifest.dir', 'rtl');
+
+        $this->assertStringContainsString('dir="rtl"', (string) $this->get('/page')->getContent());
+    }
+
+    public function test_an_unrecognised_direction_falls_back_to_auto(): void
+    {
+        config()->set('pwax.manifest.dir', 'sideways');
+
+        $this->assertStringContainsString('dir="auto"', (string) $this->get('/page')->getContent());
+    }
+
+    public function test_a_keyboard_user_can_skip_to_the_content(): void
+    {
+        $html = (string) $this->get('/page')->getContent();
+
+        // An SPA is one long document to a keyboard user: without this, every navigation
+        // means tabbing back through whatever the last page left on screen.
+        $this->assertStringContainsString('<a class="pwax-skip-link" href="#pwax">', $html);
+        $this->assertStringContainsString('.pwax-skip-link', $html);
+
+        // And the target has to be focusable, or the link moves nothing.
+        $this->assertStringContainsString('id="pwax" class="pwax-preloader" tabindex="-1"', $html);
+    }
+
+    public function test_a_visitor_without_javascript_is_told_so(): void
+    {
+        $html = (string) $this->get('/page')->getContent();
+
+        $this->assertStringContainsString('<noscript>', $html);
+        $this->assertStringContainsString('This app needs JavaScript', $html);
+
+        // The spinner has to go with it, or the message sits underneath a preloader
+        // waiting for a runtime that will never boot.
+        $this->assertStringContainsString('.pwax-preloader{display:none}', $html);
     }
 
     public function test_a_configured_colour_that_is_not_a_colour_is_refused(): void

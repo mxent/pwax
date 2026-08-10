@@ -26,14 +26,27 @@
     $pwaxShell ??= app(\Mxent\Pwax\Support\Shell::class);
 @endphp
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
+{{--
+    `dir` alongside `lang`, because one without the other is not enough for a right-to-left
+    locale: the language is declared and the layout still runs the wrong way. `auto` is the
+    default, which lets the browser decide from the first strong character — right far more
+    often than a hardcoded `ltr`, and overridable with `pwax.manifest.dir`.
+--}}
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" dir="{{ $pwaxShell->direction() }}">
 
 <head>
-    <x-pwax::includes.head :shell="$pwaxShell" :component="$pwaxComponent ?? null" :title="$pwaxTitle ?? null" />
+    <x-pwax::includes.head :shell="$pwaxShell" :component="$pwaxComponent ?? null" :head="$pwaxHead ?? null" :title="$pwaxTitle ?? null" />
     @stack('pwax-head')
 </head>
 
 <body>
+    {{--
+        First in the tab order and invisible until focused. A single-page application is
+        one long document to a keyboard user, and without this every navigation means
+        tabbing back through the whole of whatever the last page left on screen.
+    --}}
+    <a class="pwax-skip-link" href="#pwax">Skip to content</a>
+
     {{--
         `pwax-preloader` covers the mount point with the spinner until the runtime mounts
         and removes the class. Content rendered inside is replaced on mount.
@@ -52,10 +65,30 @@
         anywhere in the app was announced, and the whole application was labelled
         "Loading". This element is a container; nothing about it is a status.
     --}}
-    <div id="pwax" class="pwax-preloader">
+    <div id="pwax" class="pwax-preloader" tabindex="-1">
         <span class="pwax-sr-only" role="status">Loading</span>
         @yield('content')
     </div>
+
+    {{--
+        Said once, plainly, to whoever has JavaScript off or blocked.
+
+        This application is rendered in the browser: the page's markup is compiled from a
+        payload in this document by Vue, so there is nothing to progressively enhance and
+        nothing useful to put here instead. Saying so is better than the alternative, which
+        is a spinner that never stops.
+    --}}
+    <noscript>
+        {{-- The preloader is a spinner waiting for a runtime that will never boot. --}}
+        <style>.pwax-preloader{display:none}</style>
+        <div class="pwax-screen" role="alert">
+            <div class="pwax-screen__panel">
+                <p class="pwax-screen__code">JavaScript</p>
+                <h1 class="pwax-screen__title">This app needs JavaScript</h1>
+                <p class="pwax-screen__message">Enable it for this site, then reload the page.</p>
+            </div>
+        </div>
+    </noscript>
 
     {{--
         Where the runtime announces a client-side navigation.

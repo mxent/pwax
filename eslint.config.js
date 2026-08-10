@@ -23,9 +23,28 @@ export default [
         },
     },
     {
-        files: ['build.js'],
-        languageOptions: { globals: { ...globals.node } },
-        rules: { 'no-console': 'off' },
+        // The worker reports two things at `info`: how many URLs an install deliberately
+        // did not store, and that a deploy landed mid-install. Neither is a problem, and
+        // logging them as warnings would make a correct install look like a broken one.
+        files: ['src/js/sw/**/*.js'],
+        rules: { 'no-console': ['warn', { allow: ['info', 'warn', 'error'] }] },
+    },
+    {
+        // Node scripts, not browser code: the build, and the optional template compiler
+        // `pwax:compile` shells out to. Both write to stdout on purpose.
+        files: ['build.js', 'bin/**/*.mjs'],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: 'module',
+            globals: { ...globals.node },
+        },
+        rules: {
+            'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+            'no-console': 'off',
+            'no-var': 'error',
+            'prefer-const': 'error',
+            eqeqeq: ['error', 'smart'],
+        },
     },
     {
         // The suites run under Vitest in jsdom, and the service-worker harness reaches for

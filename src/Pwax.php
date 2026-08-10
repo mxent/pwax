@@ -12,6 +12,7 @@ use Mxent\Pwax\Data\Component;
 use Mxent\Pwax\Exceptions\ComponentNotAllowed;
 use Mxent\Pwax\Http\Responses\ComponentResponse;
 use Mxent\Pwax\Support\ComponentId;
+use Mxent\Pwax\Support\RenderFunctionStore;
 use Throwable;
 
 /**
@@ -45,6 +46,9 @@ class Pwax
         private readonly ComponentId $ids,
         private readonly Config $config,
         private readonly UrlGenerator $url,
+        // Optional, and absent in the default configuration. Precompiling is opt-in and
+        // an application that has not opted in never writes a store to read.
+        private readonly ?RenderFunctionStore $renderFunctions = null,
     ) {}
 
     /**
@@ -104,6 +108,12 @@ class Pwax
      * `@json($user)` in its script would be an undefined variable. Page payloads
      * therefore carry `script` inline, and `$addressable` is false for them.
      *
+     * A precompiled render function rides along in that inline script rather than in a
+     * field of its own. The client evaluates the script as a module, so a render function
+     * inside it is executed by the module loader; handed over as a separate string it
+     * would need `new Function` to become callable, which is the one thing precompiling
+     * exists to avoid.
+     *
      * @return array<string, mixed>
      */
     public function payload(Component $component, bool $addressable = true): array
@@ -113,6 +123,14 @@ class Pwax
         $payload['module'] = $addressable && $component->id !== null
             ? $this->route('pwax.js', $component->id)
             : null;
+
+        if (! $addressable) {
+            $bindings = $this->renderFunctions?->bindings($component->template);
+
+            if ($bindings !== null) {
+                $payload['script'] = trim($bindings . "\n" . (string) $payload['script']);
+            }
+        }
 
         return $payload;
     }

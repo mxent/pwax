@@ -66,6 +66,12 @@ Route::group(array_filter([
     // opens devtools gets a 404 from the package and debugs minified code.
     Route::get($prefix . '/pwax.js.map', [PwaxController::class, 'sourceMap'])->name('pwax.runtime-map');
 
+    // Same for the worker, which is a built bundle since 4.1 and ends with its own
+    // `sourceMappingURL`. Without this every developer who opens devtools on the worker
+    // gets a 404 from the package and steps through minified code.
+    Route::get($prefix . '/pwax-sw.js.map', [PwaxController::class, 'workerSourceMap'])
+        ->name('pwax.worker-map');
+
     Route::get(
         ltrim((string) config('pwax.manifest_path', '/manifest.json'), '/'),
         [PwaxController::class, 'manifest']

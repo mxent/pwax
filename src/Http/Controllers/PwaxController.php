@@ -14,8 +14,10 @@ use Mxent\Pwax\Data\Component;
 use Mxent\Pwax\Exceptions\ComponentNotAllowed;
 use Mxent\Pwax\Exceptions\InvalidComponentId;
 use Mxent\Pwax\Pwa\AssetManifest;
+use Mxent\Pwax\Pwa\ServiceWorker;
 use Mxent\Pwax\Pwa\WebManifest;
 use Mxent\Pwax\Pwax;
+use Mxent\Pwax\Support\RenderFunctionStore;
 use Mxent\Pwax\Support\Shell;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
@@ -34,6 +36,8 @@ class PwaxController extends Controller
         private readonly Pwax $pwax,
         private readonly Config $config,
         private readonly ViewFactory $views,
+        private readonly ServiceWorker $worker,
+        private readonly RenderFunctionStore $renderFunctions,
     ) {}
 
     /**
@@ -104,8 +108,21 @@ class PwaxController extends Controller
      */
     public function sourceMap(Request $request): SymfonyResponse
     {
-        $path = dirname(__DIR__, 3) . '/dist/pwax.js.map';
+        return $this->map($request, dirname(__DIR__, 3) . '/dist/pwax.js.map');
+    }
 
+    /**
+     * Serve one of the bundles' source maps.
+     *
+     * Revalidated, not immutable. A bundle is fingerprinted in its URL and its map is not
+     * — the `sourceMappingURL` comment inside it is a bare filename — so caching this hard
+     * would pair a new bundle with last release's mappings and send whoever is debugging
+     * to the wrong lines. A 304 costs nothing; a map is only ever fetched with devtools
+     * open. The sources it contains are the package's own, published and MIT licensed, so
+     * there is nothing here to withhold.
+     */
+    private function map(Request $request, string $path): SymfonyResponse
+    {
         if (! is_file($path)) {
             return $this->plain('{}', 404, 'application/json; charset=utf-8');
         }
@@ -113,16 +130,18 @@ class PwaxController extends Controller
         $body = (string) file_get_contents($path);
 
         $response = new Response($body, 200, ['Content-Type' => 'application/json; charset=utf-8']);
-
-        // Revalidated, not immutable. The bundle is fingerprinted in its URL and this is
-        // not — the `sourceMappingURL` comment inside it is a bare filename — so caching
-        // this hard would pair a new bundle with last release's mappings and send whoever
-        // is debugging to the wrong lines. A 304 costs nothing; the map is only ever
-        // fetched with devtools open.
         $response->headers->set('Cache-Control', 'no-cache, must-revalidate');
         $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
 
         return $this->finish($request, $response);
+    }
+
+    /**
+     * Serve the service worker's source map.
+     */
+    public function workerSourceMap(Request $request): SymfonyResponse
+    {
+        return $this->map($request, $this->worker->path() . '.map');
     }
 
     /**
@@ -236,8 +255,7 @@ class PwaxController extends Controller
         }
 
         try {
-            $view = (string) ($this->config->get('pwax.service_worker.blade') ?: 'pwax::js.service-worker');
-            $body = $this->views->make($view, ['manifest' => $manifest->get()])->render();
+            $body = $this->worker->build($manifest->get());
         } catch (Throwable $e) {
             Log::error('pwax: failed to render the service worker.', ['exception' => $e]);
 
@@ -270,7 +288,12 @@ class PwaxController extends Controller
             JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG
         );
 
-        return implode("\n", [
+        // The precompiled render function, when `pwax:compile` has produced one. Emitted
+        // as source rather than a string: this is a real ES module, so the module loader
+        // evaluates it and no `Function` constructor is involved — which is what lets an
+        // application drop `script-src 'unsafe-eval'` and ship runtime-only Vue.
+        return implode("\n", array_filter([
+            $this->renderFunctions->bindings($component->template),
             'const __pwaxTemplate = ' . $encode($component->template) . ';',
             'const __pwaxStyle = ' . $encode($component->style) . ';',
             'const __pwaxScope = ' . $encode($component->scopeId) . ';',
@@ -278,7 +301,7 @@ class PwaxController extends Controller
             'const __pwaxScripts = ' . $encode($component->externalScripts) . ';',
             $component->script,
             'export { __pwaxTemplate, __pwaxStyle, __pwaxScope, __pwaxStyles, __pwaxScripts };',
-        ]);
+        ]));
     }
 
     /**

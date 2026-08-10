@@ -6,9 +6,11 @@ use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as Config;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\View\Factory as ViewFactory;
 use Illuminate\Support\Facades\Log;
+use Mxent\Pwax\Events\ManifestBuilt;
 use Mxent\Pwax\Pwax;
 use Mxent\Pwax\Support\Shell;
 use Throwable;
@@ -83,6 +85,7 @@ class AssetManifest
         private readonly ViewFactory $views,
         private readonly PublicAssets $assets,
         private readonly ?CacheRepository $cache = null,
+        private readonly ?Dispatcher $events = null,
     ) {}
 
     /**
@@ -291,6 +294,10 @@ class AssetManifest
             $manifest,
             JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
         )), 0, 16);
+
+        // On a real build, so roughly once per deploy rather than once per request. The
+        // memo in `get()` does not reach here.
+        $this->events?->dispatch(new ManifestBuilt($manifest));
 
         return $manifest;
     }
@@ -587,10 +594,12 @@ class AssetManifest
      */
     private function pageDefaults(): array
     {
-        $strategy = (string) $this->config->get('pwax.service_worker.pages.strategy', 'freshness');
-
         return [
-            'strategy' => $strategy === 'performance' ? 'performance' : 'freshness',
+            'strategy' => Strategy::resolve(
+                $this->config->get('pwax.service_worker.pages.strategy', Strategy::NETWORK_FIRST),
+                [Strategy::NETWORK_FIRST, Strategy::CACHE_FIRST],
+                Strategy::NETWORK_FIRST,
+            ),
             'timeout' => (int) $this->config->get('pwax.service_worker.pages.timeout', 2000),
             // Cookies are passed through. Caches are shared across visitors, so what is
             // stored is what the server returned for whoever fetched the page last; the
@@ -625,14 +634,16 @@ class AssetManifest
                 continue;
             }
 
-            $strategy = (string) ($declaration['strategy'] ?? 'freshness');
-
             $groups[] = [
                 'name' => is_string($declaration['name'] ?? null) ? $declaration['name'] : 'data-' . $index,
                 'version' => (int) ($declaration['version'] ?? 1),
                 'patterns' => Glob::compile($patterns),
                 'cacheConfig' => [
-                    'strategy' => $strategy === 'performance' ? 'performance' : 'freshness',
+                    'strategy' => Strategy::resolve(
+                        $declaration['strategy'] ?? Strategy::NETWORK_FIRST,
+                        [Strategy::NETWORK_FIRST, Strategy::CACHE_FIRST],
+                        Strategy::NETWORK_FIRST,
+                    ),
                     'maxSize' => (int) ($declaration['max_entries'] ?? 50),
                     'maxAge' => (int) ($declaration['max_age'] ?? 3600),
                     'timeout' => (int) ($declaration['timeout'] ?? 3000),
@@ -657,18 +668,20 @@ class AssetManifest
      */
     private function runtimeStrategy(): string
     {
-        $strategy = (string) $this->config->get('pwax.service_worker.runtime_strategy', 'network-only');
-
-        return in_array($strategy, ['network-first', 'stale-while-revalidate'], true)
-            ? $strategy
-            : 'network-only';
+        return Strategy::resolve(
+            $this->config->get('pwax.service_worker.runtime_strategy', Strategy::NETWORK_ONLY),
+            [Strategy::NETWORK_ONLY, Strategy::NETWORK_FIRST, Strategy::STALE_WHILE_REVALIDATE],
+            Strategy::NETWORK_ONLY,
+        );
     }
 
     private function navigationStrategy(): string
     {
-        $strategy = (string) $this->config->get('pwax.service_worker.navigation_strategy', 'network-first');
-
-        return $strategy === 'app-shell' ? 'app-shell' : 'network-first';
+        return Strategy::resolve(
+            $this->config->get('pwax.service_worker.navigation_strategy', Strategy::NETWORK_FIRST),
+            [Strategy::NETWORK_FIRST, Strategy::CACHE_FIRST],
+            Strategy::NETWORK_FIRST,
+        );
     }
 
     /**

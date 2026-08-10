@@ -69,12 +69,12 @@ class OfflinePagesTest extends TestCase
 
     public function test_pages_declare_their_strategy_and_timeout(): void
     {
-        config()->set('pwax.service_worker.pages.strategy', 'performance');
+        config()->set('pwax.service_worker.pages.strategy', 'cache-first');
         config()->set('pwax.service_worker.pages.timeout', 750);
 
         $group = $this->pageGroup();
 
-        $this->assertSame('performance', $group['strategy']);
+        $this->assertSame('cache-first', $group['strategy']);
         $this->assertSame(750, $group['timeout']);
     }
 
@@ -102,11 +102,11 @@ class OfflinePagesTest extends TestCase
 
     public function test_the_navigation_strategy_and_urls_reach_the_manifest(): void
     {
-        config()->set('pwax.service_worker.navigation_strategy', 'app-shell');
+        config()->set('pwax.service_worker.navigation_strategy', 'cache-first');
 
         $manifest = $this->get('/sw.json')->json();
 
-        $this->assertSame('app-shell', $manifest['navigationStrategy']);
+        $this->assertSame('cache-first', $manifest['navigationStrategy']);
 
         // Compiled to regexes server-side so the worker needs no glob implementation.
         $this->assertNotEmpty($manifest['navigationUrls']);
@@ -125,7 +125,7 @@ class OfflinePagesTest extends TestCase
         config()->set('pwax.service_worker.data_groups', [[
             'name' => 'posts',
             'urls' => ['/api/posts', '/api/posts/**'],
-            'strategy' => 'performance',
+            'strategy' => 'cache-first',
             'max_age' => 60,
             'max_entries' => 10,
         ]]);
@@ -135,7 +135,7 @@ class OfflinePagesTest extends TestCase
 
         $this->assertCount(1, $groups);
         $this->assertSame('posts', $groups[0]['name']);
-        $this->assertSame('performance', $groups[0]['cacheConfig']['strategy']);
+        $this->assertSame('cache-first', $groups[0]['cacheConfig']['strategy']);
         $this->assertSame(60, $groups[0]['cacheConfig']['maxAge']);
         $this->assertSame(10, $groups[0]['cacheConfig']['maxSize']);
         $this->assertCount(2, $groups[0]['patterns']);
@@ -149,13 +149,13 @@ class OfflinePagesTest extends TestCase
         config()->set('pwax.service_worker.data_groups', [[
             'name' => 'posts',
             'urls' => ['/api/posts'],
-            'cache_config' => ['strategy' => 'performance', 'max_size' => 10],
+            'cache_config' => ['strategy' => 'cache-first', 'max_size' => 10],
         ]]);
 
         /** @var list<array<string, mixed>> $groups */
         $groups = $this->get('/sw.json')->json('dataGroups');
 
-        $this->assertSame('freshness', $groups[0]['cacheConfig']['strategy']);
+        $this->assertSame('network-first', $groups[0]['cacheConfig']['strategy']);
         $this->assertSame(50, $groups[0]['cacheConfig']['maxSize']);
     }
 

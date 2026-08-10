@@ -1,48 +1,51 @@
-{{--
-    Default Pwax service worker.
-
-    Driven by the asset manifest at `sw.json`: the server enumerates every URL the
-    application is made of with a content hash, and this installs the lot in one pass. A
-    visitor who has loaded one page can go offline and still reach every route and every
-    component.
-
-    Publish and edit with:
-        php artisan vendor:publish --tag=pwax-service-worker
-
-    `$manifest` is the built asset manifest. Its hash is embedded below so that a change
-    anywhere in the application changes this file — which is the only thing that makes a
-    browser treat the worker as new and install it.
---}}
-@php
-    $manifest ??= [];
-    $prefix = (string) ($manifest['cachePrefix'] ?? config('pwax.service_worker.cache_name', 'pwax'));
-    $manifestUrl = '/' . ltrim((string) config('pwax.service_worker.asset_manifest.path', '/sw.json'), '/');
-
-    // Assembled here rather than inline below, because `@json` splits its argument on
-    // commas — it reads them as (value, flags, depth) — so an array literal written in
-    // the directive is shredded into a syntax error.
-    $swConfig = [
-        'hash' => (string) ($manifest['hash'] ?? ''),
-        'strategy' => (string) ($manifest['strategy'] ?? 'network-first'),
-        'maxEntries' => (int) ($manifest['maxEntries'] ?? 60),
-        'navigationPreload' => (bool) ($manifest['navigationPreload'] ?? true),
-        'navigationStrategy' => (string) ($manifest['navigationStrategy'] ?? 'network-first'),
-        'navigationUrls' => array_values((array) ($manifest['navigationUrls'] ?? [])),
-        'shellUrl' => $manifest['shellUrl'] ?? null,
-        'offlineUrl' => $manifest['offlineUrl'] ?? null,
-        'assetPrefixes' => array_values((array) ($manifest['assetPrefixes'] ?? [])),
-        'pageHeaders' => (array) ($manifest['pageHeaders'] ?? []),
-        'crossOrigin' => array_values((array) ($manifest['crossOrigin'] ?? [])),
-    ];
-@endphp
-/*!
- * pwax service worker
- * manifest: {{ $manifest['hash'] ?? 'unknown' }}
- * version:  {{ $manifest['version'] ?? 'v1' }}
+/**
+ * The Pwax service worker.
+ *
+ * Driven by the asset manifest at `sw.json`: the server enumerates every URL the
+ * application is made of with a content hash, and this installs the lot in one pass. A
+ * visitor who has loaded one page can go offline and still reach every route and every
+ * component.
+ *
+ * Built to `dist/pwax-sw.js` and served with a small generated preamble in front of it,
+ * which is where everything below comes from. Until 4.1 this file was a Blade template —
+ * 1,600 lines of JavaScript that no linter, formatter or minifier ever saw, and that could
+ * only be tested through a hand-written Blade emulator. The server-injected surface was
+ * four values the whole time; those four are now the preamble, and this is ordinary
+ * JavaScript.
+ *
+ * To add behaviour of your own — a `push` handler, a `sync` handler — use
+ * `service_worker.extend` rather than forking this file. Those scripts are concatenated
+ * after it and share its scope.
  */
-const MANIFEST_URL = @json($manifestUrl, JSON_UNESCAPED_SLASHES);
-const MANIFEST_HASH = @json((string) ($manifest['hash'] ?? ''));
-const PREFIX = @json($prefix);
+
+import { registerPush, registerSync } from './push.js';
+
+/**
+ * Everything the server decided, injected ahead of this bundle.
+ *
+ * Concatenated rather than fetched with `importScripts`: that would cost a synchronous
+ * blocking request during install, and a stale HTTP-cached bundle could pair a new
+ * preamble with an old worker. One byte stream cannot come apart that way.
+ */
+const {
+    manifestUrl: MANIFEST_URL,
+    manifestHash: MANIFEST_HASH,
+    prefix: PREFIX,
+    config: CONFIG,
+} = self.__PWAX_SW__;
+
+/** Third-party URLs this build precached, and the only ones we answer off-origin. */
+const CROSS_ORIGIN = new Set(CONFIG.crossOrigin || []);
+
+/**
+ * How many assets to precache at once.
+ *
+ * Six, matching what a browser opens to one origin anyway. The number that matters is
+ * that it is bounded: PHP's built-in server — `php artisan serve`, what most people
+ * develop against — handles one request at a time.
+ */
+const CONCURRENCY = CONFIG.concurrency || 6;
+
 const STATE_CACHE = `${PREFIX}-state`;
 
 /** The manifest the active worker is serving. */
@@ -61,60 +64,14 @@ const STATE_KEY = '/__pwax__/sw-state';
 const PENDING_KEY = '/__pwax__/sw-pending';
 
 /**
- * How many assets to precache at once.
- *
- * Six, matching what a browser opens to one origin anyway. The number that matters is
- * that it is bounded: PHP's built-in server — `php artisan serve`, what most people
- * develop against — handles one request at a time.
- */
-const CONCURRENCY = 6;
-
-/**
- * The routing-relevant part of the manifest, rendered into this file.
- *
- * Deliberately not the whole thing: the asset table belongs in `sw.json`, which is
- * fetched at install and stored alongside the cache it built. What is inlined here is
- * only what the fetch handler needs to answer a request — which cache to look in, what to
- * serve when a navigation fails — so that a worker the browser revived after terminating
- * it can respond immediately without a network round trip.
- */
-const CONFIG = @json($swConfig, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-
-/** Third-party URLs this build precached, and the only ones we answer off-origin. */
-const CROSS_ORIGIN = new Set(CONFIG.crossOrigin || []);
-
-/**
  * The last resort: a navigation with no network and nothing stored for that URL.
  *
- * A whole document, so it carries its own styles — the shell's stylesheet belongs to a
- * page that never loaded. It is written to match the application's other screens rather
- * than to stand out: a visitor who has already seen the in-app error should recognise this
- * as the same thing said by something further down the stack, not as a second, worse
- * failure.
- *
- * No script, and no reload button that reloads on its own. Reloading is exactly what will
- * fail again; the browser's own control is the honest place for that.
+ * Rendered server-side from `pwax::js.offline` and handed over in the preamble, so it
+ * carries the application's own `lang` and `dir` and can be published and edited like any
+ * other view. It used to be forty lines of HTML and CSS inside a JavaScript string in a
+ * Blade template — unlintable, unformattable, and hardcoded to `lang="en"`.
  */
-const OFFLINE_HTML =
-    '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
-    '<meta name="viewport" content="width=device-width, initial-scale=1">' +
-    '<meta name="color-scheme" content="light dark"><title>Offline</title><style>' +
-    ':root{--fg:#18181b;--muted:#71717a;--line:#e4e4e7;--bg:#ffffff}' +
-    '@media(prefers-color-scheme:dark){:root{--fg:#fafafa;--muted:#a1a1aa;--line:#3f3f46;--bg:#09090b}}' +
-    'html,body{margin:0;height:100%}' +
-    'body{display:flex;align-items:center;justify-content:center;padding:2rem 1.5rem;' +
-    'background:var(--bg);color:var(--fg);line-height:1.5;' +
-    'font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}' +
-    'div{width:100%;max-width:32rem;text-align:center}' +
-    'p.c{margin:0 0 1rem;font-size:.75rem;font-weight:600;letter-spacing:.1em;' +
-    'text-transform:uppercase;color:var(--muted)}' +
-    'p.c::after{content:"";display:block;width:2.5rem;height:1px;margin:.75rem auto 0;background:var(--line)}' +
-    'h1{margin:0 0 .5rem;font-size:1.375rem;font-weight:600;letter-spacing:-.01em}' +
-    'p.m{margin:0;color:var(--muted)}' +
-    '</style></head><body><div role="alert">' +
-    '<p class="c">Offline</p><h1>This page is not available offline</h1>' +
-    '<p class="m">It has not been stored on this device. Reconnect and try again.</p>' +
-    '</div></body></html>';
+const OFFLINE_HTML = CONFIG.offlineHtml || '<!DOCTYPE html><title>Offline</title>';
 
 /**
  * The request the client runtime would make for a page — and therefore the cache key.
@@ -177,6 +134,12 @@ self.addEventListener('message', (event) => {
         return;
     }
 });
+
+// Registered unconditionally. A `push` listener that never receives a push costs nothing,
+// and gating registration on config would mean push cannot start working until the deploy
+// *after* the one that enabled it.
+registerPush(CONFIG);
+registerSync(CONFIG, syncName());
 
 self.addEventListener('fetch', (event) => {
     const request = event.request;
@@ -276,7 +239,9 @@ async function install() {
     // purpose, so that one visitor's HTML is never written to another's disk. Reporting
     // that as "could not be precached" reads like a broken install and sends people
     // looking for a network problem that is not there.
-    const skipped = urls.filter((_, i) => results[i].status === 'fulfilled' && results[i].value === false);
+    const skipped = urls.filter(
+        (_, i) => results[i].status === 'fulfilled' && results[i].value === false
+    );
     const fatal = [...failures, ...skipped].filter((url) => critical.has(url));
 
     if (failures.length) {
@@ -385,7 +350,8 @@ async function reconcileLazy(manifest, inherited) {
         }
 
         const group = groups.find(
-            (candidate) => (candidate.urls || []).includes(path) || matchesAny(candidate.patterns, path)
+            (candidate) =>
+                (candidate.urls || []).includes(path) || matchesAny(candidate.patterns, path)
         );
 
         group && group.updateMode !== 'lazy' ? refresh.push(path) : drop.push(key);
@@ -406,13 +372,15 @@ async function reconcileLazy(manifest, inherited) {
 }
 
 async function activate() {
-    const manifest = installed || (await readManifest(PENDING_KEY)) || (await readManifest(STATE_KEY)) || CONFIG;
+    const manifest =
+        installed || (await readManifest(PENDING_KEY)) || (await readManifest(STATE_KEY)) || CONFIG;
     const keep = new Set([
         precacheName(manifest),
         pagesName(manifest),
         documentsName(manifest),
         runtimeName(),
         lazyName(),
+        syncName(),
         STATE_CACHE,
     ]);
 
@@ -602,7 +570,11 @@ function prefetchEntries(manifest) {
             }
 
             seen.add(url);
-            entries.push({ url, kind: group.kind === 'page' ? 'page' : 'asset', credentials: group.credentials });
+            entries.push({
+                url,
+                kind: group.kind === 'page' ? 'page' : 'asset',
+                credentials: group.credentials,
+            });
         }
     }
 
@@ -701,7 +673,7 @@ async function serve(event) {
     const lazy = lazyGroupFor(manifest, key);
 
     if (lazy) {
-        return lazyAsset(event, manifest, lazy);
+        return lazyAsset(event, manifest);
     }
 
     const data = dataGroupFor(manifest, key);
@@ -756,7 +728,9 @@ function pageGroupFor(manifest, key, request) {
     // A page the runtime asked for that no group claims is still a page, and caching it as
     // one is what makes "everywhere you have been works offline" true rather than
     // "everywhere you listed in config". `runtime: false` turns this off.
-    return manifest.pageRuntime === false ? null : manifest.pageDefaults || { strategy: 'freshness' };
+    return manifest.pageRuntime === false
+        ? null
+        : manifest.pageDefaults || { strategy: 'network-first' };
 }
 
 /**
@@ -769,7 +743,7 @@ function pageGroupFor(manifest, key, request) {
 async function page(event, manifest, group) {
     const request = event.request;
 
-    if (group.strategy === 'performance') {
+    if (group.strategy === 'cache-first') {
         const hit = await storedPage(request, manifest);
 
         if (hit) {
@@ -910,7 +884,7 @@ function lazyGroupFor(manifest, key) {
  * `${PREFIX}-lazy` survives deploys for the same reason `runtimeName()` does. Entries
  * whose content actually changed are dropped in `activate()`, by hash.
  */
-async function lazyAsset(event, manifest, group) {
+async function lazyAsset(event, manifest) {
     const request = event.request;
     const cache = await caches.open(lazyName());
     const hit = await cache.match(request, { ignoreVary: true });
@@ -1000,7 +974,7 @@ async function dataResponse(event, manifest, group) {
         return response;
     };
 
-    if (config.strategy === 'performance') {
+    if (config.strategy === 'cache-first') {
         const hit = await stored();
 
         if (hit) {
@@ -1066,7 +1040,9 @@ async function trimData(cache, name, maxSize) {
         }
     }
 
-    const keys = (await cache.keys()).filter((key) => !new URL(key.url).pathname.startsWith('/__pwax__/sw-age/'));
+    const keys = (await cache.keys()).filter(
+        (key) => !new URL(key.url).pathname.startsWith('/__pwax__/sw-age/')
+    );
 
     counts.set(name, keys.length);
 
@@ -1115,7 +1091,7 @@ async function navigate(event, manifest) {
         return (await settled(preload)) || fetch(event.request);
     }
 
-    if (manifest.navigationStrategy === 'app-shell') {
+    if (manifest.navigationStrategy === 'cache-first') {
         const cached = (await storedDocument(manifest, path)) || (await shellDocument(manifest));
 
         if (cached) {
@@ -1143,7 +1119,8 @@ async function navigate(event, manifest) {
         // route sat in the precache. A 500 is not that: the application ran and threw, and
         // that page is the thing whoever deployed it needs to see.
         if (unreachable(response)) {
-            const stored = (await storedDocument(manifest, path)) || (await shellDocument(manifest));
+            const stored =
+                (await storedDocument(manifest, path)) || (await shellDocument(manifest));
 
             if (stored) {
                 warnStale(event.request.url, response.status);
@@ -1158,7 +1135,9 @@ async function navigate(event, manifest) {
         // correct answer but a worse one: it paints a spinner and waits for the runtime to
         // fetch a payload, where the document already has the component inlined.
         return (
-            (await storedDocument(manifest, path)) || (await shellDocument(manifest)) || offlineDocument()
+            (await storedDocument(manifest, path)) ||
+            (await shellDocument(manifest)) ||
+            offlineDocument()
         );
     }
 }
@@ -1388,7 +1367,8 @@ function offlineDocument() {
             // A navigation the worker answered from disk should not give the document
             // any permission the application did not ask for. `style-src 'unsafe-inline'`
             // is needed because the page's only stylesheet is the `<style>` block above.
-            'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            'Content-Security-Policy':
+                "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
             'X-Content-Type-Options': 'nosniff',
             'Referrer-Policy': 'no-referrer',
             'X-Robots-Tag': 'noindex',
@@ -1601,7 +1581,9 @@ async function trim(cache, name, maxEntries) {
 async function clearCaches() {
     const keys = await caches.keys();
 
-    await Promise.all(keys.filter((key) => key.startsWith(`${PREFIX}-`)).map((key) => caches.delete(key)));
+    await Promise.all(
+        keys.filter((key) => key.startsWith(`${PREFIX}-`)).map((key) => caches.delete(key))
+    );
 
     statePromise = null;
     counts.clear();
@@ -1664,6 +1646,16 @@ function runtimeName() {
  */
 function lazyName() {
     return `${PREFIX}-lazy`;
+}
+
+/**
+ * Where requests queued while offline wait.
+ *
+ * Not keyed by the build. Work queued before a deploy still has to be sent after it, and
+ * discarding it because a component changed would lose a visitor's writes.
+ */
+function syncName() {
+    return `${PREFIX}-sync`;
 }
 
 /**

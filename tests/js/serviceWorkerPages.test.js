@@ -37,7 +37,7 @@ function manifest(overrides = {}) {
                 name: 'pages',
                 installMode: 'prefetch',
                 kind: 'page',
-                strategy: 'freshness',
+                strategy: 'network-first',
                 urls: [ABOUT],
             },
         ],
@@ -147,7 +147,7 @@ describe('page payloads offline', () => {
         const worker = offline(current, caches);
         const body = await visit(worker, ABOUT);
 
-        // The network is tried first and fails — `freshness` means fresh when possible —
+        // The network is tried first and fails — `network-first` means fresh when possible —
         // and the payload comes back anyway.
         expect(body.status).toBe(200);
         await expect(body.json()).resolves.toEqual({ template: '<p>/about</p>' });
@@ -431,7 +431,7 @@ describe('page payloads offline', () => {
         expect(worker.fetches).toHaveLength(1);
     });
 
-    it('serves the cached payload without waiting under the performance strategy', async () => {
+    it('serves the cached payload without waiting under the cache-first strategy', async () => {
         const current = manifest({
             assetGroups: [
                 { name: 'app', installMode: 'prefetch', urls: [RUNTIME, SHELL] },
@@ -439,7 +439,7 @@ describe('page payloads offline', () => {
                     name: 'pages',
                     installMode: 'prefetch',
                     kind: 'page',
-                    strategy: 'performance',
+                    strategy: 'cache-first',
                     urls: [ABOUT],
                 },
             ],
@@ -466,7 +466,7 @@ describe('page payloads offline', () => {
                     name: 'pages',
                     installMode: 'prefetch',
                     kind: 'page',
-                    strategy: 'freshness',
+                    strategy: 'network-first',
                     timeout: 10,
                     urls: [ABOUT],
                 },

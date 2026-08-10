@@ -49,7 +49,9 @@ class ShellTest extends TestCase
 
     /**
      * The runtime-only build has no template compiler, and compiling templates in the
-     * browser is the entire premise of the package.
+     * browser is the entire premise of the package. It is reachable — see
+     * {@see PrecompileTest} — but only after `pwax:compile` and an explicit opt-in, and
+     * this is the default configuration.
      */
     public function test_uses_the_full_vue_build_not_the_runtime_only_one(): void
     {
@@ -76,7 +78,7 @@ class ShellTest extends TestCase
 
     public function test_cdn_mode_emits_integrity_and_crossorigin(): void
     {
-        config()->set('pwax.assets.strategy', 'cdn');
+        config()->set('pwax.assets.source', 'cdn');
 
         $vue = $this->shell()->vendorScripts()[0];
 
@@ -133,7 +135,7 @@ class ShellTest extends TestCase
      */
     public function test_preloads_carry_integrity_and_crossorigin(): void
     {
-        config()->set('pwax.assets.strategy', 'cdn');
+        config()->set('pwax.assets.source', 'cdn');
 
         $vue = $this->shell()->vendorPreloads()[0];
 

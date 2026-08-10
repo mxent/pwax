@@ -5,8 +5,15 @@
  * and keep the loading and error states honest while that happens.
  */
 
+import { applyHead } from './head.js';
 import { HttpError } from './http.js';
-import { importInlineModule, importModule, styleMetadata, toComponentOptions } from './modules.js';
+import {
+    ensureRenderable,
+    importInlineModule,
+    importModule,
+    styleMetadata,
+    toComponentOptions,
+} from './modules.js';
 
 const PAGE_STYLE_KEY = 'pwax:page';
 
@@ -16,7 +23,7 @@ const DEFAULT_LOADER = '<div class="pwax-loading" role="status">Loading…</div>
  * One reload per tab for an expired CSRF token.
  *
  * Reloading to pick up a fresh token assumes the reload reaches the server. It does not
- * under `navigation_strategy => 'app-shell'`, where the worker answers navigations from
+ * under `navigation_strategy => 'cache-first'`, where the worker answers navigations from
  * disk — so the same stale token comes back and the page reloads in a loop. `sessionStorage`
  * because the flag has to survive the reload it guards, and has to be gone in the next tab.
  */
@@ -77,6 +84,7 @@ export function createPageComponent({
     // A map, or a promise of one. `index.js` hands over the promise so that resolving
     // module middleware does not hold up the first paint; `await` accepts both.
     middleware = {},
+    prefetcher = null,
     templates = {},
     progress = null,
     transition = 'pwax-page',
@@ -185,7 +193,14 @@ export function createPageComponent({
                 this.controller = controller;
 
                 try {
-                    const payload = await http.json(path, { signal: controller.signal });
+                    // Taken if a pointer or a focus already started this request. Same
+                    // request, sent earlier — so the visitor waits for whatever is left
+                    // of it rather than for all of it.
+                    const started = prefetcher?.take(path);
+
+                    const payload = started
+                        ? await started
+                        : await http.json(path, { signal: controller.signal });
 
                     if (controller.signal.aborted) {
                         return;
@@ -222,7 +237,7 @@ export function createPageComponent({
                     // never reaches Pwax's middleware.
                     //
                     // Once, though. The reload only helps if it returns a *different*
-                    // document, and under `navigation_strategy => 'app-shell'` it does
+                    // document, and under `navigation_strategy => 'cache-first'` it does
                     // not: the worker answers that navigation from disk, the same stale
                     // token comes back, and the page reloads forever. One attempt, then
                     // the error is shown like any other.
@@ -281,10 +296,14 @@ export function createPageComponent({
 
                     // Set here rather than only in the shell. A title rendered server-side
                     // is right for the page you landed on and wrong for every page you
-                    // navigate to afterwards, which is worse than never setting one.
+                    // navigate to afterwards, which is worse than never setting one — and
+                    // the same is true of everything else that describes the document, so
+                    // the description, canonical URL and Open Graph tags move with it.
                     if (payload.title) {
                         document.title = payload.title;
                     }
+
+                    applyHead(payload.head);
 
                     // Finished before the swap, not alongside it. The bar completing is
                     // what says the waiting is over; the fade is what says the page has
@@ -328,18 +347,22 @@ export function createPageComponent({
             },
 
             /**
-             * Tell a screen reader the page changed.
+             * Tell a screen reader the page changed, and put focus where it belongs.
              *
-             * A full navigation announces itself: the browser resets focus and reads the
-             * new document. A router does neither. It swaps the DOM under a user who is
-             * given no signal that anything happened, and leaves focus wherever the link
-             * they followed used to be — which, once that link is gone, is the top of the
-             * document with nothing selected.
+             * A full navigation does both on its own: the browser resets focus to the top
+             * of the new document and reads it. A router does neither. It swaps the DOM
+             * under a user who is given no signal that anything happened, and leaves focus
+             * wherever the link they followed used to be — which, once that link is gone,
+             * is the body, so the next Tab starts from the top of the page and the next
+             * screen-reader command reads from wherever the cursor was stranded.
              *
-             * Announcing the title is the smallest thing that restores the signal, and
-             * the title is already correct here because `mount()` has just set it.
-             * Nothing is announced for the first paint: the browser has just read the
-             * document, and repeating it is noise.
+             * Announcing the title restores the signal. Moving focus to the application
+             * root restores the position, which is what makes the skip link and ordinary
+             * Tab order behave the way they do on a server-rendered site.
+             *
+             * Neither happens on the first paint: the browser has just done both itself,
+             * and repeating them steals focus from a visitor who has already started
+             * interacting.
              */
             announce() {
                 if (!this.announced) {
@@ -357,6 +380,31 @@ export function createPageComponent({
                     announcer.textContent = '';
                     announcer.textContent = document.title;
                 }
+
+                this.refocus();
+            },
+
+            /**
+             * Move focus to the top of the newly rendered page.
+             *
+             * The mount element carries `tabindex="-1"` so it can receive focus without
+             * entering the tab order. `preventScroll` because the router's own
+             * `scrollBehavior` has already decided where this navigation should land —
+             * restoring a saved position, or jumping to a hash — and focusing an element
+             * would otherwise scroll it into view and overrule that.
+             *
+             * A page that wants focus somewhere more specific can take it in `mounted()`;
+             * this runs first.
+             */
+            refocus() {
+                // Only when nothing has claimed focus. The new page's `mounted()` has
+                // already run by this point, so a page that focused a search field or a
+                // first input meant to — taking it back would be worse than not moving.
+                if (document.activeElement && document.activeElement !== document.body) {
+                    return;
+                }
+
+                document.getElementById(config.mount || 'pwax')?.focus?.({ preventScroll: true });
             },
 
             /**
@@ -371,7 +419,7 @@ export function createPageComponent({
                     const options = toComponentOptions(module);
                     const meta = styleMetadata(module);
 
-                    if (!options.template && payload.template) {
+                    if (!options.template && !options.render && payload.template) {
                         options.template = payload.template;
                     }
 
@@ -379,11 +427,11 @@ export function createPageComponent({
                         payload.style = meta.style;
                     }
 
-                    return options;
+                    return ensureRenderable(options);
                 }
 
                 if (!payload.script) {
-                    return { template: payload.template || '' };
+                    return ensureRenderable({ template: payload.template || '' });
                 }
 
                 const module = await importInlineModule(
@@ -392,11 +440,14 @@ export function createPageComponent({
                 );
                 const options = toComponentOptions(module);
 
-                if (!options.template) {
+                // A page's precompiled render function travels inside its inline script,
+                // so `toComponentOptions` has already found it; the template is the
+                // fallback for when there is none.
+                if (!options.template && !options.render) {
                     options.template = payload.template || '';
                 }
 
-                return options;
+                return ensureRenderable(options);
             },
 
             /**
@@ -453,6 +504,15 @@ export function createPageComponent({
 
             fail(error) {
                 const status = error instanceof HttpError ? error.status : null;
+
+                // Anything that is not an HTTP failure is shown to the visitor as a
+                // connection problem, because nine times out of ten that is what it is.
+                // The tenth is a bug or a misconfiguration — a component that will not
+                // compile, a middleware that threw — and the console is the only place
+                // left where it can say what actually happened.
+                if (status === null) {
+                    console.error('pwax: navigation failed.', error);
+                }
 
                 this.error = {
                     status: status ?? 'Error',

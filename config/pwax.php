@@ -113,8 +113,8 @@ return [
     | Frontend assets
     |--------------------------------------------------------------------------
     |
-    | strategy  'local' serves Vue, Vue Router and Pinia from your own origin;
-    |           'cdn' loads them from the configured CDN with subresource integrity.
+    | source  'local' serves Vue, Vue Router and Pinia from your own origin;
+    |         'cdn' loads them from the configured CDN with subresource integrity.
     |
     | A progressive web app that fetches its framework from a third-party CDN cannot
     | work offline — which is the entire point of a PWA — and discloses every
@@ -123,13 +123,46 @@ return [
     | Publish the local copies with:
     |     php artisan vendor:publish --tag=pwax-assets
     |
-    | NOTE: Pwax compiles templates in the browser, so it requires the *full* Vue
-    | build (vue.global.prod.js). vue.runtime.global.prod.js will not work.
+    | Pwax compiles templates in the browser by default, so it serves the *full* Vue
+    | build. See `vue_build` below for the opt-in alternative.
     |
     */
 
     'assets' => [
-        'strategy' => 'local',
+        // 'local' or 'cdn'. Named `source` because that is what it chooses — where the
+        // framework is served from, not how anything is cached. It was `strategy`, which
+        // put a fifth key by that name in a config where the other four choose a caching
+        // behaviour. The old key still works; `pwax:doctor` names it.
+        'source' => 'local',
+
+        /*
+        | 'full' or 'runtime'.
+        |
+        | 'full' ships Vue's template compiler, because compiling templates in the browser
+        | is what lets this package have no build step. It costs about 20 kB gzipped over
+        | the runtime-only build, and it is why `script-src 'unsafe-eval'` is required.
+        |
+        | 'runtime' is the opt-in trade in the other direction: run
+        | `php artisan pwax:compile` after each deploy, ship 40.6 kB gzipped instead of
+        | 60.7, and drop 'unsafe-eval'. It needs Node in your build, and
+        | `@vue/compiler-dom` as a dev dependency at the version pinned below.
+        |
+        | Never having compiled is not an outage: an empty or missing store makes Pwax
+        | serve the full build, and `pwax:doctor` reports it as an error so a silent
+        | fallback is not a regression nobody can find. Compiling once and then changing a
+        | component *is* an outage for that component, which is the other thing
+        | `pwax:doctor` checks — put `pwax:compile` in your deploy, not in your memory.
+        |
+        | One constraint comes with it: a template must be the same for every visitor.
+        | Keep controller data in <script> (`@json($user)`) and out of <template>, which
+        | is the idiomatic split anyway. `pwax:compile` names any view that breaks it.
+        */
+        'vue_build' => 'full',
+
+        // Where `pwax:compile` writes, and the Node binary it runs. Defaults are
+        // storage/app/pwax/render-functions.php and whatever `node` resolves to.
+        'render_functions' => null,
+        'node' => null,
 
         'local_path' => '/vendor/pwax',
 
@@ -147,8 +180,11 @@ return [
             //
             //   curl -sL <url> | openssl dgst -sha384 -binary | openssl base64 -A
             //
+            // Keyed by package name, or by filename where a package ships more than one
+            // build Pwax can serve. The filename wins.
             'integrity' => [
                 'vue' => 'sha384-arPHRzOKPl8g3Rbe/cQBWYPnq4HcxfPFSFWD3qvI/hc2XQf+4GkVqkOlWgjN5mD3',
+                'vue.runtime.global.prod.js' => 'sha384-RFxxAeahncPwNwUDUMprS/CVNUxKm7t0wLbqf3HZ+i5rvu2/QS+xB4Lo+eDZ75Fb',
                 'vue-router' => 'sha384-bPPzCqx4xLwbRx+Dz7Wg1pyZ2CoP5XkRxCR5yfuA/U/QNsKJ0G7zkbuqzLyQLDSR',
                 'pinia' => 'sha384-wg8sN8T2ZcZIv5vtyNApjm6zSpZ61ZgJEm5w3TXD7cGzWOhnNcNQkwvK39KIH5tp',
             ],
@@ -391,6 +427,34 @@ return [
     |
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Prefetching
+    |--------------------------------------------------------------------------
+    |
+    | Fetch a page just before it is asked for. A visitor tells you where they are going
+    | before they go — the pointer lands on a link a few hundred milliseconds before the
+    | click, and a keyboard user focuses it first — and spending that time on the request
+    | is what makes a navigation feel instant. It is the same request, sent earlier.
+    |
+    | 'hover'  fetch on pointer or focus, after `delay` ms of intent (default)
+    | false    off
+    |
+    | Payloads are held in memory only, never written to disk, capped at eight and dropped
+    | after thirty seconds. A page payload can carry a signed-in visitor's data, so a
+    | prefetch is a head start rather than a cache — the service worker is what stores
+    | pages, with rules about it.
+    |
+    | Costs a request for a link somebody hovers and does not click. Turn it off for an
+    | application with expensive pages or metered users.
+    |
+    */
+
+    'prefetch' => [
+        'mode' => 'hover',
+        'delay' => 65,
+    ],
+
     'transition' => [
         'name' => 'pwax-page',
         'duration' => 150,
@@ -428,6 +492,41 @@ return [
     |
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Web Push
+    |--------------------------------------------------------------------------
+    |
+    | Pwax handles the browser half of push: asking permission, subscribing with your
+    | VAPID key, handing the subscription to your endpoint, and showing the notification
+    | in the worker.
+    |
+    | It deliberately does not handle the server half. Storing subscriptions and sending
+    | to them is what `laravel-notification-channels/webpush` does, it does it well, and a
+    | second implementation inside a PWA package would be a worse one. Install it, point
+    | `endpoint` at a route that persists what the browser posts, and the two halves meet.
+    |
+    | public_key  Your VAPID public key. Without it `pwax.push.subscribe()` does nothing.
+    | endpoint    A route of yours. It receives POST with the PushSubscription as JSON
+    |             when someone subscribes, and DELETE with the same when they leave.
+    | title/icon  Fallbacks for a push whose payload omits them. Every browser that
+    |             implements push requires a notification to be shown for every message,
+    |             so a payload that says nothing must still produce something.
+    |
+    | Nothing is asked of the visitor automatically. `subscribe()` must be called from a
+    | user gesture, because browsers reject permission requests that are not — and a page
+    | that asks on load is the reason they do.
+    |
+    */
+
+    'push' => [
+        'public_key' => env('VAPID_PUBLIC_KEY'),
+        'endpoint' => null,
+        'title' => null,
+        'icon' => null,
+        'badge' => null,
+    ],
+
     'manifest_path' => '/manifest.json',
 
     /*
@@ -451,6 +550,31 @@ return [
     |                  a subdirectory install is already handled by the runtime.
     | color_scheme     <meta name="color-scheme">, e.g. 'light dark'.
     | theme_color_dark Theme colour for a dark colour scheme, if it differs.
+    | open_graph       Derive Open Graph and Twitter card tags from the title, the
+    |                  description and the canonical URL. Nothing is invented: a tag is
+    |                  emitted only where a value for it already exists, and a page that
+    |                  set one by hand keeps its own.
+    | open_graph_type  `og:type`. 'website' unless your app is something else.
+    | twitter_card     `twitter:card`. 'summary_large_image' if you set an og:image
+    |                  wide enough to deserve it.
+    |
+    | Per page, on the response:
+    |
+    |     pwaxRender('pages.post', [...])
+    |         ->title($post->title)
+    |         ->description($post->excerpt)
+    |         ->canonical(route('posts.show', $post))
+    |         ->property('og:image', $post->image_url)
+    |         ->meta('robots', $post->draft ? 'noindex' : null);
+    |
+    | Those travel in the payload as well as the document, so a client-side navigation
+    | updates them too. A browser replaces the head on a real navigation and a router
+    | does not — a title that moves with the route and a description that does not is
+    | worse than setting neither.
+    |
+    | This does NOT make the application crawlable. Page content is compiled in the
+    | browser from a JSON island; a crawler that does not run JavaScript sees the shell.
+    | These tags are for the ones that do, and for link unfurling.
     |
     */
 
@@ -462,6 +586,9 @@ return [
         'base' => null,
         'color_scheme' => null,
         'theme_color_dark' => null,
+        'open_graph' => true,
+        'open_graph_type' => 'website',
+        'twitter_card' => 'summary',
     ],
 
     'manifest' => [
@@ -565,7 +692,35 @@ return [
         'enabled' => false,
         'path' => '/sw.js',
         'scope' => '/',
+        /*
+        | Add behaviour to the worker without forking it.
+        |
+        | Each entry is a view name or an absolute path; the contents are appended after
+        | the worker and share its scope, so `CONFIG`, `PREFIX` and the cache helpers are
+        | all in reach. This is where a `push` handler, a `sync` handler or anything else
+        | the package does not ship belongs — rather than publishing 1,600 lines to add
+        | ten and inheriting every future fix by hand.
+        |
+        |     'extend' => ['js.push-handler'],
+        */
+        'extend' => [],
+
+        /*
+        | The document a navigation gets with no network and nothing stored for the URL.
+        | A Blade view, so it carries the application's language and direction. Publish
+        | it with `vendor:publish --tag=pwax-service-worker`.
+        */
+        'offline_view' => null,
+
+        /*
+        | Replace the worker outright with a Blade view of your own.
+        |
+        | Supported and staying so, but `extend` above is almost always what you want: a
+        | fork stops receiving fixes the moment you make it, and this file changes more
+        | than any other in the package.
+        */
         'blade' => null,
+
         'version' => 'v1',
         'cache_name' => 'pwax',
         'offline_url' => null,
@@ -577,6 +732,12 @@ return [
         | 'network-only'            pass it through and store nothing (default)
         | 'network-first'           store a copy, and serve that copy when offline
         | 'stale-while-revalidate'  serve the copy first and refresh behind it
+        |
+        | No 'cache-first' here, deliberately. This governs URLs the application never
+        | declared, and serving one from disk in preference to the network means serving
+        | it stale forever — there is no hash to notice it changed. A URL that should be
+        | answered from cache first belongs in an asset group, where it is listed and
+        | content-addressed.
         |
         | The default is the conservative one because the alternative kept everything: a
         | one-off PDF, a CSV export, a file under /storage — URLs the application never
@@ -613,11 +774,17 @@ return [
         |
         | 'network-first'  Go to the network, fall back to the precached shell. Safe
         |                  alongside any server-rendered route inside the worker's scope.
-        | 'app-shell'      Serve the precached shell immediately, with no network wait,
+        | 'cache-first'    Serve the precached shell immediately, with no network wait,
         |                  and let the runtime fetch the page payload. Much faster, but
         |                  every navigation this worker claims becomes the SPA — check
         |                  `navigation_urls` first if Horizon, Telescope, Nova or a
-        |                  Filament panel share this domain.
+        |                  Filament panel share this domain. Spelled 'app-shell' before
+        |                  4.1; that still works.
+        |
+        | One vocabulary across every strategy key in this file — `runtime_strategy`,
+        | this one, `pages.strategy` and each data group's. 'freshness' is now
+        | 'network-first' and 'performance' is 'cache-first'; the old names still work
+        | and `pwax:doctor` names them.
         */
         'navigation_strategy' => 'network-first',
 
@@ -827,7 +994,7 @@ return [
             | view into another component with @pwaxImport.
             */
             'as_components' => false,
-            'strategy' => 'freshness',   // 'freshness' | 'performance'
+            'strategy' => 'network-first',   // or 'cache-first'
             'timeout' => 2000,
             'max_entries' => 60,
 
@@ -848,8 +1015,8 @@ return [
         | Runtime caching for API responses. Without them an offline page renders but
         | every fetch it makes fails.
         |
-        |   freshness    go to the network, fall back to the cache after `timeout` ms
-        |   performance  serve the cache while it is younger than `max_age`
+        |   network-first  go to the network, fall back to the cache after `timeout` ms
+        |   cache-first    serve the cache while it is younger than `max_age`
         |
         | `version` names the group's cache. Bump it to discard what is stored for that
         | group and nothing else — after changing the shape of a response, say. Deploys
@@ -867,7 +1034,7 @@ return [
             //     'name' => 'posts',
             //     'urls' => ['/api/posts', '/api/posts/**'],
             //     'version' => 1,
-            //     'strategy' => 'freshness',
+            //     'strategy' => 'network-first',
             //     'max_entries' => 50,
             //     'max_age' => 3600,
             //     'timeout' => 3000,

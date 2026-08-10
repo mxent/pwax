@@ -10,12 +10,16 @@ import { createComponentLoader } from './components.js';
 import { loadConfig, loadInitialPayload } from './config.js';
 import { resolveExtensions } from './extensions.js';
 import { createHttp } from './http.js';
+import { createBadgeApi, createInstallApi, createStorageApi, watchInstall } from './install.js';
 import { importModule } from './modules.js';
+import { createPushApi } from './push.js';
 import { createPageComponent } from './page.js';
+import { createPrefetcher } from './prefetch.js';
 import { createProgress } from './progress.js';
 import { createRouter } from './router.js';
 import { createServiceWorkerApi, registerServiceWorker } from './serviceWorker.js';
 import { createStyleManager } from './styles.js';
+import { createSyncApi } from './sync.js';
 
 const DEFAULT_CONTENT = '<main><router-view></router-view></main>';
 
@@ -23,8 +27,17 @@ async function boot() {
     const config = loadConfig();
     const initial = loadInitialPayload();
 
+    // Before anything is awaited. `beforeinstallprompt` fires early, once, and is never
+    // replayed — a listener added after it has fired never sees it, and with it goes the
+    // application's only chance to offer installation on this page load.
+    watchInstall();
+
     const http = createHttp(config);
     const styles = createStyleManager(document);
+    const prefetcher = createPrefetcher(
+        http,
+        config.prefetch === false ? { mode: false } : config.prefetch || {}
+    );
     const loader = createComponentLoader({ styles, nonce: config.nonce });
 
     // Null when the application turned it off, and every call site uses `?.` — a disabled
@@ -45,6 +58,12 @@ async function boot() {
         load: loader.load,
         import: importModule,
         sw: createServiceWorkerApi(),
+        install: createInstallApi(),
+        badge: createBadgeApi(),
+        storage: createStorageApi(),
+        push: createPushApi(config.push || {}, http),
+        sync: createSyncApi(config, http),
+        prefetch: prefetcher.prefetch,
         // Exposed so an application can wrap its own long-running work — a form
         // submission, a report — in the same indicator its navigations use.
         progress: progressBar,
@@ -77,6 +96,7 @@ async function boot() {
         config,
         initial,
         middleware: middlewareReady,
+        prefetcher,
         templates: config.templates || {},
         progress: progressBar,
         transition: config.transition || 'pwax-page',

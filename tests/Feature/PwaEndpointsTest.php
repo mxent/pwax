@@ -104,9 +104,12 @@ class PwaEndpointsTest extends TestCase
         $body = (string) $this->get('/sw.js')->getContent();
 
         $this->assertStringContainsString('PWAX_SKIP_WAITING', $body);
-        $this->assertStringContainsString('maxEntries', $body);
-        // Only our own caches may be deleted; other libraries own caches on this origin too.
-        $this->assertStringContainsString('key.startsWith(`${PREFIX}-`)', $body);
+        $this->assertStringContainsString('"maxEntries":', $body);
+
+        // What the worker *does* with these — only deleting its own caches, bounding what
+        // it stores — is asserted in tests/js against a fake Cache API. Reading the shipped
+        // source for a substring proved nothing once it was minified, and proved little
+        // before: it matched the code being present, not the code being reached.
     }
 
     public function test_the_service_worker_refuses_to_store_no_store_responses(): void

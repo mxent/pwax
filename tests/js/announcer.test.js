@@ -15,8 +15,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createPageComponent } from '../../src/js/page.js';
 
-function announcerFor(title) {
-    document.body.innerHTML = '<div id="pwax-announcer" role="status" aria-live="polite"></div>';
+function announcerFor(title, { mount = true } = {}) {
+    document.body.innerHTML =
+        (mount ? '<div id="pwax" tabindex="-1"></div>' : '') +
+        '<div id="pwax-announcer" role="status" aria-live="polite"></div>';
     document.title = title;
 
     const page = createPageComponent({
@@ -26,11 +28,18 @@ function announcerFor(title) {
         initial: null,
     });
 
+    // Bound, because announcing and moving focus are two halves of the same job and
+    // `announce()` calls the other one.
     const state = page.data();
 
+    for (const [name, fn] of Object.entries(page.methods)) {
+        state[name] = fn.bind(state);
+    }
+
     return {
-        announce: () => page.methods.announce.call(state),
+        announce: () => state.announce(),
         read: () => document.getElementById('pwax-announcer').textContent,
+        focused: () => document.activeElement,
     };
 }
 
@@ -75,8 +84,66 @@ describe('announcing a navigation', () => {
         // A published shell from an older version will not have one, and a missing
         // announcer must not break navigation.
         document.body.innerHTML = '';
-        const subject = announcerFor('Dashboard');
+        const subject = announcerFor('Dashboard', { mount: false });
         document.body.innerHTML = '';
+
+        expect(() => {
+            subject.announce();
+            subject.announce();
+        }).not.toThrow();
+    });
+});
+
+/**
+ * Where focus lands after a client-side navigation.
+ *
+ * The other half of what a full page load does for free. A router leaves focus wherever
+ * the link the visitor followed used to be — and once that link has been swapped out, on
+ * the body. The next Tab then starts from the top of the document and the next
+ * screen-reader command reads from wherever the cursor was stranded.
+ */
+describe('focus after a navigation', () => {
+    beforeEach(() => {
+        document.body.innerHTML = '';
+    });
+
+    it('leaves focus alone on the first paint', () => {
+        const subject = announcerFor('Dashboard');
+
+        subject.announce();
+
+        // The browser has just done this itself. Doing it again would steal focus from a
+        // visitor who has already started interacting.
+        expect(subject.focused()).toBe(document.body);
+    });
+
+    it('moves focus to the application root on a later navigation', () => {
+        const subject = announcerFor('Dashboard');
+
+        subject.announce();
+        subject.announce();
+
+        expect(subject.focused()).toBe(document.getElementById('pwax'));
+    });
+
+    it('does not take focus back from the new page', () => {
+        const subject = announcerFor('Dashboard');
+
+        subject.announce();
+
+        // A page that focuses a search field in `mounted()` meant to; `mounted()` has
+        // already run by the time this fires.
+        const input = document.createElement('input');
+        document.getElementById('pwax').appendChild(input);
+        input.focus();
+
+        subject.announce();
+
+        expect(subject.focused()).toBe(input);
+    });
+
+    it('survives a shell with no mount element', () => {
+        const subject = announcerFor('Dashboard', { mount: false });
 
         expect(() => {
             subject.announce();

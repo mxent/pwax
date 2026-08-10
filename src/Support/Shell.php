@@ -29,6 +29,7 @@ class Shell
         private readonly Pwax $pwax,
         private readonly ViewFactory $views,
         private readonly ?Request $request = null,
+        private readonly ?RenderFunctionStore $renderFunctions = null,
     ) {}
 
     /**
@@ -49,9 +50,18 @@ class Shell
                 ? (string) $this->config->get('pwax.service_worker.path', '/sw.js')
                 : null,
             'serviceWorkerScope' => (string) $this->config->get('pwax.service_worker.scope', '/'),
+            // Distinct from `prefix` above, which is the route prefix. This one names the
+            // worker's caches, so the page-side queue and the worker agree on where
+            // requests waiting for a connection are kept.
+            'cachePrefix' => (string) $this->config->get('pwax.service_worker.cache_name', 'pwax'),
+            'push' => [
+                'publicKey' => $this->config->get('pwax.push.public_key') ?: null,
+                'endpoint' => $this->config->get('pwax.push.endpoint') ?: null,
+            ],
             'csrf' => $this->csrfToken(),
             'home' => $this->pwax->homeUrl(),
             'progress' => $this->progress(),
+            'prefetch' => $this->prefetch(),
             'transition' => (string) $this->config->get('pwax.transition.name', 'pwax-page'),
             'plugins' => $this->extensions('pwax.plugins'),
             'directives' => $this->extensions('pwax.directives'),
@@ -78,6 +88,25 @@ class Shell
         return [
             'delay' => (int) $this->config->get('pwax.progress.delay', 250),
             'trickle' => (bool) $this->config->get('pwax.progress.trickle', true),
+        ];
+    }
+
+    /**
+     * Prefetching settings, or `false` when it is switched off.
+     *
+     * @return array{mode: string, delay: int}|false
+     */
+    private function prefetch(): array|false
+    {
+        $mode = $this->config->get('pwax.prefetch.mode', 'hover');
+
+        if ($mode === false || $mode === 'off' || $mode === null) {
+            return false;
+        }
+
+        return [
+            'mode' => (string) $mode,
+            'delay' => (int) $this->config->get('pwax.prefetch.delay', 65),
         ];
     }
 
@@ -129,14 +158,12 @@ class Shell
      */
     public function frameworkScripts(): array
     {
-        $strategy = (string) $this->config->get('pwax.assets.strategy', 'local');
+        $strategy = $this->assetSource();
         /** @var array<string, string> $versions */
         $versions = $this->config->get('pwax.assets.versions', []);
 
         $files = [
-            // The FULL Vue build. The runtime-only build has no template compiler, and
-            // compiling templates in the browser is the whole premise of this package.
-            'vue' => 'vue.global.prod.js',
+            'vue' => $this->vueBuild(),
             'vue-router' => 'vue-router.global.prod.js',
         ];
 
@@ -153,6 +180,29 @@ class Shell
         }
 
         return $tags;
+    }
+
+    /**
+     * Which Vue build to serve.
+     *
+     * The full build by default, because compiling templates in the browser is the whole
+     * premise of the package and the runtime-only build has no compiler.
+     *
+     * `assets.vue_build => 'runtime'` opts into the smaller one — 40.7 kB gzipped against
+     * 60.8 kB — which is only safe once `php artisan pwax:compile` has produced a render
+     * function for every template. This is the safety net for when it has not: an empty or
+     * missing store serves the full build for that request. Slower than intended, never
+     * broken. `pwax:doctor` reports it as an error, because a silent fallback that nobody
+     * notices is a performance regression nobody can find.
+     *
+     * `isComplete()` is one cached boolean, not a per-component check — this runs on every
+     * page render.
+     */
+    private function vueBuild(): string
+    {
+        return $this->renderFunctions?->active() === true
+            ? 'vue.runtime.global.prod.js'
+            : 'vue.global.prod.js';
     }
 
     /**
@@ -326,6 +376,38 @@ class Shell
     }
 
     /**
+     * Where the framework scripts come from: `local` or `cdn`.
+     *
+     * `assets.source` since 4.1. It was `assets.strategy`, which put a fifth key called
+     * "strategy" in a config where the other four choose a caching behaviour and this one
+     * chooses a hostname. The old key still works and `pwax:doctor` names it.
+     */
+    public function assetSource(): string
+    {
+        $source = $this->config->get('pwax.assets.source')
+            ?? $this->config->get('pwax.assets.strategy')
+            ?? 'local';
+
+        return strtolower(trim((string) $source)) === 'cdn' ? 'cdn' : 'local';
+    }
+
+    /**
+     * The document's text direction, for `<html dir>`.
+     *
+     * Taken from `pwax.manifest.dir`, which the web app manifest already needs, so an
+     * application declares this once rather than in two places that can disagree. `auto`
+     * is the default and usually the right answer: the browser reads the first strong
+     * character and decides, which handles a mixed-locale application without a config
+     * change per locale.
+     */
+    public function direction(): string
+    {
+        $dir = strtolower(trim((string) $this->config->get('pwax.manifest.dir', 'auto')));
+
+        return in_array($dir, ['ltr', 'rtl', 'auto'], true) ? $dir : 'auto';
+    }
+
+    /**
      * Extra stylesheets configured by the application.
      *
      * @return list<array<string, string|bool>>
@@ -412,7 +494,7 @@ class Shell
      */
     public function withoutRequest(): self
     {
-        return new self($this->config, $this->pwax, $this->views, null);
+        return new self($this->config, $this->pwax, $this->views, null, $this->renderFunctions);
     }
 
     /**
@@ -497,8 +579,14 @@ class Shell
 
         $attributes = ['src' => $src];
 
-        if (isset($hashes[$package])) {
-            $attributes['integrity'] = $hashes[$package];
+        // By filename first, then by package. Vue ships two builds and Pwax serves either
+        // of them, so a map keyed only on the package name would hand the full build's
+        // hash to the runtime-only file — and the browser refuses a script whose digest
+        // does not match, which is the whole app failing to start.
+        $integrity = $hashes[$file] ?? $hashes[$package] ?? null;
+
+        if (is_string($integrity) && $integrity !== '') {
+            $attributes['integrity'] = $integrity;
             $attributes['crossorigin'] = 'anonymous';
         }
 

@@ -3,10 +3,12 @@
 namespace Mxent\Pwax\Compiler;
 
 use Illuminate\Contracts\Cache\Repository;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\View\Factory as ViewFactory;
 use Illuminate\Support\Facades\Log;
 use Mxent\Pwax\Contracts\Minifier;
 use Mxent\Pwax\Data\Component;
+use Mxent\Pwax\Events\ComponentCompiled;
 use Mxent\Pwax\Support\ComponentId;
 use Throwable;
 
@@ -66,6 +68,7 @@ class ComponentCompiler
         private readonly ?Repository $cache = null,
         private readonly bool $scopedStyles = true,
         private readonly ?int $ttl = null,
+        private readonly ?Dispatcher $events = null,
     ) {}
 
     /**
@@ -166,6 +169,17 @@ class ComponentCompiler
     }
 
     private function parse(string $view, string $contents): Component
+    {
+        $component = $this->build($view, $contents);
+
+        // After the work, and only for work that actually happened — a cache hit never
+        // reaches here. An application counting these is counting real compiles.
+        $this->events?->dispatch(new ComponentCompiled($view, $component));
+
+        return $component;
+    }
+
+    private function build(string $view, string $contents): Component
     {
         $template = $this->extractor->template($contents);
 

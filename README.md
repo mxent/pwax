@@ -64,6 +64,7 @@ table in JavaScript.
 - [Progressive web app](#progressive-web-app)
 - [Frontend assets](#frontend-assets)
 - [Performance](#performance)
+- [Precompiling templates](#precompiling-templates)
 - [Security](#security)
 - [Configuration reference](#configuration-reference)
 - [Artisan commands](#artisan-commands)
@@ -132,7 +133,7 @@ What you get for it:
 
 What it costs:
 
-- **About 50 kB gzipped**, over and above the runtime-only build, for Vue's compiler.
+- **20 kB gzipped**, over and above the runtime-only build, for Vue's compiler.
 - **`script-src 'unsafe-eval'`** in your Content-Security-Policy, because compiling a
   template in the browser means calling the `Function` constructor. See
   [Security](#security).
@@ -141,9 +142,13 @@ What it costs:
 
 That trade is a good one for internal tools, admin panels, dashboards, prototypes, and
 anything that has to be installable and work offline without a frontend pipeline. It is
-the wrong one if your policy forbids `unsafe-eval`, if you need every kilobyte on a
-first paint over a slow connection, or if your team already runs a frontend toolchain
-happily and wants what a build step buys.
+the wrong one if your team already runs a frontend toolchain happily and wants what a
+build step buys.
+
+If you have CI and the first two costs are the ones that bite — a policy that forbids
+`unsafe-eval`, or a first paint over a slow connection — you can buy them back without
+giving up the model. [`pwax:compile`](#precompiling-templates) compiles the templates
+ahead of time and is entirely opt-in; the default path stays exactly as described above.
 
 ## Requirements
 
@@ -343,7 +348,7 @@ outside the middleware pipeline — so the client handles them instead, by treat
 followed redirect that returns HTML as an instruction to reload.
 
 **One** reload for a `419`, per tab. The reload only helps if it returns a different
-document, and under `navigation_strategy => 'app-shell'` it does not: the worker answers
+document, and under `navigation_strategy => 'cache-first'` it does not: the worker answers
 that navigation from disk, so the same expired token comes back and the page would reload
 forever. A second `419` renders the error template instead.
 
@@ -684,7 +689,7 @@ hash:
     { "name": "assets", "installMode": "lazy", "kind": "asset",
       "urls": ["/images/logo.svg"], "patterns": ["^\\/images\\/.*$"] },
     { "name": "pages", "installMode": "prefetch", "kind": "page",
-      "strategy": "freshness", "credentials": "omit", "urls": ["/", "/about"] }
+      "strategy": "network-first", "credentials": "omit", "urls": ["/", "/about"] }
   ],
   "dataGroups": [],
   "hashTable": {
@@ -753,10 +758,10 @@ Requests to an API get their own groups, which are about responses rather than f
         [
             'name' => 'posts',
             'urls' => ['/api/posts', '/api/posts/**'],
-            'strategy' => 'freshness',   // or 'performance' to serve the cache first
+            'strategy' => 'network-first',   // or 'cache-first' to serve the cache first
             'max_entries' => 50,
-            'max_age' => 3600,           // seconds, for 'performance'
-            'timeout' => 3000,           // ms before 'freshness' falls back to the cache
+            'max_age' => 3600,           // seconds, for 'cache-first'
+            'timeout' => 3000,           // ms before 'network-first' falls back to the cache
         ],
     ],
 ],
@@ -961,7 +966,7 @@ every visitor's IP address to that CDN.
 To use a CDN anyway, with subresource integrity:
 
 ```php
-'assets' => ['strategy' => 'cdn'],
+'assets' => ['source' => 'cdn'],
 ```
 
 Pinia can be dropped if you do not use a store:
@@ -970,8 +975,9 @@ Pinia can be dropped if you do not use a store:
 'assets' => ['pinia' => false],
 ```
 
-> Pwax needs the **full** Vue build (`vue.global.prod.js`). The runtime-only build has no
-> template compiler and cannot render a template string.
+Pwax serves the **full** Vue build (`vue.global.prod.js`) by default, because it is the
+one that can compile a template string. The runtime-only build is also published, and is
+served instead when you opt into [precompiling](#precompiling-templates).
 
 To update Vue, see [`resources/vendor/README.md`](resources/vendor/README.md).
 
@@ -1026,6 +1032,75 @@ with no CPU cost and no risk of a regex-based minifier mangling valid JavaScript
 'minify' => ['enabled' => false],
 ```
 
+### Precompiling templates
+
+Optional, off by default, and the only part of Pwax that needs Node. It exists for teams
+who already run CI and would rather spend a build minute than the bytes and the CSP
+allowance.
+
+```bash
+npm install --save-dev @vue/compiler-dom@3.5.41   # the version Pwax vendors
+php artisan pwax:compile
+```
+
+```php
+'assets' => ['vue_build' => 'runtime'],
+```
+
+Every template is compiled to a Vue render function server-side and stored in
+`storage/app/pwax/render-functions.php` — a plain PHP array literal, so OPcache holds the
+parsed form and a lookup costs a hash-table hit. The functions are emitted **into the
+component module**, as source rather than as a string, so the module loader evaluates
+them and nothing calls the `Function` constructor.
+
+Three things follow:
+
+| | Default | `vue_build => 'runtime'` |
+| --- | --- | --- |
+| Vue | 60.7 kB gzipped | 40.6 kB gzipped |
+| `script-src` | `'self' blob: 'unsafe-eval'` | `'self' blob:` |
+| Per navigation | Template compiled in the browser | Render function already compiled |
+
+**Run it on every deploy that changes a component.** This is a real deploy step, not a
+nice-to-have — put it in the same script as `php artisan config:cache`:
+
+```bash
+php artisan pwax:compile
+```
+
+Never having compiled is not an outage: the store is empty, Pwax serves the full build,
+and the application behaves exactly as if you had not opted in. Compiling and then
+changing a component *is* one — the store is non-empty, so the runtime-only build is
+served, and the changed component has no render function under its new key. Both states
+are reported by `php artisan pwax:doctor`, the second as an error naming the components
+affected.
+
+**One constraint comes with it.** A template has to be the same for every visitor, because
+it is compiled once, at deploy time, with no request in flight. Keep controller data in
+`<script>` and out of `<template>`:
+
+```blade
+<template>
+    <h1>@{{ user.name }}</h1>          {{-- fine: Vue renders this in the browser --}}
+    <h1>{{ $user->name }}</h1>         {{-- not precompilable: differs per visitor --}}
+</template>
+
+<script>
+    export default {
+        data: () => ({ user: @json($user) }),
+    };
+</script>
+```
+
+That is the idiomatic split anyway, and `pwax:compile` names any view that breaks it —
+such a view raises on the undefined variable when rendered with no data, and the command
+reports it and exits non-zero rather than writing a store that looks complete.
+
+`php artisan pwax:compile --clear` removes the store and goes back to compiling in the
+browser. `assets.node` sets the Node binary if it is not on `PATH`;
+`assets.render_functions` moves the store, which is worth doing if you build the artifact
+in CI and ship it with the release.
+
 ## Security
 
 ### Component identifiers are signed
@@ -1050,22 +1125,23 @@ For defence in depth, restrict which views may be served at all:
 
 ### Content-Security-Policy
 
-Vue compiles templates in the browser with the `Function` constructor, so
-`script-src 'unsafe-eval'` is required. This is inherent to compiling templates on the
-client rather than at build time, and it is the one requirement Pwax cannot be configured
-out of. If your policy forbids `unsafe-eval`, this package is not usable in that
-environment — see [Is this the right tool?](#is-this-the-right-tool).
+By default Vue compiles templates in the browser with the `Function` constructor, so
+`script-src 'unsafe-eval'` is required. That is inherent to compiling templates on the
+client rather than at build time — but it is not inherent to the package:
+[`pwax:compile`](#precompiling-templates) moves the compilation to deploy time and lets
+you drop `'unsafe-eval'` entirely. If your policy forbids it, that is the configuration
+to use.
 
 Imported components are fetched from real same-origin URLs. A **page** component cannot
 be — it is rendered with controller data, so it ships its script inline and the runtime
-compiles it from a `blob:` URL. That needs `blob:` in `script-src`. (`data:` is never
-used: unlike `blob:`, a `data:` URL in `script-src` makes any injected string
-executable.)
+imports it from a `blob:` URL. That needs `blob:` in `script-src`, with or without
+precompiling. (`data:` is never used: unlike `blob:`, a `data:` URL in `script-src` makes
+any injected string executable.)
 
 ```
 Content-Security-Policy:
     default-src 'self';
-    script-src 'self' blob: 'unsafe-eval';
+    script-src 'self' blob: 'unsafe-eval';   /* drop 'unsafe-eval' with pwax:compile */
     style-src 'self' 'nonce-{NONCE}';
     connect-src 'self';
     img-src 'self' data:;
@@ -1162,10 +1238,10 @@ application looks healthy because everybody is being served yesterday's copy of 
 To prefer the stored copy even when the network is fine, make pages cache-first:
 
 ```php
-'service_worker' => ['pages' => ['strategy' => 'performance']],
+'service_worker' => ['pages' => ['strategy' => 'cache-first']],
 ```
 
-That is faster and can be a version behind. `'freshness'` — the default — goes to the
+That is faster and can be a version behind. `'network-first'` — the default — goes to the
 network but gives up on it after `pages.timeout` (2000 ms) and uses the copy.
 
 Two things this does not cover, and both are worth deciding about rather than discovering:
@@ -1217,7 +1293,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `components.allowed` | `[]` | Allowlist of servable view patterns |
 | `components.scoped_styles` | `true` | Honour `<style scoped>` |
 | `blade.*` | `null` | Override bundled partials |
-| `assets.strategy` | `'local'` | `local` or `cdn` |
+| `assets.source` | `'local'` | `local` or `cdn` (was `assets.strategy`) |
 | `assets.local_path` | `'/vendor/pwax'` | Where published assets live |
 | `assets.versions` | see config | Pinned Vue / Router / Pinia versions |
 | `assets.pinia` | `true` | Load Pinia at all |
@@ -1265,11 +1341,11 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `service_worker.pages.urls` | `[]` | Extra routes to precache, beyond the discovered ones |
 | `service_worker.pages.discover` | `true` | Find every route that renders a page, scoped by `components` |
 | `service_worker.pages.runtime` | `true` | Cache pages as they are visited — payload, and HTML when anonymous |
-| `service_worker.pages.strategy`, `.timeout` | `freshness`, `2000` | How a page payload is fetched |
+| `service_worker.pages.strategy`, `.timeout` | `network-first`, `2000` | How a page payload is fetched |
 | `service_worker.pages.credentials` | `'omit'` | Precache the guest rendering, not one visitor's |
 | `service_worker.pages.as_components` | `false` | Also precache page views as importable modules |
 | `service_worker.data_groups` | `[]` | API response caching |
-| `service_worker.navigation_strategy` | `network-first` | Or `app-shell` for zero-round-trip navigation |
+| `service_worker.navigation_strategy` | `network-first` | Or `cache-first` for zero-round-trip navigation |
 | `service_worker.navigation_urls` | see config | Which navigations the worker claims |
 | `service_worker.offline_url` | `null` | Page shown offline; defaults to the shell |
 | `service_worker.navigation_preload` | `true` | Start the network request before the worker boots |
@@ -1281,6 +1357,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `pwax:install` | Publish config and frontend assets (`--views`, `--force`, `--no-assets`) |
 | `pwax:component <name>` | Scaffold a component view (`--plain`, `--force`) |
 | `pwax:precache` | List everything available offline (`--verify`, `--json`) |
+| `pwax:compile` | Precompile templates to render functions — optional, needs Node (`--clear`, `--json`) |
 | `pwax:doctor` | Check for common misconfigurations |
 | `pwax:clear` | Flush compiled caches and the offline manifest |
 

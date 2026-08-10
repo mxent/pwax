@@ -11,6 +11,7 @@ class InstallCommand extends Command
         {--views : Also publish the Blade views}
         {--push : Also publish the worked push-endpoint Blade view (the controller is created by pwax:push-endpoint)}
         {--service-worker : Also publish the offline document the worker serves}
+        {--ai : Also publish the Pwax skill for AI assistants}
         {--no-assets : Skip publishing Vue, Vue Router and Pinia}';
 
     protected $description = 'Install Pwax: publish the config, the frontend assets and (optionally) the views';
@@ -37,6 +38,10 @@ class InstallCommand extends Command
 
         if ($this->option('service-worker')) {
             $this->publish('pwax-service-worker', $force);
+        }
+
+        if ($this->option('ai')) {
+            $this->publish('pwax-ai', $force);
         }
 
         $this->newLine();

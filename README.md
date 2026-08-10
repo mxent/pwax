@@ -177,6 +177,7 @@ php artisan pwax:install
 | --- | --- |
 | `--force` | Overwrite anything that already exists in the publish targets |
 | `--views` | Also publish the Blade views (the SPA shell, the loader and error templates) |
+| `--ai` | Also publish the Pwax skill for AI assistants |
 | `--no-assets` | Skip the framework copy; the application serves Vue itself |
 
 #### Publish tags
@@ -190,6 +191,8 @@ available at any time:
 | `pwax-assets` | Vue, Vue Router, Pinia into `public/vendor/pwax` |
 | `pwax-views` | The shell, loader, error and offline Blade views |
 | `pwax-service-worker` | The offline document the worker serves |
+| `pwax-ai` | The Pwax skill into `.ai/skills/pwax/SKILL.md` |
+| `pwax-push` | The annotated push-endpoint view `pwax:push-endpoint` emits |
 
 Then point a route at a component and create it:
 
@@ -1667,13 +1670,14 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 
 | Command | Purpose |
 | --- | --- |
-| `pwax:install` | Publish config and frontend assets (`--views`, `--push`, `--service-worker`, `--force`, `--no-assets`) |
+| `pwax:install` | Publish config and frontend assets (`--views`, `--push`, `--service-worker`, `--ai`, `--force`, `--no-assets`) |
 | `pwax:component <name>` | Scaffold a component view (`--plain`, `--force`, `--plugin`, `--directive`, `--middleware`) |
 | `pwax:precache` | List everything available offline (`--verify`, `--json`) — `--verify` renders every component and probes every page |
 | `pwax:compile` | Precompile templates to render functions — optional, needs Node (`--clear`, `--json`) |
 | `pwax:vapid` | Generate a VAPID key pair for Web Push (`--json`) |
 | `pwax:push-endpoint` | Scaffold the push-subscription controller (`--force`) |
 | `pwax:routes` | List every Pwax-served route (`--all` includes application routes) |
+| `pwax:skill` | Publish the Pwax skill for AI assistants (`--path`, `--force`) |
 | `pwax:doctor` | Check for common misconfigurations |
 | `pwax:clear` | Flush compiled caches and the offline manifest |
 

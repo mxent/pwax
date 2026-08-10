@@ -27,6 +27,7 @@ use Mxent\Pwax\Console\Commands\InstallCommand;
 use Mxent\Pwax\Console\Commands\PrecacheCommand;
 use Mxent\Pwax\Console\Commands\PushEndpointCommand;
 use Mxent\Pwax\Console\Commands\RoutesCommand;
+use Mxent\Pwax\Console\Commands\SkillCommand;
 use Mxent\Pwax\Console\Commands\VapidCommand;
 use Mxent\Pwax\Contracts\Minifier;
 use Mxent\Pwax\Http\Middleware\HandlePwaxRequests;
@@ -64,6 +65,7 @@ class PwaxServiceProvider extends ServiceProvider
                 VapidCommand::class,
                 PushEndpointCommand::class,
                 RoutesCommand::class,
+                SkillCommand::class,
             ]);
         }
     }
@@ -429,6 +431,14 @@ class PwaxServiceProvider extends ServiceProvider
         $this->publishes([
             __DIR__ . '/../resources/vendor' => public_path('vendor/pwax'),
         ], 'pwax-assets');
+
+        // The Pwax skill — the file an AI assistant reads before it touches a Pwax-using
+        // project. `pwax:install --ai` (or `vendor:publish --tag=pwax-ai`) drops it into
+        // `.ai/skills/pwax/` so a developer can point their assistant at it without
+        // remembering the path.
+        $this->publishes([
+            __DIR__ . '/../resources/ai/pwax-skill.md' => base_path('.ai/skills/pwax/SKILL.md'),
+        ], 'pwax-ai');
     }
 
     /**

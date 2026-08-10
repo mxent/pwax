@@ -9,6 +9,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`php artisan pwax:skill` and `pwax:install --ai`.** A Pwax-using project is the
+  one place an AI assistant is most likely to invent package conventions from
+  scratch, and the one place it is least likely to land. The package now ships a
+  skill file — `resources/ai/pwax-skill.md` — that describes the contract: where
+  pages live, what a component looks like, which config keys cross the runtime
+  boundary, which Blade directives collide with Vue, what the doctor warnings
+  mean. `pwax:skill` publishes it to `.ai/skills/pwax/SKILL.md` (the path Copilot,
+  Claude Code and Codex look at); `--path` overrides the target directory,
+  `--force` overwrites. `pwax:install --ai` publishes the same file as part of
+  install. `--all` is unnecessary: the publish tag is `pwax-ai` and is always
+  available.
+
+
+- **`AGENTS.md` at the package root.** The companion file for an AI assistant
+  that is *modifying* the package itself — every section is a decision the
+  maintainers have already had to make, from "the runtime config is data, not
+  code" to "a renamed config key goes through one major cycle of fallback and a
+  doctor warning". Reading it is the difference between an AI assistant that
+  produces work that needs one review and one that produces work that needs
+  five.
+
+
 - **`php artisan pwax:vapid`.** Web Push needed a VAPID key pair, and every guide to
   generating one reaches for a Node tool — which is the one thing an application built on
   this package is entitled not to have. This needs only `ext-openssl`, and prints both keys

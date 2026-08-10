@@ -114,10 +114,6 @@ export function createPageComponent({
     prefetcher = null,
     templates = {},
     progress = null,
-    // Kept for backwards compatibility. The default Vue transition has been replaced
-    // by the browser's View Transitions API (see `withViewTransition` below); the name
-    // remains so a published config that names a custom transition still parses.
-    transition = 'pwax-page',
 }) {
     let initialPayload = initial;
 

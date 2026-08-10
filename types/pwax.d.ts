@@ -49,7 +49,6 @@ declare namespace Pwax {
         push: { publicKey: string | null; endpoint: string | null };
         prefetch: { mode: string; delay: number } | false;
         progress: { delay: number; trickle: boolean } | false;
-        transition: string;
         templates: Record<string, string>;
     }
 

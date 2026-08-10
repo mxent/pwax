@@ -113,7 +113,7 @@ class NavigationFeedbackTest extends TestCase
         $this->assertFalse($this->runtimeConfig()['progress']);
     }
 
-    public function test_the_page_transition_is_named_and_timed(): void
+    public function test_the_page_transition_is_timed(): void
     {
         $html = (string) $this->get('/page')->getContent();
 
@@ -122,15 +122,12 @@ class NavigationFeedbackTest extends TestCase
         // pseudo-elements that the runtime now relies on are below.
         $this->assertStringContainsString('::view-transition-old(root)', $html);
         $this->assertStringContainsString('animation-duration: 150ms', $html);
-        $this->assertSame('pwax-page', $this->runtimeConfig()['transition']);
     }
 
-    public function test_a_custom_transition_can_be_named(): void
+    public function test_a_custom_transition_duration_is_honoured(): void
     {
-        config()->set('pwax.transition.name', 'slide');
         config()->set('pwax.transition.duration', 400);
 
-        $this->assertSame('slide', $this->runtimeConfig()['transition']);
         $this->assertStringContainsString(
             'animation-duration: 400ms',
             (string) $this->get('/page')->getContent()

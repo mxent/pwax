@@ -62,7 +62,6 @@ class Shell
             'home' => $this->pwax->homeUrl(),
             'progress' => $this->progress(),
             'prefetch' => $this->prefetch(),
-            'transition' => (string) $this->config->get('pwax.transition.name', 'pwax-page'),
             'plugins' => $this->extensions('pwax.vue.plugins'),
             'directives' => $this->extensions('pwax.vue.directives'),
             'middleware' => $this->extensions('pwax.vue.middleware'),

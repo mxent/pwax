@@ -474,7 +474,6 @@ renders its own skeleton into the mount element instead.
 ],
 
 'transition' => [
-    'name'     => 'pwax-page',   // any Vue transition name (kept for back-compat)
     'duration' => 150,           // cross-fade length in milliseconds
 ],
 ```

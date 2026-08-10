@@ -650,6 +650,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   other stored response. It was the one write path that checked neither the size nor the
   cap, so a single large declared file went to disk whatever it weighed.
 
+### Removed
+
+- **`pwax.transition.name` config key.** Page transitions are now driven by the browser's
+  View Transitions API (`document.startViewTransition`); the name of a Vue `<transition>`
+  is no longer meaningful and the field was already ignored by the runtime. The
+  `transition.duration` key stays, because it is the cross-fade length the CSS reads
+  directly. A published `config/pwax.php` that still names a transition will not error —
+  Laravel's config repository ignores keys it is not asked for.
+
 ### Internal
 
 - The test harness modelled the Cache API keyed on URL alone and ignored `Vary` entirely,

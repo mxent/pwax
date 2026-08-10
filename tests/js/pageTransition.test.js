@@ -273,7 +273,6 @@ describe('what stays on screen during a navigation', () => {
                 styles: noStyles,
                 config: {},
                 initial: null,
-                transition: 'my-fade',
             })
         );
 
@@ -303,7 +302,6 @@ describe('what stays on screen during a navigation', () => {
                 styles: noStyles,
                 config: {},
                 initial: null,
-                transition: 'my-fade',
             })
         );
 

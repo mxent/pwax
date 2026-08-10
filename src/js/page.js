@@ -5,6 +5,7 @@
  * and keep the loading and error states honest while that happens.
  */
 
+import { applyHead } from './head.js';
 import { HttpError } from './http.js';
 import { importInlineModule, importModule, styleMetadata, toComponentOptions } from './modules.js';
 
@@ -281,10 +282,14 @@ export function createPageComponent({
 
                     // Set here rather than only in the shell. A title rendered server-side
                     // is right for the page you landed on and wrong for every page you
-                    // navigate to afterwards, which is worse than never setting one.
+                    // navigate to afterwards, which is worse than never setting one — and
+                    // the same is true of everything else that describes the document, so
+                    // the description, canonical URL and Open Graph tags move with it.
                     if (payload.title) {
                         document.title = payload.title;
                     }
+
+                    applyHead(payload.head);
 
                     // Finished before the swap, not alongside it. The bar completing is
                     // what says the waiting is over; the fade is what says the page has
@@ -328,18 +333,22 @@ export function createPageComponent({
             },
 
             /**
-             * Tell a screen reader the page changed.
+             * Tell a screen reader the page changed, and put focus where it belongs.
              *
-             * A full navigation announces itself: the browser resets focus and reads the
-             * new document. A router does neither. It swaps the DOM under a user who is
-             * given no signal that anything happened, and leaves focus wherever the link
-             * they followed used to be — which, once that link is gone, is the top of the
-             * document with nothing selected.
+             * A full navigation does both on its own: the browser resets focus to the top
+             * of the new document and reads it. A router does neither. It swaps the DOM
+             * under a user who is given no signal that anything happened, and leaves focus
+             * wherever the link they followed used to be — which, once that link is gone,
+             * is the body, so the next Tab starts from the top of the page and the next
+             * screen-reader command reads from wherever the cursor was stranded.
              *
-             * Announcing the title is the smallest thing that restores the signal, and
-             * the title is already correct here because `mount()` has just set it.
-             * Nothing is announced for the first paint: the browser has just read the
-             * document, and repeating it is noise.
+             * Announcing the title restores the signal. Moving focus to the application
+             * root restores the position, which is what makes the skip link and ordinary
+             * Tab order behave the way they do on a server-rendered site.
+             *
+             * Neither happens on the first paint: the browser has just done both itself,
+             * and repeating them steals focus from a visitor who has already started
+             * interacting.
              */
             announce() {
                 if (!this.announced) {
@@ -357,6 +366,31 @@ export function createPageComponent({
                     announcer.textContent = '';
                     announcer.textContent = document.title;
                 }
+
+                this.refocus();
+            },
+
+            /**
+             * Move focus to the top of the newly rendered page.
+             *
+             * The mount element carries `tabindex="-1"` so it can receive focus without
+             * entering the tab order. `preventScroll` because the router's own
+             * `scrollBehavior` has already decided where this navigation should land —
+             * restoring a saved position, or jumping to a hash — and focusing an element
+             * would otherwise scroll it into view and overrule that.
+             *
+             * A page that wants focus somewhere more specific can take it in `mounted()`;
+             * this runs first.
+             */
+            refocus() {
+                // Only when nothing has claimed focus. The new page's `mounted()` has
+                // already run by this point, so a page that focused a search field or a
+                // first input meant to — taking it back would be worse than not moving.
+                if (document.activeElement && document.activeElement !== document.body) {
+                    return;
+                }
+
+                document.getElementById(config.mount || 'pwax')?.focus?.({ preventScroll: true });
             },
 
             /**

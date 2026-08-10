@@ -326,6 +326,22 @@ class Shell
     }
 
     /**
+     * The document's text direction, for `<html dir>`.
+     *
+     * Taken from `pwax.manifest.dir`, which the web app manifest already needs, so an
+     * application declares this once rather than in two places that can disagree. `auto`
+     * is the default and usually the right answer: the browser reads the first strong
+     * character and decides, which handles a mixed-locale application without a config
+     * change per locale.
+     */
+    public function direction(): string
+    {
+        $dir = strtolower(trim((string) $this->config->get('pwax.manifest.dir', 'auto')));
+
+        return in_array($dir, ['ltr', 'rtl', 'auto'], true) ? $dir : 'auto';
+    }
+
+    /**
      * Extra stylesheets configured by the application.
      *
      * @return list<array<string, string|bool>>

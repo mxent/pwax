@@ -3,7 +3,7 @@
     uses it, but it is passed through deliberately: if you publish this view, it is what
     you would read to emit per-page <title> or Open Graph tags.
 --}}
-@props(['shell', 'component' => null, 'title' => null])
+@props(['shell', 'component' => null, 'head' => null, 'title' => null])
 @php
     /** @var \Mxent\Pwax\Pwa\WebManifest $pwaxManifest */
     $pwaxManifest = app(\Mxent\Pwax\Pwa\WebManifest::class);
@@ -47,8 +47,22 @@
     $progressHeight = (int) config('pwax.progress.height', 3);
     $transitionMs = (int) config('pwax.transition.duration', 150);
 
-    $documentTitle = $title ?: (config('pwax.head.title') ?: config('pwax.manifest.name'));
-    $description = config('pwax.head.description') ?: config('pwax.manifest.description');
+    /**
+     * The page's metadata, already merged with the application's defaults.
+     *
+     * Supplied by `ComponentResponse`, which resolves it once and puts the same object in
+     * the payload — so a reload and a client-side navigation cannot end up describing the
+     * document differently. Resolved here only for the callers that render this view
+     * without a page at all: the offline shell, and the manifest builder.
+     *
+     * @var \Mxent\Pwax\Data\Head $pwaxHead
+     */
+    $pwaxHead = $head ?? app(\Mxent\Pwax\Pwa\HeadMeta::class)->resolve(
+        $title ? new \Mxent\Pwax\Data\Head(title: $title) : null
+    );
+
+    $documentTitle = $pwaxHead->title;
+    $description = $pwaxHead->description;
 @endphp
 {{--
     Charset, title, base, viewport, then the metadata, then the icons and the manifest,
@@ -77,6 +91,20 @@
 @if ($description)
     <meta name="description" content="{{ $description }}">
 @endif
+
+@if ($pwaxHead->canonical)
+    <link rel="canonical" href="{{ $pwaxHead->canonical }}">
+@endif
+
+{{--
+    The page's own tags, plus the Open Graph and Twitter ones derived from its title,
+    description and canonical URL. `data-pwax-head` marks them as this package's to
+    manage: the runtime replaces exactly these on a client-side navigation and leaves
+    anything the application put in `@stack('pwax-head')` alone.
+--}}
+@foreach ($pwaxHead->meta as $pwaxMeta)
+    <meta {{ $pwaxMeta['attribute'] }}="{{ $pwaxMeta['key'] }}" content="{{ $pwaxMeta['content'] }}" data-pwax-head>
+@endforeach
 
 {{--
     Absent on the offline shell, which is rendered with no session on purpose so that
@@ -390,6 +418,27 @@
         clip-path: inset(50%);
         white-space: nowrap;
         border: 0;
+    }
+
+    /* Off-screen until focused, then placed over the top-left corner. `:focus`, not
+       `:focus-visible` — a skip link is reached by tabbing and by nothing else, so there
+       is no case where it has focus and should stay hidden. */
+    .pwax-skip-link {
+        position: absolute;
+        left: -9999px;
+        top: 0;
+        z-index: 2147483001;
+        padding: 0.6rem 1rem;
+        background: {{ $background }};
+        color: inherit;
+        font: inherit;
+        text-decoration: underline;
+        border: 1px solid currentColor;
+        border-radius: 0 0 4px 0;
+    }
+
+    .pwax-skip-link:focus {
+        left: 0;
     }
 </style>
 

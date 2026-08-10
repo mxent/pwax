@@ -6,9 +6,11 @@ use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as Config;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\View\Factory as ViewFactory;
 use Illuminate\Support\Facades\Log;
+use Mxent\Pwax\Events\ManifestBuilt;
 use Mxent\Pwax\Pwax;
 use Mxent\Pwax\Support\Shell;
 use Throwable;
@@ -83,6 +85,7 @@ class AssetManifest
         private readonly ViewFactory $views,
         private readonly PublicAssets $assets,
         private readonly ?CacheRepository $cache = null,
+        private readonly ?Dispatcher $events = null,
     ) {}
 
     /**
@@ -291,6 +294,10 @@ class AssetManifest
             $manifest,
             JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
         )), 0, 16);
+
+        // On a real build, so roughly once per deploy rather than once per request. The
+        // memo in `get()` does not reach here.
+        $this->events?->dispatch(new ManifestBuilt($manifest));
 
         return $manifest;
     }

@@ -2,13 +2,14 @@
 
 namespace Mxent\Pwax\Http\Responses;
 
-use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\Support\Responsable;
 use Illuminate\Contracts\View\Factory as ViewFactory;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Mxent\Pwax\Data\Component;
+use Mxent\Pwax\Data\Head;
+use Mxent\Pwax\Pwa\HeadMeta;
 use Mxent\Pwax\Pwax;
 
 /**
@@ -33,6 +34,13 @@ class ComponentResponse implements Responsable
     private int $status = 200;
 
     private ?string $title = null;
+
+    private ?string $description = null;
+
+    private ?string $canonical = null;
+
+    /** @var list<array{attribute: string, key: string, content: string}> */
+    private array $meta = [];
 
     private bool $storable = true;
 
@@ -110,6 +118,96 @@ class ComponentResponse implements Responsable
     }
 
     /**
+     * This page's description, for `<meta name="description">` and Open Graph.
+     *
+     *     Route::get('/about', fn () => pwaxRender('pages.about')
+     *         ->title('About us')
+     *         ->description('Who we are and what we build.'));
+     */
+    public function description(string $description): self
+    {
+        $this->description = $description;
+
+        return $this;
+    }
+
+    /**
+     * The canonical URL for this page.
+     *
+     * Worth setting on any route reachable at more than one URL — a paginated list, a
+     * filtered index, anything that takes a tracking parameter. Nothing is emitted unless
+     * you say so: guessing from the request would make every query string its own
+     * canonical, which is the problem rather than the fix.
+     */
+    public function canonical(string $url): self
+    {
+        $this->canonical = $url;
+
+        return $this;
+    }
+
+    /**
+     * Add a `<meta name="…">` tag, or several.
+     *
+     *     ->meta('robots', 'noindex')
+     *     ->meta(['robots' => 'noindex', 'author' => 'Ada Lovelace'])
+     *
+     * @param  string|array<string, string|null>  $name
+     */
+    public function meta(string|array $name, ?string $content = null): self
+    {
+        return $this->tag('name', is_array($name) ? $name : [$name => $content]);
+    }
+
+    /**
+     * Add a `<meta property="…">` tag, or several — Open Graph and friends.
+     *
+     * `og:title`, `og:description`, `og:url`, `og:type` and `og:site_name` are derived for
+     * you from the title, description and canonical URL. Set one here to override it, or
+     * use this for the ones that cannot be derived:
+     *
+     *     ->property('og:image', asset('images/og.png'))
+     *
+     * @param  string|array<string, string|null>  $property
+     */
+    public function property(string|array $property, ?string $content = null): self
+    {
+        return $this->tag('property', is_array($property) ? $property : [$property => $content]);
+    }
+
+    /**
+     * @param  array<string, string|null>  $tags
+     */
+    private function tag(string $attribute, array $tags): self
+    {
+        foreach ($tags as $key => $content) {
+            if ($content === null || $content === '') {
+                continue;
+            }
+
+            $this->meta[] = ['attribute' => $attribute, 'key' => (string) $key, 'content' => $content];
+        }
+
+        return $this;
+    }
+
+    /**
+     * This page's metadata, defaults filled in and Open Graph derived.
+     *
+     * The same object the shell view renders and the payload carries, so a reload and a
+     * client-side navigation cannot disagree about what the document says it is.
+     */
+    public function head(): Head
+    {
+        return app(HeadMeta::class)->resolve(new Head(
+            title: $this->title,
+            description: $this->description,
+            canonical: $this->canonical,
+            meta: $this->meta,
+        ));
+    }
+
+    /**
      * Keep this page out of the service worker's cache entirely.
      *
      * The worker stores pages as they are visited so that everywhere you have been works
@@ -177,9 +275,18 @@ class ComponentResponse implements Responsable
     private function json(Component $component): JsonResponse
     {
         $payload = $this->pwax->payload($component, addressable: false);
+        $head = $this->head();
 
         if ($this->title !== null) {
-            $payload['title'] = $this->documentTitle();
+            $payload['title'] = $head->title;
+        }
+
+        // Sent whenever this page declared anything of its own. A client-side navigation
+        // replaces the document's contents without replacing its head, so whatever the
+        // previous page said about itself stays in the DOM until something says otherwise
+        // — the description, the canonical URL and every Open Graph tag included.
+        if ($this->description !== null || $this->canonical !== null || $this->meta !== []) {
+            $payload['head'] = $head->toArray();
         }
 
         $response = new JsonResponse($payload, $this->status, $this->headers);
@@ -207,6 +314,8 @@ class ComponentResponse implements Responsable
 
     private function shell(Component $component, Request $request): Response
     {
+        $head = $this->head();
+
         // Everything the first render needs, inline. There is no follow-up request for
         // the page component at all — not even a preloaded one.
         $payload = [
@@ -223,7 +332,10 @@ class ComponentResponse implements Responsable
                 JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
             ),
             'pwaxComponent' => $component,
-            'pwaxTitle' => $this->documentTitle(),
+            'pwaxHead' => $head,
+            // Still passed, and still the resolved title. A shell published before `$pwaxHead`
+            // existed reads this one, and there is no reason to break it.
+            'pwaxTitle' => $head->title,
         ])->render();
 
         $response = new Response($html, $this->status, $this->headers);
@@ -236,29 +348,5 @@ class ComponentResponse implements Responsable
         }
 
         return $response;
-    }
-
-    /**
-     * This page's title, with `pwax.head.title_template` applied.
-     *
-     * The template is deliberately skipped when the page set no title of its own:
-     * ':title · Acme' against a fallback of 'Acme' would render 'Acme · Acme'.
-     */
-    private function documentTitle(): ?string
-    {
-        /** @var Config $config */
-        $config = app(Config::class);
-
-        if ($this->title === null) {
-            $fallback = $config->get('pwax.head.title') ?? $config->get('pwax.manifest.name');
-
-            return is_string($fallback) && $fallback !== '' ? $fallback : null;
-        }
-
-        $template = $config->get('pwax.head.title_template');
-
-        return is_string($template) && str_contains($template, ':title')
-            ? str_replace(':title', $this->title, $template)
-            : $this->title;
     }
 }

@@ -7,6 +7,41 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Per-page document metadata.** `->description()`, `->canonical()`, `->meta()` and
+  `->property()` on the response, alongside the existing `->title()`. Open Graph and
+  Twitter card tags are derived from the title, description and canonical URL — nothing is
+  invented, a tag is emitted only where a value already exists, and a page that set one by
+  hand keeps its own. Turn derivation off with `head.open_graph => false`.
+
+  All of it travels in the payload as well as the document, so a client-side navigation
+  updates it. A browser replaces the head on a real navigation and a router does not: a
+  title that moves with the route and a description that stays behind is worse than
+  setting neither, because the wrong answer outlives the missing one. Only tags Pwax
+  emitted are replaced — they carry `data-pwax-head`, so anything in
+  `@stack('pwax-head')` is left alone.
+
+  This does not make an application crawlable. Page content is still compiled in the
+  browser from a JSON island; these tags are for the crawlers that run JavaScript, and for
+  link unfurling.
+- **`<html dir>`**, from `pwax.manifest.dir` and defaulting to `auto`. The language was
+  declared and the layout still ran left-to-right, which is half of what a right-to-left
+  locale needs.
+- **A skip link, and focus moves on navigation.** The announcer restored the screen-reader
+  signal a router loses; this restores the other half. Focus moves to the application root
+  on each navigation — unless the new page claimed it in `mounted()`, which is a page
+  saying it meant to — so Tab order and the skip link behave the way they do on a
+  server-rendered site.
+- **A `<noscript>` that says what is wrong.** The application renders in the browser, so
+  there is nothing to progressively enhance; saying so beats a spinner that never stops.
+  The preloader is hidden alongside it.
+- **`php artisan about` reports Pwax**: version, whether the worker is on, the asset
+  strategy, the component cache store and the minifier.
+- **Events.** `ComponentCompiled` fires on a real compile — never on a cache hit, so it
+  counts what the compile cache is actually missing. `ManifestBuilt` fires on a real
+  manifest build, roughly once per deploy, and carries the hash and the warning list.
+
 ### Security
 
 - **Caches are shared across visitors, and the package now says so plainly.** 2.x named

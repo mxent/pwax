@@ -2,12 +2,15 @@
 
 namespace Mxent\Pwax;
 
+use Composer\InstalledVersions;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Config\Repository as Config;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Http\Kernel as HttpKernelContract;
 use Illuminate\Contracts\View\Factory as ViewFactory;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Foundation\Console\AboutCommand;
 use Illuminate\Foundation\Http\Kernel as HttpKernel;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Blade;
@@ -28,6 +31,7 @@ use Mxent\Pwax\Minification\MatthiasMullieMinifier;
 use Mxent\Pwax\Minification\NullMinifier;
 use Mxent\Pwax\Pwa\AssetManifest;
 use Mxent\Pwax\Pwa\ComponentRegistry;
+use Mxent\Pwax\Pwa\HeadMeta;
 use Mxent\Pwax\Pwa\PageRegistry;
 use Mxent\Pwax\Pwa\PublicAssets;
 use Mxent\Pwax\Pwa\WebManifest;
@@ -62,6 +66,48 @@ class PwaxServiceProvider extends ServiceProvider
         $this->bootMiddleware();
         $this->bootRoutes();
         $this->bootPublishing();
+        $this->bootAbout();
+    }
+
+    /**
+     * Report into `php artisan about`.
+     *
+     * The three questions someone debugging asks first — is the worker on, which build is
+     * the manifest at, and where are components cached — answered without opening config.
+     * Resolved lazily inside the closure: `about` is the only command that calls it, and
+     * building the asset manifest walks `public/` and every view root.
+     */
+    protected function bootAbout(): void
+    {
+        if (! class_exists(AboutCommand::class)) {
+            return;
+        }
+
+        AboutCommand::add('Pwax', fn (): array => [
+            'Version' => InstalledVersions::isInstalled('mxent/pwax')
+                ? (InstalledVersions::getPrettyVersion('mxent/pwax') ?? 'dev')
+                : 'dev',
+            'Service Worker' => $this->config()->get('pwax.service_worker.enabled')
+                ? '<fg=green;options=bold>ENABLED</>'
+                : '<fg=yellow;options=bold>DISABLED</>',
+            'Assets' => (string) $this->config()->get('pwax.assets.strategy', 'local'),
+            'Component Cache' => $this->config()->get('pwax.cache.components', true)
+                ? (string) ($this->config()->get('pwax.cache.store') ?: 'default')
+                : '<fg=yellow;options=bold>OFF</>',
+            'Minification' => match ($this->config()->get('pwax.minify.enabled')) {
+                true => '<fg=green;options=bold>ON</>',
+                false => '<fg=yellow;options=bold>OFF</>',
+                default => 'production only',
+            },
+        ]);
+    }
+
+    private function config(): Config
+    {
+        /** @var Config $config */
+        $config = $this->app->make(Config::class);
+
+        return $config;
     }
 
     protected function registerCompiler(): void
@@ -116,6 +162,7 @@ class PwaxServiceProvider extends ServiceProvider
                 $cache,
                 (bool) $config->get('pwax.components.scoped_styles', true),
                 $ttl === null ? null : max(1, (int) $ttl),
+                $app->bound(Dispatcher::class) ? $app->make(Dispatcher::class) : null,
             );
         });
     }
@@ -161,6 +208,10 @@ class PwaxServiceProvider extends ServiceProvider
             $app,
         ));
 
+        $this->app->singleton(HeadMeta::class, fn ($app): HeadMeta => new HeadMeta(
+            $app->make(Config::class),
+        ));
+
         $this->app->singleton(ComponentRegistry::class, fn ($app): ComponentRegistry => new ComponentRegistry(
             $app->make(ViewFactory::class),
             $app->make(Config::class),
@@ -197,6 +248,7 @@ class PwaxServiceProvider extends ServiceProvider
                 $app->make(ViewFactory::class),
                 $app->make(PublicAssets::class),
                 $this->cacheStore($app, (string) $config->get('pwax.cache.store', '') ?: null),
+                $app->bound(Dispatcher::class) ? $app->make(Dispatcher::class) : null,
             );
         });
     }

@@ -451,6 +451,31 @@ return [
     |                  a subdirectory install is already handled by the runtime.
     | color_scheme     <meta name="color-scheme">, e.g. 'light dark'.
     | theme_color_dark Theme colour for a dark colour scheme, if it differs.
+    | open_graph       Derive Open Graph and Twitter card tags from the title, the
+    |                  description and the canonical URL. Nothing is invented: a tag is
+    |                  emitted only where a value for it already exists, and a page that
+    |                  set one by hand keeps its own.
+    | open_graph_type  `og:type`. 'website' unless your app is something else.
+    | twitter_card     `twitter:card`. 'summary_large_image' if you set an og:image
+    |                  wide enough to deserve it.
+    |
+    | Per page, on the response:
+    |
+    |     pwaxRender('pages.post', [...])
+    |         ->title($post->title)
+    |         ->description($post->excerpt)
+    |         ->canonical(route('posts.show', $post))
+    |         ->property('og:image', $post->image_url)
+    |         ->meta('robots', $post->draft ? 'noindex' : null);
+    |
+    | Those travel in the payload as well as the document, so a client-side navigation
+    | updates them too. A browser replaces the head on a real navigation and a router
+    | does not — a title that moves with the route and a description that does not is
+    | worse than setting neither.
+    |
+    | This does NOT make the application crawlable. Page content is compiled in the
+    | browser from a JSON island; a crawler that does not run JavaScript sees the shell.
+    | These tags are for the ones that do, and for link unfurling.
     |
     */
 
@@ -462,6 +487,9 @@ return [
         'base' => null,
         'color_scheme' => null,
         'theme_color_dark' => null,
+        'open_graph' => true,
+        'open_graph_type' => 'website',
+        'twitter_card' => 'summary',
     ],
 
     'manifest' => [

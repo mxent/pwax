@@ -395,6 +395,34 @@ return [
     |
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Prefetching
+    |--------------------------------------------------------------------------
+    |
+    | Fetch a page just before it is asked for. A visitor tells you where they are going
+    | before they go — the pointer lands on a link a few hundred milliseconds before the
+    | click, and a keyboard user focuses it first — and spending that time on the request
+    | is what makes a navigation feel instant. It is the same request, sent earlier.
+    |
+    | 'hover'  fetch on pointer or focus, after `delay` ms of intent (default)
+    | false    off
+    |
+    | Payloads are held in memory only, never written to disk, capped at eight and dropped
+    | after thirty seconds. A page payload can carry a signed-in visitor's data, so a
+    | prefetch is a head start rather than a cache — the service worker is what stores
+    | pages, with rules about it.
+    |
+    | Costs a request for a link somebody hovers and does not click. Turn it off for an
+    | application with expensive pages or metered users.
+    |
+    */
+
+    'prefetch' => [
+        'mode' => 'hover',
+        'delay' => 65,
+    ],
+
     'transition' => [
         'name' => 'pwax-page',
         'duration' => 150,

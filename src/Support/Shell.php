@@ -60,6 +60,7 @@ class Shell
             'csrf' => $this->csrfToken(),
             'home' => $this->pwax->homeUrl(),
             'progress' => $this->progress(),
+            'prefetch' => $this->prefetch(),
             'transition' => (string) $this->config->get('pwax.transition.name', 'pwax-page'),
             'plugins' => $this->extensions('pwax.plugins'),
             'directives' => $this->extensions('pwax.directives'),
@@ -86,6 +87,25 @@ class Shell
         return [
             'delay' => (int) $this->config->get('pwax.progress.delay', 250),
             'trickle' => (bool) $this->config->get('pwax.progress.trickle', true),
+        ];
+    }
+
+    /**
+     * Prefetching settings, or `false` when it is switched off.
+     *
+     * @return array{mode: string, delay: int}|false
+     */
+    private function prefetch(): array|false
+    {
+        $mode = $this->config->get('pwax.prefetch.mode', 'hover');
+
+        if ($mode === false || $mode === 'off' || $mode === null) {
+            return false;
+        }
+
+        return [
+            'mode' => (string) $mode,
+            'delay' => (int) $this->config->get('pwax.prefetch.delay', 65),
         ];
     }
 

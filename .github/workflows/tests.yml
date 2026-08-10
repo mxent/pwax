@@ -84,6 +84,9 @@ jobs:
       - name: Format check
         run: npm run format:check
 
+      - name: Type definitions
+        run: npm run types
+
       - name: Unit tests
         run: npm test
 

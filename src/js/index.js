@@ -14,6 +14,7 @@ import { createBadgeApi, createInstallApi, createStorageApi, watchInstall } from
 import { importModule } from './modules.js';
 import { createPushApi } from './push.js';
 import { createPageComponent } from './page.js';
+import { createPrefetcher } from './prefetch.js';
 import { createProgress } from './progress.js';
 import { createRouter } from './router.js';
 import { createServiceWorkerApi, registerServiceWorker } from './serviceWorker.js';
@@ -33,6 +34,10 @@ async function boot() {
 
     const http = createHttp(config);
     const styles = createStyleManager(document);
+    const prefetcher = createPrefetcher(
+        http,
+        config.prefetch === false ? { mode: false } : config.prefetch || {}
+    );
     const loader = createComponentLoader({ styles, nonce: config.nonce });
 
     // Null when the application turned it off, and every call site uses `?.` — a disabled
@@ -58,6 +63,7 @@ async function boot() {
         storage: createStorageApi(),
         push: createPushApi(config.push || {}, http),
         sync: createSyncApi(config, http),
+        prefetch: prefetcher.prefetch,
         // Exposed so an application can wrap its own long-running work — a form
         // submission, a report — in the same indicator its navigations use.
         progress: progressBar,
@@ -90,6 +96,7 @@ async function boot() {
         config,
         initial,
         middleware: middlewareReady,
+        prefetcher,
         templates: config.templates || {},
         progress: progressBar,
         transition: config.transition || 'pwax-page',

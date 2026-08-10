@@ -9,6 +9,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Prefetch on intent.** A visitor says where they are going before they go: the pointer
+  lands on a link a few hundred milliseconds before the click, and a keyboard user focuses
+  it first. That time now goes on the request, so the navigation feels instant — the same
+  request, sent earlier. On by default, `prefetch.mode => false` to turn it off, and
+  `data-pwax-prefetch="off"` on a link that should not be.
+
+  Bounded rather than cached: payloads stay in memory, capped at eight, dropped after
+  thirty seconds and given up when taken. A page payload can carry a signed-in visitor's
+  data, and storing pages is the service worker's job — with rules about it.
+- **TypeScript definitions**, hand-written at `types/pwax.d.ts` and shipped in the Composer
+  package, covering the whole `window.pwax` surface and every `pwax:` event. Checked by
+  `npm run types` in CI, because shipping types nobody verifies is how they go wrong.
 - **Install prompt, badge and storage.** `pwax.install.prompt()` shows the browser's
   install prompt at a moment the application chooses; `beforeinstallprompt` is captured
   before the runtime does anything else, because it fires once, early, and is never

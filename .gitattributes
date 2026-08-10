@@ -1,8 +1,8 @@
 * text=auto eol=lf
 
 # Keep `composer require` downloads small: exclude development-only files from
-# the distributed package. `dist/` and `resources/` are NOT excluded — they are
-# what the package ships.
+# the distributed package. `dist/`, `resources/` and `types/` are NOT excluded —
+# they are what the package ships.
 /.github            export-ignore
 /tests              export-ignore
 /workbench          export-ignore

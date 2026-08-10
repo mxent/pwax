@@ -78,6 +78,7 @@ export function createPageComponent({
     // A map, or a promise of one. `index.js` hands over the promise so that resolving
     // module middleware does not hold up the first paint; `await` accepts both.
     middleware = {},
+    prefetcher = null,
     templates = {},
     progress = null,
     transition = 'pwax-page',
@@ -186,7 +187,14 @@ export function createPageComponent({
                 this.controller = controller;
 
                 try {
-                    const payload = await http.json(path, { signal: controller.signal });
+                    // Taken if a pointer or a focus already started this request. Same
+                    // request, sent earlier — so the visitor waits for whatever is left
+                    // of it rather than for all of it.
+                    const started = prefetcher?.take(path);
+
+                    const payload = started
+                        ? await started
+                        : await http.json(path, { signal: controller.signal });
 
                     if (controller.signal.aborted) {
                         return;

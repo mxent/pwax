@@ -2,7 +2,7 @@
     "name": "@mxent/pwax",
     "version": "4.0.0",
     "private": true,
-    "description": "Client runtime for the mxent/pwax Laravel package. Built to dist/pwax.js and shipped inside the Composer package — npm install is only needed to contribute.",
+    "description": "Client runtime for the mxent/pwax Laravel package. Built to dist/pwax.js and shipped inside the Composer package \u2014 npm install is only needed to contribute.",
     "license": "MIT",
     "type": "module",
     "scripts": {
@@ -13,7 +13,8 @@
         "lint": "eslint src/js tests/js build.js",
         "lint:fix": "eslint --fix src/js tests/js build.js",
         "format": "prettier --write \"src/js/**/*.js\" \"tests/js/**/*.js\" build.js",
-        "format:check": "prettier --check \"src/js/**/*.js\" \"tests/js/**/*.js\" build.js"
+        "format:check": "prettier --check \"src/js/**/*.js\" \"tests/js/**/*.js\" build.js",
+        "types": "tsc --noEmit --strict --lib es2022,dom types/pwax.d.ts"
     },
     "devDependencies": {
         "esbuild": "^0.25.0",
@@ -21,9 +22,11 @@
         "globals": "^15.12.0",
         "jsdom": "^25.0.1",
         "prettier": "^3.3.3",
+        "typescript": "^7.0.2",
         "vitest": "^4.1.10"
     },
     "engines": {
         "node": ">=20"
-    }
+    },
+    "types": "types/pwax.d.ts"
 }

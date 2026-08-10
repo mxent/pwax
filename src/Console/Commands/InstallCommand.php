@@ -9,7 +9,7 @@ class InstallCommand extends Command
     protected $signature = 'pwax:install
         {--force : Overwrite any existing files}
         {--views : Also publish the Blade views}
-        {--push : Also publish the push-endpoint controller and Blade view}
+        {--push : Also publish the worked push-endpoint Blade view (the controller is created by pwax:push-endpoint)}
         {--service-worker : Also publish the offline document the worker serves}
         {--no-assets : Skip publishing Vue, Vue Router and Pinia}';
 

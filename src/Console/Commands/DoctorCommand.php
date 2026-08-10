@@ -5,6 +5,7 @@ namespace Mxent\Pwax\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 use Mxent\Pwax\Pwa\AssetManifest;
 use Mxent\Pwax\Pwa\ComponentRegistry;
 use Mxent\Pwax\Pwa\Strategy;
@@ -55,6 +56,10 @@ class DoctorCommand extends Command
         $this->checkServiceWorker($config);
         $this->checkPrecache($config);
         $this->checkRouting($config);
+        $this->checkExtend($config);
+        $this->checkPush($config);
+        $this->checkCacheStore($config);
+        $this->checkServiceWorkerPath($config);
 
         $this->newLine();
 
@@ -898,6 +903,226 @@ class DoctorCommand extends Command
                 . 'Turn it off unless your host cannot rewrite unknown paths to index.php.'
             );
         }
+    }
+
+    /**
+     * Every `service_worker.extend` entry resolves to something the worker can read.
+     *
+     * An entry that misses is not fatal — `ServiceWorker::build()` writes a comment in
+     * its place rather than bringing the whole offline application down — so the only
+     * way a typo surfaces is the developer spotting the comment in a checked-in
+     * `dist/pwax.js`. That, and the runtime calls a handler that never got registered.
+     */
+    private function checkExtend(Config $config): void
+    {
+        $entries = (array) $config->get('pwax.service_worker.extend', []);
+
+        if ($entries === []) {
+            return;
+        }
+
+        $views = $this->laravel->make('view');
+
+        $broken = 0;
+
+        foreach ($entries as $index => $entry) {
+            if (! is_string($entry) || $entry === '') {
+                continue;
+            }
+
+            // Views are resolved by the View factory; raw files are read from disk.
+            if ($views->exists($entry)) {
+                continue;
+            }
+
+            if (is_file($entry) && is_readable($entry)) {
+                continue;
+            }
+
+            $this->fail_(sprintf(
+                'service_worker.extend entry "%s" resolves to neither a view nor a readable file. '
+                . 'The worker will skip it.',
+                $entry
+            ));
+            $broken++;
+        }
+
+        if ($broken === 0) {
+            $this->ok(sprintf('All %d service_worker.extend entry(ies) resolve', count($entries)));
+        }
+    }
+
+    /**
+     * VAPID keys are well-formed, and `push.endpoint` is reachable when set.
+     *
+     * The Push API rejects a subscription whose public key will not decode to a valid
+     * uncompressed point, and rejects a server whose private key will not match it. A
+     * typo in either is a 401 from the push service that is hard to tell from "the
+     * service is having a bad day". Both keys are validated here at the same shape
+     * `pwax:vapid` emits.
+     */
+    private function checkPush(Config $config): void
+    {
+        $publicKey = (string) $config->get('pwax.push.public_key', '');
+        $privateKey = (string) $config->get('pwax.push.private_key', '');
+        $endpoint = (string) $config->get('pwax.push.endpoint', '');
+
+        if ($publicKey === '' && $privateKey === '' && $endpoint === '') {
+            return;
+        }
+
+        if ($publicKey !== '') {
+            $bytes = self::base64urlDecode($publicKey);
+
+            $this->assert(
+                is_string($bytes) && strlen($bytes) === 65 && $bytes[0] === "\x04",
+                'Push public key is a valid uncompressed P-256 point',
+                'pwax.push.public_key must be base64url-encoded and decode to 65 bytes (an '
+                . 'uncompressed P-256 point, starting with 0x04). Run `php artisan pwax:vapid` '
+                . 'to generate a fresh pair.'
+            );
+        }
+
+        if ($privateKey !== '') {
+            $bytes = self::base64urlDecode($privateKey);
+
+            $this->assert(
+                is_string($bytes) && strlen($bytes) === 32,
+                'Push private key is a 32-byte scalar',
+                'pwax.push.private_key must be base64url-encoded and decode to 32 bytes. Run '
+                . '`php artisan pwax:vapid` to generate a fresh pair.'
+            );
+        }
+
+        if ($publicKey !== '' && $endpoint === '') {
+            $this->warn_(
+                'pwax.push.public_key is set but pwax.push.endpoint is not. Subscriptions will '
+                . 'have nowhere to deliver to — every push will fail server-side.'
+            );
+        }
+
+        if ($endpoint !== '') {
+            $this->probe($endpoint, 'Push subscription endpoint is reachable');
+        }
+    }
+
+    /**
+     * The configured cache store is alive enough to round-trip a value.
+     *
+     * A store that throws on every read makes every render hit the Blade compiler, the
+     * CSS scoper and the inline-block extractor. The `pwax:doctor` pass is the only time
+     * such a misconfiguration is reported in a place the developer is looking.
+     */
+    private function checkCacheStore(Config $config): void
+    {
+        $store = (string) $config->get('cache.default', 'array');
+
+        try {
+            $cache = $this->laravel->make('cache')->store($store);
+            $key = 'pwax-doctor-probe';
+            $cache->put($key, '1', 30);
+            $value = $cache->get($key);
+            $cache->forget($key);
+
+            $this->assert(
+                $value === '1',
+                sprintf('Cache store "%s" round-trips', $store),
+                sprintf('Cache store "%s" did not return the value just written.', $store)
+            );
+        } catch (Throwable $e) {
+            $this->fail_(sprintf(
+                'Cache store "%s" threw: %s. Every render will be uncached.',
+                $store,
+                $e->getMessage()
+            ));
+        }
+    }
+
+    /**
+     * The service worker is served at all, and as JavaScript.
+     *
+     * A worker registration that points at a 404 — or at an HTML login page — is the
+     * "nothing happens when I reload offline" failure mode. The request that hits
+     * `/sw.js` here is the same shape the browser sends, so a missing route or a
+     * `<a>` tag named `sw.js` is visible before the install attempt.
+     */
+    private function checkServiceWorkerPath(Config $config): void
+    {
+        if (! $config->get('pwax.service_worker.enabled', false)) {
+            return;
+        }
+
+        $path = '/' . trim((string) $config->get('pwax.service_worker.path', '/sw.js'), '/');
+        $url = rtrim((string) $config->get('app.url'), '/') . $path;
+
+        try {
+            $response = Http::timeout(5)->get($url);
+        } catch (Throwable $e) {
+            $this->fail_(sprintf('Service worker URL %s could not be fetched: %s', $url, $e->getMessage()));
+
+            return;
+        }
+
+        $contentType = $response->header('Content-Type') ?? '';
+
+        $this->assert(
+            $response->successful(),
+            'Service worker URL responds 2xx',
+            sprintf('Service worker URL %s returned %d.', $url, $response->status())
+        );
+
+        $this->assert(
+            str_contains($contentType, 'javascript'),
+            'Service worker URL serves JavaScript',
+            $response->status() === 200
+                ? sprintf('Service worker URL %s responded with Content-Type "%s" — a browser will '
+                    . 'refuse to register it as a worker.', $url, $contentType)
+                : 'Worker URL did not respond 2xx, so its Content-Type is not meaningful.'
+        );
+    }
+
+    /**
+     * Decode a base64url string. Returns the decoded bytes, or `null` on invalid input.
+     */
+    private static function base64urlDecode(string $value): ?string
+    {
+        $padded = strtr($value, '-_', '+/');
+        $padded .= str_repeat('=', (4 - strlen($padded) % 4) % 4);
+
+        $decoded = base64_decode($padded, true);
+
+        return $decoded === false ? null : $decoded;
+    }
+
+    /**
+     * Head-check a URL. Treats non-2xx as a problem, network failures as a warning —
+     * a config that points at the right host but the wrong path is a clear typo;
+     * a host that is down for five seconds is not something `pwax:doctor` should
+     * pretend to know about.
+     */
+    private function probe(string $url, string $pass): void
+    {
+        try {
+            $response = Http::timeout(5)->get($url);
+        } catch (Throwable $e) {
+            $this->warn_(sprintf('Could not reach %s: %s', $url, $e->getMessage()));
+
+            return;
+        }
+
+        if ($response->status() >= 500) {
+            $this->fail_(sprintf('%s returned %d — push subscriptions will fail.', $url, $response->status()));
+
+            return;
+        }
+
+        if ($response->status() >= 400) {
+            $this->warn_(sprintf('%s returned %d — the URL exists but does not accept this request.', $url, $response->status()));
+
+            return;
+        }
+
+        $this->ok($pass);
     }
 
     private function assert(bool $ok, string $pass, string $fail): void

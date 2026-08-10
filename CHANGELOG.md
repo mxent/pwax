@@ -122,6 +122,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The service worker is built, not templated.** It was 1,611 lines of JavaScript inside a
+  Blade file — never linted, never formatted, never minified, and testable only through a
+  hand-written Blade emulator that its own docblock admitted was crude. It is now
+  `src/js/sw/index.js`, built by esbuild to `dist/pwax-sw.js` and served behind a small
+  generated preamble carrying the four values the server actually decides. Served bytes
+  drop from ~55 kB of commented source to ~13 kB, on a file refetched on every update
+  check.
+
+  Linting it for the first time immediately found a dead parameter.
+
+  `service_worker.extend` is the supported way to add a `push` or `sync` handler now —
+  views or files appended after the worker, sharing its scope — instead of forking the
+  whole thing to add ten lines and never receiving a fix again.
+  `service_worker.blade` still replaces the worker outright and always will, so a fork
+  made against 4.0 keeps working.
+- **The offline document is a Blade view**, `pwax::js.offline`, rather than forty lines of
+  HTML in a JavaScript string. It picks up the application's `lang` and `dir` — it was
+  hardcoded to `lang="en"` — and publishes on its own with
+  `vendor:publish --tag=pwax-service-worker`.
 - **One vocabulary for every strategy.** Four config keys answered "when do we go to the
   network?" in three different languages — `runtime_strategy` said `network-first` where
   `pages.strategy` said `freshness` for the same behaviour, and `navigation_strategy` said

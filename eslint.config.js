@@ -23,6 +23,13 @@ export default [
         },
     },
     {
+        // The worker reports two things at `info`: how many URLs an install deliberately
+        // did not store, and that a deploy landed mid-install. Neither is a problem, and
+        // logging them as warnings would make a correct install look like a broken one.
+        files: ['src/js/sw/**/*.js'],
+        rules: { 'no-console': ['warn', { allow: ['info', 'warn', 'error'] }] },
+    },
+    {
         files: ['build.js'],
         languageOptions: { globals: { ...globals.node } },
         rules: { 'no-console': 'off' },

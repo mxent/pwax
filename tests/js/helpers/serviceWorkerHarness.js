@@ -7,11 +7,10 @@
  * disk, and whether a deploy re-downloads the whole application are all questions about
  * what the code *does*.
  *
- * The Blade rendering here is deliberately crude — it substitutes `@json()` calls and
- * strips comments — because the worker only uses those two constructs. If that stops
- * being true, these tests fail loudly rather than silently testing nothing.
+ * The worker is built from `src/js/sw/index.js` into memory before the suite runs, and
+ * evaluated here with the same preamble the server writes. Until 4.1 it was a Blade
+ * template, and this file emulated Blade badly enough to be its own hazard.
  */
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import vm from 'node:vm';
@@ -20,7 +19,25 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 export const ORIGIN = 'https://app.test';
 
-export const WORKER_VIEW = resolve(HERE, '../../../resources/views/js/service-worker.blade.php');
+export const WORKER_ENTRY = resolve(HERE, '../../../src/js/sw/index.js');
+
+/** Set by `globalSetup`, which builds the worker once for the whole run. */
+let bundled = null;
+
+export function setWorkerBundle(source) {
+    bundled = source;
+}
+
+function workerBundle() {
+    if (bundled === null) {
+        throw new Error(
+            'pwax test: the service worker bundle was not built. `globalSetup` in ' +
+                'vitest.config.js is what builds it.'
+        );
+    }
+
+    return bundled;
+}
 
 /**
  * The headers the client runtime sends for a page payload — and therefore the ones the
@@ -193,44 +210,22 @@ export class FakeCaches {
 }
 
 /**
- * Reject a `@json()` argument that Blade cannot actually compile.
+ * The worker as the server serves it: a preamble, then the built bundle.
  *
- * Blade's `@json` is naive: it does `explode(',', $expression)` and reads the parts as
- * (value, flags, depth). An array literal written inside the directive is therefore torn
- * apart at its commas and emitted as a PHP syntax error — which the view only reveals
- * when it is rendered, and which this harness would otherwise paper over by substituting
- * the expression wholesale.
- */
-function assertBladeCanCompile(expression) {
-    const parts = expression.split(',');
-
-    if (parts.length > 3) {
-        throw new Error(
-            `pwax test: @json(${expression.trim().slice(0, 40)}…) has ${parts.length} ` +
-                'comma-separated parts. Blade reads them as (value, flags, depth), so this ' +
-                'compiles to invalid PHP. Build the value in the @php block and pass one variable.'
-        );
-    }
-}
-
-/**
- * Render the Blade worker the way `PwaxController::serviceWorker()` does.
+ * This used to crudely emulate Blade — strip comments, substitute `@json()` calls
+ * positionally — because the worker lived inside a `.blade.php` file and could not be
+ * imported. It is ordinary JavaScript now, so the harness runs the real thing.
+ *
+ * The bundle is built into memory by `globalSetup`, not read from `dist/`, so a test can
+ * never pass against a stale build. CI's `git diff --exit-code dist/` still catches an
+ * uncommitted one separately.
  */
 export function render(manifest) {
-    const blade = readFileSync(WORKER_VIEW, 'utf8');
-
-    const source = blade
-        .replace(/\{\{--[\s\S]*?--\}\}/g, '')
-        .replace(/@php[\s\S]*?@endphp/g, '')
-        .replace(/\{\{[\s\S]*?\}\}/g, 'x');
-
-    // The four `@json()` calls, in source order: the manifest URL, its hash, the cache
-    // prefix, and the inlined routing config.
-    const values = [
-        '/sw.json',
-        manifest.hash,
-        manifest.cachePrefix || 'pwax',
-        {
+    const preamble = {
+        manifestUrl: '/sw.json',
+        manifestHash: manifest.hash,
+        prefix: manifest.cachePrefix || 'pwax',
+        config: {
             hash: manifest.hash,
             strategy: manifest.strategy,
             maxEntries: manifest.maxEntries,
@@ -243,47 +238,21 @@ export function render(manifest) {
             assetPrefixes: manifest.assetPrefixes,
             pageHeaders: manifest.pageHeaders || PAGE_HEADERS,
             crossOrigin: manifest.crossOrigin,
+            concurrency: manifest.concurrency,
+            // Stands in for `pwax::js.offline`, which the server renders. Kept to the
+            // same copy so the tests about what a visitor is shown still mean something;
+            // a PHP test asserts the view itself says it.
+            offlineHtml:
+                manifest.offlineHtml ||
+                '<!DOCTYPE html><html lang="en" dir="auto"><head><meta charset="utf-8">' +
+                    '<title>Offline</title><style>body{margin:0}</style></head><body>' +
+                    '<div role="alert"><h1>This page is not available offline</h1>' +
+                    '<p>It has not been stored on this device. Reconnect and try again.</p>' +
+                    '</div></body></html>',
         },
-    ];
+    };
 
-    let out = '';
-    let cursor = 0;
-    let index = 0;
-
-    for (;;) {
-        const start = source.indexOf('@json(', cursor);
-
-        if (start === -1) {
-            break;
-        }
-
-        out += source.slice(cursor, start);
-
-        let depth = 0;
-        let end = start + 5;
-
-        for (; end < source.length; end++) {
-            if (source[end] === '(') {
-                depth++;
-            } else if (source[end] === ')' && --depth === 0) {
-                break;
-            }
-        }
-
-        assertBladeCanCompile(source.slice(start + 6, end));
-
-        out += JSON.stringify(values[index++]);
-        cursor = end + 1;
-    }
-
-    if (index !== values.length) {
-        throw new Error(
-            `pwax test: expected ${values.length} @json() calls in the worker, found ${index}. ` +
-                'The harness substitutes them positionally and must be updated alongside the view.'
-        );
-    }
-
-    return out + source.slice(cursor);
+    return `self.__PWAX_SW__ = ${JSON.stringify(preamble)};\n${workerBundle()}`;
 }
 
 /**

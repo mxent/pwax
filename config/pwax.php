@@ -597,7 +597,35 @@ return [
         'enabled' => false,
         'path' => '/sw.js',
         'scope' => '/',
+        /*
+        | Add behaviour to the worker without forking it.
+        |
+        | Each entry is a view name or an absolute path; the contents are appended after
+        | the worker and share its scope, so `CONFIG`, `PREFIX` and the cache helpers are
+        | all in reach. This is where a `push` handler, a `sync` handler or anything else
+        | the package does not ship belongs — rather than publishing 1,600 lines to add
+        | ten and inheriting every future fix by hand.
+        |
+        |     'extend' => ['js.push-handler'],
+        */
+        'extend' => [],
+
+        /*
+        | The document a navigation gets with no network and nothing stored for the URL.
+        | A Blade view, so it carries the application's language and direction. Publish
+        | it with `vendor:publish --tag=pwax-service-worker`.
+        */
+        'offline_view' => null,
+
+        /*
+        | Replace the worker outright with a Blade view of your own.
+        |
+        | Supported and staying so, but `extend` above is almost always what you want: a
+        | fork stops receiving fixes the moment you make it, and this file changes more
+        | than any other in the package.
+        */
         'blade' => null,
+
         'version' => 'v1',
         'cache_name' => 'pwax',
         'offline_url' => null,

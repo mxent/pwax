@@ -34,6 +34,7 @@ use Mxent\Pwax\Pwa\ComponentRegistry;
 use Mxent\Pwax\Pwa\HeadMeta;
 use Mxent\Pwax\Pwa\PageRegistry;
 use Mxent\Pwax\Pwa\PublicAssets;
+use Mxent\Pwax\Pwa\ServiceWorker;
 use Mxent\Pwax\Pwa\WebManifest;
 use Mxent\Pwax\Support\ComponentId;
 use Mxent\Pwax\Support\Shell;
@@ -212,6 +213,21 @@ class PwaxServiceProvider extends ServiceProvider
             $app->make(Config::class),
         ));
 
+        // Bound rather than shared: it renders the offline view, which reads the current
+        // locale, and it memoises the bundle on the file's mtime.
+        $this->app->bind(ServiceWorker::class, function ($app): ServiceWorker {
+            /** @var Config $config */
+            $config = $app->make(Config::class);
+
+            return new ServiceWorker(
+                $config,
+                $app->make(ViewFactory::class),
+                $app->make(Shell::class),
+                $app->make(Filesystem::class),
+                $this->cacheStore($app, (string) $config->get('pwax.cache.store', '') ?: null),
+            );
+        });
+
         $this->app->singleton(ComponentRegistry::class, fn ($app): ComponentRegistry => new ComponentRegistry(
             $app->make(ViewFactory::class),
             $app->make(Config::class),
@@ -372,9 +388,12 @@ class PwaxServiceProvider extends ServiceProvider
             __DIR__ . '/../resources/views' => resource_path('views/vendor/pwax'),
         ], 'pwax-views');
 
+        // The offline document, not the worker. The worker is a built bundle now, and the
+        // supported way to add to it is `service_worker.extend` — publishing 1,600 lines to
+        // add ten is how a fork stops receiving fixes.
         $this->publishes([
-            __DIR__ . '/../resources/views/js/service-worker.blade.php' => resource_path(
-                'views/vendor/pwax/js/service-worker.blade.php'
+            __DIR__ . '/../resources/views/js/offline.blade.php' => resource_path(
+                'views/vendor/pwax/js/offline.blade.php'
             ),
         ], 'pwax-service-worker');
 

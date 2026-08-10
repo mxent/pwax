@@ -84,7 +84,10 @@ describe('the fake Cache API models Vary', () => {
 
         await cache.put(new Request('/about'), new Response('<html>', { headers: { Vary: VARY } }));
         await cache.put(new Request('/about', { headers: PAGE_HEADERS }), payload());
-        await cache.put(new Request('/about', { headers: PAGE_HEADERS }), payload({ component: 'v2' }));
+        await cache.put(
+            new Request('/about', { headers: PAGE_HEADERS }),
+            payload({ component: 'v2' })
+        );
 
         expect(await cache.keys()).toHaveLength(2);
 

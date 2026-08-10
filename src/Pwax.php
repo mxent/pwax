@@ -50,13 +50,23 @@ class Pwax
     /**
      * Compile a Blade view into a component payload.
      *
+     * Whether the result is worth storing follows from whether it was given data, and it
+     * is the same distinction `payload()` draws below. A view compiled with no data is a
+     * pure function of its name: every visitor produces the same bytes, so one cache
+     * entry serves all of them forever. A view compiled *with* controller data is not —
+     * its output is particular to this request, and since the compile cache is keyed on
+     * that output, storing it writes an entry that will never be read again.
+     *
+     * Pass `$store` explicitly to override, which is how a page that has declared itself
+     * visitor-independent through `ComponentResponse::cacheable()` opts back in.
+     *
      * @param  array<string, mixed>  $data
      */
-    public function compile(string $view, array $data = []): Component
+    public function compile(string $view, array $data = [], ?bool $store = null): Component
     {
         $this->assertAllowed($view);
 
-        return $this->compiler->compile($view, $data)->withId($this->id($view));
+        return $this->compiler->compile($view, $data, $store ?? $data === [])->withId($this->id($view));
     }
 
     /**

@@ -75,6 +75,10 @@ class ComponentResponse implements Responsable
      * Do not call this on a page whose output depends on the visitor. There is no way for
      * the package to tell the difference, and a cache is not a place to find out.
      *
+     * Calling this also opts the page's *compiled* form back into the component cache,
+     * which a page rendered with controller data is otherwise kept out of. Same claim,
+     * used twice: you have said this page renders the same for everyone.
+     *
      * @param  bool  $shared  Allow proxies and CDNs to cache it too, not just the browser.
      */
     public function cacheable(int $seconds = 3600, bool $shared = false): self
@@ -139,7 +143,18 @@ class ComponentResponse implements Responsable
 
     public function component(): Component
     {
-        return $this->pwax->compile($this->view, $this->data);
+        // `cacheable()` is a stronger claim than the compile cache needs. A page whose
+        // payload may sit in a shared HTTP cache and be handed to the next visitor has
+        // already been declared visitor-independent by whoever wrote the route — so its
+        // compiled output is worth storing even though it was rendered with data, which
+        // is otherwise the signal that it is not. Without this a documentation site
+        // rendering the same page from the same data on every request would compile it
+        // from scratch every time.
+        return $this->pwax->compile(
+            $this->view,
+            $this->data,
+            store: $this->data === [] || $this->payloadTtl !== null,
+        );
     }
 
     /**

@@ -263,7 +263,6 @@ async function install() {
         store(entry.kind === 'page' ? pages : cache, entry.url, {
             hash: (manifest.hashTable || {})[entry.url],
             inherited,
-            previous,
             crossOrigin: crossOrigin.has(entry.url),
             kind: entry.kind,
             credentials: entry.credentials,
@@ -317,9 +316,93 @@ async function install() {
         })
     );
 
+    await reconcileLazy(manifest, inherited);
+
     installed = manifest;
 
     await writeManifest(PENDING_KEY, manifest);
+}
+
+/**
+ * Bring the lazy cache into line with the build being installed.
+ *
+ * The lazy cache outlives a deploy on purpose, so something has to notice when a file in
+ * it is no longer the file the application ships. The manifest hash cannot: it changes
+ * when *anything* changes, and renaming the cache on it would be the whole-cache discard
+ * this exists to avoid. So the hash tables are compared entry by entry, and only genuinely
+ * changed URLs are acted on.
+ *
+ * What happens to a changed file is what `asset_groups[].update_mode` selects between —
+ * and until now it selected between nothing, since the key reached the manifest, was never
+ * read, and changed the manifest hash on its way past. `prefetch` (the default) brings the
+ * file up to date here, so the visitor never waits for it. `lazy` drops it and lets the
+ * next request fetch it.
+ *
+ * Only files the device already holds are considered. Fetching one it never asked for
+ * would make the group `install_mode: prefetch` by the back door, which is the setting
+ * directly above and the one the developer declined. A URL the new manifest does not list
+ * at all is dropped whatever the mode: it is not part of the application any more.
+ *
+ * Done at install rather than activate, because this is where fetching belongs and where
+ * failure is already tolerated. It does mean a lazily-held image can update just before
+ * the new worker takes over — which is the harmless direction, and much better than
+ * serving a file the build no longer contains.
+ */
+async function reconcileLazy(manifest, inherited) {
+    const cache = await openIfPresent(lazyName());
+
+    if (!cache) {
+        return;
+    }
+
+    const groups = (manifest.assetGroups || []).filter(
+        (group) => group.installMode === 'lazy' && group.kind !== 'page'
+    );
+
+    const hashes = manifest.hashTable || {};
+    const drop = [];
+    const refresh = [];
+
+    for (const key of await cache.keys()) {
+        const url = new URL(key.url);
+        const path = url.pathname + url.search;
+        const hash = hashes[path];
+        const was = inherited.hashes.get(path);
+
+        // Unhashed both times means no manifest ever had an opinion about this file — a
+        // pattern-matched URL no glob resolved to a real path. Leave it alone.
+        if (hash === undefined && was === undefined) {
+            continue;
+        }
+
+        if (hash === undefined) {
+            drop.push(key);
+            continue;
+        }
+
+        if (hash === was) {
+            continue;
+        }
+
+        const group = groups.find(
+            (candidate) => (candidate.urls || []).includes(path) || matchesAny(candidate.patterns, path)
+        );
+
+        group && group.updateMode !== 'lazy' ? refresh.push(path) : drop.push(key);
+    }
+
+    await Promise.all(drop.map((key) => cache.delete(key)));
+
+    // Same limiter as the main install pass, and the same tolerance. A refresh that fails
+    // leaves the old copy in place, which is staler than intended and much better than
+    // nothing — it must never be able to fail an install.
+    await settleWithLimit(refresh, CONCURRENCY, async (path) => {
+        const response = await fetch(new Request(path, { cache: 'reload' }));
+
+        if (response.ok && cacheable(response) && !tooLarge(response, manifest)) {
+            await cache.put(path, response);
+        }
+    });
 }
 
 async function activate() {
@@ -329,6 +412,7 @@ async function activate() {
         pagesName(manifest),
         documentsName(manifest),
         runtimeName(),
+        lazyName(),
         STATE_CACHE,
     ]);
 
@@ -351,6 +435,9 @@ async function activate() {
 
     await Promise.all(stale.map((key) => caches.delete(key)));
 
+    // A cache that was just deleted is not the size the counter remembers.
+    counts.clear();
+
     await deleteManifest(PENDING_KEY);
 
     if (manifest.navigationPreload !== false && self.registration.navigationPreload) {
@@ -368,17 +455,16 @@ async function activate() {
  * re-downloaded — the difference between a few kilobytes and the whole application on
  * every deploy, over whatever connection the visitor happens to have.
  */
-async function store(cache, url, { hash, inherited, previous, crossOrigin, kind, credentials }) {
+async function store(cache, url, { hash, inherited, crossOrigin, kind, credentials }) {
     const page = kind === 'page';
 
-    if (hash && inherited.get(url) === hash) {
-        for (const old of previous) {
-            const copy = await old.match(url);
+    if (hash && inherited.hashes.get(url) === hash) {
+        const old = inherited.holder.get(url);
+        const copy = old && (await old.match(url));
 
-            if (copy) {
-                await cache.put(page ? pageKey(url) : url, copy);
-                return true;
-            }
+        if (copy) {
+            await cache.put(page ? pageKey(url) : url, copy);
+            return true;
         }
     }
 
@@ -593,7 +679,7 @@ async function serve(event) {
     const group = pageGroupFor(manifest, key, request);
 
     if (group) {
-        return page(request, manifest, group);
+        return page(event, manifest, group);
     }
 
     const precache = await precacheFor(manifest);
@@ -615,13 +701,13 @@ async function serve(event) {
     const lazy = lazyGroupFor(manifest, key);
 
     if (lazy) {
-        return lazyAsset(request, manifest, lazy);
+        return lazyAsset(event, manifest, lazy);
     }
 
     const data = dataGroupFor(manifest, key);
 
     if (data) {
-        return dataResponse(request, manifest, data);
+        return dataResponse(event, manifest, data);
     }
 
     const ours = (manifest.assetPrefixes || []).some((prefix) => url.pathname.startsWith(prefix));
@@ -680,7 +766,9 @@ function pageGroupFor(manifest, key, request) {
  * served to the next visitor. A page that genuinely must not reach disk uses
  * `->offline(false)`; the server still says so on the response, and the worker respects it.
  */
-async function page(request, manifest, group) {
+async function page(event, manifest, group) {
+    const request = event.request;
+
     if (group.strategy === 'performance') {
         const hit = await storedPage(request, manifest);
 
@@ -694,11 +782,20 @@ async function page(request, manifest, group) {
 
         if (isJson(response) && storablePage(response)) {
             const url = new URL(request.url);
+            const copy = response.clone();
 
-            const cache = await caches.open(pagesName(manifest));
-
-            await cache.put(pageKey(url.pathname + url.search), response.clone());
-            await trim(cache, group.maxEntries || manifest.maxEntries);
+            // Handed to the event, not awaited. The page is on its way to the runtime the
+            // moment the network answered; opening a cache, writing to it and then walking
+            // its keys to trim are three storage round-trips the visitor was being made to
+            // wait through, on every single navigation, for work whose only purpose is the
+            // *next* visit. `waitUntil` keeps the worker alive until it finishes without
+            // holding the response behind it.
+            event.waitUntil(
+                caches.open(pagesName(manifest)).then(async (cache) => {
+                    await cache.put(pageKey(url.pathname + url.search), copy);
+                    await trim(cache, pagesName(manifest), group.maxEntries || manifest.maxEntries);
+                })
+            );
         }
 
         // A reply is not the same as an answer. Falling back only when `fetch` throws
@@ -799,15 +896,23 @@ function lazyGroupFor(manifest, key) {
 }
 
 /**
- * A lazy group member: fetched on first use, then kept in the precache.
+ * A lazy group member: fetched on first use, then kept.
  *
- * The precache rather than the runtime cache, deliberately. A lazy asset is still part of
- * the application — it was declared in the manifest — so once it has been obtained it
- * should not be evicted by ordinary browsing, which is exactly what the runtime cache's
- * entry cap would eventually do to it.
+ * Its own cache, and deliberately not the precache. A lazy asset is still part of the
+ * application — it was declared in the manifest — so it must not be evicted by ordinary
+ * browsing, which is what the runtime cache's entry cap would eventually do to it. But the
+ * precache is named for the build, `install()` never puts a lazy entry in one, and
+ * `activate()` deletes the previous build's precache outright — so keeping them there
+ * meant every deploy silently threw away every image, font and media file the visitor had
+ * accumulated, and re-downloaded each on next use. That is the exact churn the delta
+ * install exists to avoid, and it was happening to the largest files in the application.
+ *
+ * `${PREFIX}-lazy` survives deploys for the same reason `runtimeName()` does. Entries
+ * whose content actually changed are dropped in `activate()`, by hash.
  */
-async function lazyAsset(request, manifest, group) {
-    const cache = await caches.open(precacheName(manifest));
+async function lazyAsset(event, manifest, group) {
+    const request = event.request;
+    const cache = await caches.open(lazyName());
     const hit = await cache.match(request, { ignoreVary: true });
 
     if (hit) {
@@ -816,8 +921,10 @@ async function lazyAsset(request, manifest, group) {
 
     const response = await fetch(request);
 
-    if (cacheable(response)) {
-        await cache.put(request, response.clone());
+    if (cacheable(response) && !tooLarge(response, manifest)) {
+        const copy = response.clone();
+
+        event.waitUntil(cache.put(request, copy));
     }
 
     return response;
@@ -843,7 +950,8 @@ function dataGroupFor(manifest, key) {
  * because rebuilding a response to add a header would mean reading its body first, which
  * forfeits streaming for every request that goes through here.
  */
-async function dataResponse(request, manifest, group) {
+async function dataResponse(event, manifest, group) {
+    const request = event.request;
     const config = group.cacheConfig || {};
     const name = dataName(group);
     const url = new URL(request.url);
@@ -863,11 +971,17 @@ async function dataResponse(request, manifest, group) {
         const response = await withTimeout(fetch(request), config.timeout);
 
         if (cacheable(response)) {
-            const cache = await caches.open(name);
+            const copy = response.clone();
 
-            await cache.put(request, response.clone());
-            await stamp(cache, key);
-            await trimData(cache, config.maxSize);
+            // Three storage round-trips, none of which the caller needs to have finished.
+            // The put and the stamp do not depend on each other, so they go together;
+            // trimming waits for both, because it counts what they wrote.
+            event.waitUntil(
+                caches.open(name).then(async (cache) => {
+                    await Promise.all([cache.put(request, copy), stamp(cache, key)]);
+                    await trimData(cache, name, config.maxSize);
+                })
+            );
         }
 
         // Same rule as a page: an origin that cannot be reached is not an answer, and a
@@ -937,23 +1051,40 @@ async function isYoungEnough(cache, key, maxAge) {
 }
 
 /** Bound a data cache, counting only real entries and dropping their stamps with them. */
-async function trimData(cache, maxSize) {
+async function trimData(cache, name, maxSize) {
     if (!maxSize || maxSize <= 0) {
         return;
     }
 
+    const believed = counts.get(name);
+
+    if (believed !== undefined) {
+        counts.set(name, believed + 1);
+
+        if (believed + 1 <= maxSize) {
+            return;
+        }
+    }
+
     const keys = (await cache.keys()).filter((key) => !new URL(key.url).pathname.startsWith('/__pwax__/sw-age/'));
+
+    counts.set(name, keys.length);
 
     if (keys.length <= maxSize) {
         return;
     }
 
-    for (const key of keys.slice(0, keys.length - maxSize)) {
-        const path = new URL(key.url).pathname + new URL(key.url).search;
+    // One URL parse per key rather than two, and the deletes together rather than in turn
+    // — an over-full cache would otherwise spend two serial round-trips per evicted entry.
+    await Promise.all(
+        keys.slice(0, keys.length - maxSize).flatMap((key) => {
+            const url = new URL(key.url);
 
-        await cache.delete(key);
-        await cache.delete(stampKey(path));
-    }
+            return [cache.delete(key), cache.delete(stampKey(url.pathname + url.search))];
+        })
+    );
+
+    counts.set(name, maxSize);
 }
 
 /**
@@ -1072,7 +1203,7 @@ async function rememberDocument(response, manifest, path) {
         // Bounded by `pages.max_entries`, not the runtime cache's. A document is a page,
         // and the setting that says how many pages to keep should govern both of its
         // halves.
-        await trim(cache, defaults.maxEntries || manifest.maxEntries);
+        await trim(cache, documentsName(manifest), defaults.maxEntries || manifest.maxEntries);
     } catch {
         // A full disk is the likely one, and this is the least important thing on it: the
         // payload is already stored and is what offline correctness rests on. A document
@@ -1348,7 +1479,7 @@ async function put(request, response, manifest) {
 
     const cache = await caches.open(runtimeName());
     await cache.put(request, response);
-    await trim(cache, manifest.maxEntries);
+    await trim(cache, runtimeName(), manifest.maxEntries);
 }
 
 /**
@@ -1426,20 +1557,45 @@ function storablePage(response) {
  * trimmed, so ordinary browsing can no longer evict the app shell or the framework and
  * quietly take the application offline-capability away.
  */
-async function trim(cache, maxEntries) {
+/**
+ * Entries believed to be in each bounded cache, so `keys()` is not walked on every write.
+ *
+ * `cache.keys()` materialises a Request per entry. Called on every put — which is what
+ * this did — a sixty-entry page cache built sixty Request objects per navigation to
+ * discover, almost always, that nothing needed deleting. The count is advisory: it is
+ * seeded from one real `keys()` call, and a worker restart simply costs another. Nothing
+ * is ever deleted on its word alone; the real check still runs before any eviction.
+ */
+const counts = new Map();
+
+async function trim(cache, name, maxEntries) {
     const max = maxEntries || 0;
 
     if (max <= 0) {
         return;
     }
 
+    const believed = counts.get(name);
+
+    if (believed !== undefined) {
+        counts.set(name, believed + 1);
+
+        if (believed + 1 <= max) {
+            return;
+        }
+    }
+
     const keys = await cache.keys();
+
+    counts.set(name, keys.length);
 
     if (keys.length <= max) {
         return;
     }
 
     await Promise.all(keys.slice(0, keys.length - max).map((key) => cache.delete(key)));
+
+    counts.set(name, max);
 }
 
 async function clearCaches() {
@@ -1448,6 +1604,7 @@ async function clearCaches() {
     await Promise.all(keys.filter((key) => key.startsWith(`${PREFIX}-`)).map((key) => caches.delete(key)));
 
     statePromise = null;
+    counts.clear();
 }
 
 /* ------------------------------------------------------------------------ state ----- */
@@ -1497,8 +1654,29 @@ function runtimeName() {
     return `${PREFIX}-runtime`;
 }
 
+/**
+ * Where lazy asset groups live.
+ *
+ * Not keyed by the build, for the reason set out on `lazyAsset()`: these are files the
+ * application declared and a visitor fetched, and a deploy that changed a component has
+ * no business re-downloading every image on the device. Entries whose own hash changed
+ * are dropped in `activate()`.
+ */
+function lazyName() {
+    return `${PREFIX}-lazy`;
+}
+
+/**
+ * Where a data group's responses live.
+ *
+ * The version is part of the name, which is the whole point of `data_groups[].version` —
+ * bumping it is how you say "discard what is stored for this group". Before, the version
+ * reached the manifest and stopped there: it changed the manifest hash, so bumping it
+ * re-precached the entire application for every client, and left the one cache it was
+ * meant to empty exactly as it was.
+ */
 function dataName(group) {
-    return `${PREFIX}-data-${group.name}`;
+    return `${PREFIX}-data-${group.name}-v${group.version || 1}`;
 }
 
 async function precacheFor(manifest) {
@@ -1520,6 +1698,7 @@ async function previousPrecaches(current) {
  */
 async function inheritedHashes(previous) {
     const hashes = new Map();
+    const holder = new Map();
 
     for (const cache of previous) {
         try {
@@ -1533,13 +1712,25 @@ async function inheritedHashes(previous) {
 
             for (const [url, hash] of Object.entries(manifest.hashTable || {})) {
                 hashes.set(url, hash);
+
+                // Which cache to copy that URL out of, decided once here instead of by
+                // `store()` probing every previous cache in turn for every unchanged
+                // asset. With three builds retained that was up to three serial storage
+                // round-trips per file, inside a six-way limiter, on the one path a deploy
+                // is supposed to make cheap.
+                //
+                // Overwritten rather than kept: `previousPrecaches` lists oldest first, so
+                // the last writer is the newest build holding this URL — the same build
+                // the hash above now comes from. A miss against it is not a problem;
+                // `store()` falls through and fetches.
+                holder.set(url, cache);
             }
         } catch {
             // A cache without a readable manifest simply contributes nothing.
         }
     }
 
-    return hashes;
+    return { hashes, holder };
 }
 
 /**

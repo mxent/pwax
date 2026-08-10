@@ -6,6 +6,7 @@ use Illuminate\Contracts\Config\Repository as Config;
 use Illuminate\Contracts\View\Factory as ViewFactory;
 use Illuminate\Http\Request;
 use Illuminate\Support\HtmlString;
+use Mxent\Pwax\Data\Component;
 use Mxent\Pwax\Pwax;
 use Throwable;
 
@@ -232,6 +233,96 @@ class Shell
         }
 
         return $preloads;
+    }
+
+    /**
+     * URLs to hint with `<link rel="modulepreload">` for this page.
+     *
+     * Everything the first render will import, named in the head so the browser can start
+     * fetching it immediately rather than discovering it three steps later.
+     *
+     * Two sources, both of which the server already knows and neither of which the browser
+     * can see in time:
+     *
+     *   - The components this page imports. `Pwax::import()` compiles `@pwaxImport` into a
+     *     `window.pwax.component('/__pwax__/c/….js')` call inside the page's script, so the
+     *     URLs are sitting in the payload — but nothing asks for them until Vue has been
+     *     downloaded, parsed, and has compiled and rendered the template. That is a whole
+     *     serial round trip after the framework is already up, on a request the server
+     *     could have named before it sent the document.
+     *   - Configured plugins and directives, which `boot()` awaits *before* mounting. They
+     *     are on the critical path by construction and had no resource hint at all.
+     *
+     * A hint, not a load: an unused `modulepreload` costs a warning in the console and
+     * nothing else, and every URL here is one the page is about to ask for anyway.
+     *
+     * @return list<string>
+     */
+    public function modulePreloads(?Component $component = null): array
+    {
+        $urls = [];
+
+        foreach (['pwax.plugins', 'pwax.directives'] as $key) {
+            foreach ($this->extensions($key) as $entry) {
+                if (($entry['type'] ?? '') === 'module' && isset($entry['url'])) {
+                    $urls[] = $entry['url'];
+                }
+            }
+        }
+
+        if ($component !== null) {
+            foreach ($this->importedModules($component) as $url) {
+                $urls[] = $url;
+            }
+        }
+
+        return array_values(array_unique($urls));
+    }
+
+    /**
+     * The component module URLs a compiled script imports.
+     *
+     * Read back out of the emitted JavaScript rather than tracked while compiling: the
+     * import is resolved at render time, by a Blade directive that can appear anywhere in
+     * the view, so the script is the only place the full list actually exists.
+     *
+     * The call this matches is the one `Pwax::import()` writes, with a JSON-encoded URL —
+     * so the quoting is known and there is no need to guess at the route prefix. A hand-
+     * written call in someone's own `<script>` matches too, which is correct: it is still
+     * a module the page is about to import.
+     *
+     * @return list<string>
+     */
+    private function importedModules(Component $component): array
+    {
+        if (! str_contains($component->script, 'window.pwax.component')) {
+            return [];
+        }
+
+        $found = preg_match_all(
+            '#window\.pwax\.component\(\s*"((?:[^"\\\\]|\\\\.)*)"#',
+            $component->script,
+            $matches
+        );
+
+        if ($found === false || $found === 0) {
+            return [];
+        }
+
+        $urls = [];
+
+        foreach ($matches[1] as $encoded) {
+            $url = json_decode('"' . $encoded . '"');
+
+            // Same-origin paths only. A preload for an absolute off-site URL needs a
+            // `crossorigin` that this cannot know, and one that disagrees with the eventual
+            // fetch makes the browser download the file twice instead of none.
+            if (is_string($url) && str_starts_with($url, '/') && ! str_starts_with($url, '//')) {
+                $urls[] = $url;
+            }
+        }
+
+        return array_values(array_unique($urls));
     }
 
     /**

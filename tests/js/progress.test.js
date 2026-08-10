@@ -138,5 +138,4 @@ describe('the progress bar', () => {
         expect(bar()).toBe(existing);
         expect(document.querySelectorAll('#pwax-progress')).toHaveLength(1);
     });
-
 });

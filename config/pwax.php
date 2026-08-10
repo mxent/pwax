@@ -240,11 +240,30 @@ return [
     |            output, so entries can never go stale — a changed component simply
     |            produces a new key.
     |
+    |            What is cached is the *parse*: splitting the blocks, scoping the
+    |            styles, stamping the template, minifying. Never the Blade render —
+    |            that has to run on every request, because rendering is where a page's
+    |            controller data enters.
+    |
+    |            Only renders that take no data are stored. A page rendered with
+    |            controller data produces different output for every visitor, so every
+    |            entry would be written once and read never; keying on the output is
+    |            what makes the cache correct, and it is also what makes storing those
+    |            renders pure growth. `->cacheable()` opts a page back in — a page whose
+    |            payload is safe for a shared HTTP cache has already declared that it
+    |            renders the same for everyone.
+    | ttl        How long a stored component lives. Insurance rather than correctness:
+    |            entries are content-keyed and can never be wrong, but a view that takes
+    |            no data can still branch on `auth()` internally, and nothing else ever
+    |            evicts those. Re-parsing a hot component once a week costs nothing.
+    |            `null` keeps them forever, as 4.0 did.
+    |
     */
 
     'cache' => [
         'asset_ttl' => 3600,
         'components' => true,
+        'ttl' => 604800,
         'store' => null,
     ],
 
@@ -690,8 +709,13 @@ return [
         |                 works offline after a single visit. 'lazy' fetches on first
         |                 use and then keeps it, which suits a large media library
         |                 nobody looks at all of.
-        |   update_mode   what happens on the next deploy to an entry whose hash
-        |                 changed: fetch it eagerly, or wait until it is asked for.
+        |   update_mode   what happens on the next deploy to a lazy entry this device
+        |                 already holds and whose hash changed. 'prefetch' brings it up
+        |                 to date during the install, so nobody waits for it; 'lazy'
+        |                 drops it and lets the next request fetch it. Files the device
+        |                 never asked for are not fetched either way — that is what
+        |                 install_mode above already decided. Prefetch groups fetch
+        |                 everything at install regardless, so this does not apply.
         |
         | Glob syntax: ** crosses directory boundaries, * does not, ? is one character,
         | {a,b} and (a|b) alternate, and a leading ! excludes.
@@ -826,6 +850,11 @@ return [
         |
         |   freshness    go to the network, fall back to the cache after `timeout` ms
         |   performance  serve the cache while it is younger than `max_age`
+        |
+        | `version` names the group's cache. Bump it to discard what is stored for that
+        | group and nothing else — after changing the shape of a response, say. Deploys
+        | do not discard these on their own: an API cache is keyed by the group rather
+        | than the build, so it survives a release the way the runtime cache does.
         |
         | SECURITY: these are responses, not files, and they can hold one person's data.
         | They are cached normally, and caches are shared across visitors — anyone with

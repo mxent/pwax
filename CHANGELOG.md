@@ -9,26 +9,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
-- **Cached responses could be read across signed-in identities.** Pages, API responses and
-  runtime entries were stored in caches named after the signed-in visitor, and the package
-  documented that as making a cross-user read impossible rather than merely unlikely. It
-  held for writes and not for reads: the offline fallback used a lookup that names no
-  cache, and by specification such a lookup searches *every* cache on the origin. Two
-  people sharing a device — the second one offline — and the worker served the first one's
-  responses. Reads are confined to one cache now, which is emptied whenever the visitor
-  changes; see **Changed**.
+- **Caches are shared across visitors, and the package now says so plainly.** 2.x named
+  each cache after the signed-in visitor and documented that as making a cross-user read
+  impossible. It was not: the offline fallback used a lookup that names no cache, and by
+  specification such a lookup searches *every* cache on the origin — so two people sharing
+  a device, the second one offline, and the worker served the first one's responses. The
+  naming is gone rather than patched, because a partition that holds for writes and not
+  for reads is worse than none: it is the same exposure with a guarantee written over it.
+  What ships is one set of caches per build, shared by whoever uses the device, stated as
+  such in the README and in `config/pwax.php`. `->offline(false)` and
+  `X-Pwax-Cache: none` are how a page stays off disk entirely, and `pwax:doctor` says so
+  when runtime page caching is on.
 - **An empty cache was created by reading.** `caches.open()` creates, and the page and data
   paths opened theirs before knowing whether anything would be stored — so every visitor
   left behind an empty cache per group, on a device that had stored nothing. Reads go
   through `caches.has()` first throughout.
-- **The client identity could be a whole session out of date.** It was read once from the
-  document, and Pwax turns a post-login `redirect()` into a client-side navigation on
-  purpose — so a visitor who signed in through the runtime kept sending the guest label,
-  and the first pages of their authenticated session were filed in the partition every
-  signed-out visitor can read. The documented sign-out call read the same stale value and
-  cleared nothing. Payloads now carry the identity they were rendered for and responses
-  carry it as a header, so the worker files by who was actually served rather than by who
-  asked.
 - **Catastrophic backtracking in the glob compiler.** Consecutive `**` segments compiled to
   adjacent optional greedy groups; twelve of them took five seconds to reject a
   sixty-character path, and these patterns are matched against the request URL on every
@@ -41,33 +36,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `public/` covers hidden *directories* rather than only hidden files.
 - Configured preloader colours are validated before being interpolated into the shell's
   inline `<style>`, where Blade's HTML escaping does not apply.
-- **A stored document is withheld once anyone has signed in on the device.** Every document
-  the worker holds is a signed-out rendering, and one handed to a signed-in visitor tells
-  them they are logged out when they are not — permanently, since the document carries its
-  own inlined payload and the runtime has no reason to refetch it. Those visitors are given
-  the shell, and the runtime's own request, which carries an identity, decides what to
-  render. `pwax.sw.forgetIdentity()` on sign-out restores the fast path.
+- A lazily-cached asset is now bounded by `service_worker.max_entry_bytes` like every
+  other stored response. It was the one write path that checked neither the size nor the
+  cap, so a single large declared file went to disk whatever it weighed.
 
 ### Changed
 
-- **One set of caches, kept to one visitor at a time.** The signed-in identity used to be
-  part of every cache *name*, which made a cross-user read impossible by construction — and
-  cost a fresh set of caches per person, an empty one minted on every sign-in, and
-  everything re-fetched under the new name each time the name changed. Names are now fixed:
-  `pwax-pages-v1-<build>`, `pwax-runtime-v1`, `pwax-data-<group>-<v>`. The separation is
-  kept by *emptying* the visitor caches the moment the worker learns it is serving somebody
-  else — from the identity a response declares, and from the identity a request claims,
-  which is what covers a visitor offline from their first request. The precache, the
-  build's own guest page payloads and the documents cache are never emptied that way, so a
-  sign-in never re-downloads the application.
-
-  This is weaker than being unaddressable, and it loses the previous person's offline pages
-  rather than parking them. `service_worker.identity_cache_limit` is gone with the per-person
-  sets it bounded; `pwax:doctor` names it.
-- Every request the runtime makes now carries `X-Pwax-Identity`, `anon` included. It was
-  omitted for a signed-out visitor, which made an absent header mean both "a guest is
-  asking" and "this is not a Pwax request" — and the worker has to tell those apart, since
-  one is a signal to empty the caches and the other must never be.
+- **One set of caches, named for the build.** `pwax-precache-<build>`,
+  `pwax-pages-<build>`, `pwax-documents-<build>`, `pwax-runtime`, `pwax-lazy` and
+  `pwax-data-<group>-v<n>`, where `<build>` is the manifest's content hash. No per-visitor
+  names, no per-visitor sets: one cost a fresh copy of the application per person and an
+  empty set minted on every sign-in, and it never delivered the isolation it was named
+  for. `service_worker.identity_cache_limit` is gone with the per-person sets it bounded;
+  `pwax:doctor` names it.
+- **`data_groups[].version` now names the group's cache**, which is the only thing it was
+  ever for. It reached the manifest and was read by nothing: bumping it changed the
+  manifest hash, so it re-precached the entire application on every client, and left the
+  one cache it was meant to discard exactly as it was. Cache names carry the version, and
+  `activate()` sweeps the versions no group claims any more. Upgrading orphans each
+  existing data cache once; they repopulate on the next request.
 
 ### Added
 
@@ -75,10 +62,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ways — JSON to the runtime, HTML with the component inlined to a navigation — and only
   the JSON was stored after install. A route the build never precached, a dynamic one or
   anything route discovery could not reach, had no document at all, so reloading it offline
-  fell back to the shell and a spinner. Documents are now kept as they are visited, and only
-  when the response declares `X-Pwax-Identity: anon`: a missing header is treated as
-  somebody's, because a navigation is the one request whose sender a worker cannot identify.
-  `ComponentResponse`'s HTML representation sends that header alongside the payload's.
+  fell back to the shell and a spinner. Documents are now kept as they are visited, in a
+  cache shared across visitors like every other — so a page whose signed-in and signed-out
+  renderings differ should say `->offline(false)`.
+- **The modules the first render needs are named in the head.** A component imported with
+  `@pwaxImport` is compiled into a `window.pwax.component('/__pwax__/c/….js')` call inside
+  the page's own script, so nothing asks for it until Vue has downloaded, parsed, compiled
+  this page's template and rendered it — a serial round trip after the framework is
+  already up, for a URL the server knew while it was writing the document. Those now ship
+  as `<link rel="modulepreload">`, along with the configured `plugins` and `directives`
+  the runtime awaits *before* mounting, and any external `<script src>` or
+  `<link rel="stylesheet">` the component declares.
+- `pwax.cache.ttl` bounds how long a compiled component is stored. `null` keeps the
+  previous behaviour of storing it forever.
 
 ### Fixed
 
@@ -90,13 +86,53 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   entirely visible with it off, which is the default. The URL is now fingerprinted by the
   bundle's contents, and the source map is revalidated rather than cached hard so it cannot
   be paired with a newer bundle.
-- **A signed-in visitor could not open a precached page offline.** Go offline mid-session
-  and click a link to a page you have not already opened, and it failed — while *reloading*
-  that same URL worked. A navigation is answered from the shared precache; the payload a
-  link needs was precached under `anon`, and a signed-in visitor's requests name their own
-  cache. So the one thing precaching exists to provide was the one thing they could not
-  reach. Install-time payloads now live in a bucket every identity reads and none writes
-  to, with the visitor's own copy still preferred when they have one.
+- **Every lazily-cached asset was discarded on every deploy.** A lazy asset group is where
+  the big files go — `/images/**`, `/fonts/**` and `/media/**` are the shipped defaults —
+  and the point of declaring one is that what it fetches is then kept. It was kept in the
+  precache, which is named for the build and deleted wholesale by the next one, and lazy
+  entries never enter the install set so nothing carried them across. So a release that
+  changed one component re-downloaded every image and font on the device: precisely the
+  churn the delta install exists to prevent, applied to the largest files in the
+  application. They now live in `pwax-lazy`, which survives a deploy the way the runtime
+  cache does, and only entries whose own content hash changed are acted on.
+- **`asset_groups[].update_mode` did nothing at all.** Documented as choosing what happens
+  to a changed entry on the next deploy, it was emitted into `sw.json` and never read —
+  while still forming part of the manifest hash, so editing it forced every client to
+  re-precache the whole application for no change in behaviour. It now selects what the
+  install does with a changed file the device already holds: `prefetch` brings it up to
+  date there and then, `lazy` drops it for the next request to fetch. Files the device
+  never asked for are still not fetched — that is `install_mode`'s decision, not this one.
+- **The compiled-component cache grew without bound on a personalised page.** The cache
+  key is a digest of the rendered output, which is what makes an entry impossible to serve
+  stalely — a changed component simply produces a new key. For a page rendered with
+  controller data it inverts: the output is particular to the request, so every visitor
+  minted an entry, written with `forever()`, that no later request could ever hit. On a
+  busy application that is unbounded growth driven by traffic, on a store whose only purge
+  is to flush everything. Renders given no data are stored as before; renders given data
+  are not, unless the route calls `->cacheable()` — which already declares the page renders
+  the same for everyone.
+- **A component compiled twice in one request reached the cache store twice.** Two
+  `@pwaxImport`s of the same component, or a caller reading `toArray()` before returning
+  the response, each paid a full round trip to Redis for an answer already in hand. A
+  bounded in-process memo answers the second one.
+- **A page waited for its own cache write before it was delivered.** `page()` opened a
+  cache, wrote to it and walked its keys to trim, all before returning the response the
+  runtime was waiting on; a data group's response paid three storage round-trips the same
+  way. None of that work is for the current visit. It moves to `event.waitUntil`, where
+  `navigate()` already put it.
+- **`trim()` walked every key in the cache on every single write.** `cache.keys()`
+  materialises a `Request` per entry, so a sixty-entry page cache built sixty objects per
+  navigation to discover that nothing needed deleting. An advisory counter, seeded from
+  one real walk, gates the check; nothing is deleted without the real walk still running.
+- **The install probed each previous build in turn for every unchanged asset.** With three
+  builds retained that is up to three serial storage round-trips per file, inside a
+  six-way limiter, on the one path a deploy is supposed to make cheap. The manifest scan
+  that already reads those caches now records which one holds each URL.
+- **A new page component type was minted on every navigation.**
+  `defineAsyncComponent(() => Promise.resolve(options))` wrapped an object that was
+  already resolved, costing a microtask and a render pass in which the page was truthy but
+  drew nothing — and, because Vue compares component types by identity, making a return to
+  an already-visited path unmount and rebuild from scratch.
 - **The whole application was announced as "Loading".** The mount element carried
   `role="status"`, `aria-live="polite"` and `aria-label="Loading"` for the spinner, and the
   runtime removed only the class on mount — so for the rest of the session every reactive
@@ -144,7 +180,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the pages block and the runtime cache already spelled that way.
 - `pwax.sw.registration` is `pwax.sw.controller`; `pwax.sw.registration()` returns the
   registration.
-- `forgetIdentity()` defaults to the current identity.
 - Navigation preload is consumed rather than discarded, so a navigation the worker declines
   to handle no longer costs the server two requests.
 - The view-tree walk and the route walk happen once per manifest build rather than two and
@@ -195,11 +230,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Precached pages store their rendered **document** as well as their payload, so an offline
   navigation paints immediately from the inlined `pwax-initial` island instead of showing
   the shell's spinner while the runtime fetches a payload it already has.
-- **Per-identity cache partitioning.** Pages, runtime entries and API responses are stored
-  in caches named after an opaque HMAC of the signed-in user. One person's cached page is
-  not merely cleared when another signs in — it was never reachable under their name.
-  `pwax.sw.forgetIdentity()` drops one identity's caches on sign-out without discarding the
-  precache.
 - **Asset groups** (`service_worker.asset_groups`) with `install_mode`, `update_mode` and
   glob patterns resolved against `public/`. Images, fonts, stylesheets and build output are
   precached without listing each one.

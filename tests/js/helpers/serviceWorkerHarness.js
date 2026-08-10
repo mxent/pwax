@@ -122,7 +122,9 @@ class FakeCache {
 
     async match(request, options = {}) {
         const entries = this.map.get(urlOf(request)) || [];
-        const hit = entries.find((entry) => answersRequest(entry, toRequest(request), options.ignoreVary));
+        const hit = entries.find((entry) =>
+            answersRequest(entry, toRequest(request), options.ignoreVary)
+        );
 
         return hit ? hit.response.clone() : undefined;
     }
@@ -134,7 +136,9 @@ class FakeCache {
     async delete(request, options = {}) {
         const url = urlOf(request);
         const entries = this.map.get(url) || [];
-        const kept = entries.filter((entry) => !answersRequest(entry, toRequest(request), options.ignoreVary));
+        const kept = entries.filter(
+            (entry) => !answersRequest(entry, toRequest(request), options.ignoreVary)
+        );
 
         if (kept.length === entries.length) {
             return false;
@@ -331,6 +335,11 @@ export function createWorker({ manifest, caches = new FakeCaches(), routes }) {
         Response,
         Headers,
         URL,
+        // `withTimeout` needs these, and without them every strategy that sets a deadline
+        // — `pages.timeout`, a data group's `timeout` — threw `setTimeout is not defined`
+        // the moment a test configured one, which read as the worker failing to answer.
+        setTimeout,
+        clearTimeout,
         // Every level is recorded: the worker distinguishes a failure (warn) from a
         // deliberate skip (info), and a harness that dropped one of them could not tell
         // an alarming install from a correct one.
@@ -344,6 +353,20 @@ export function createWorker({ manifest, caches = new FakeCaches(), routes }) {
     sandbox.globalThis = sandbox;
     vm.createContext(sandbox);
     vm.runInContext(render(manifest), sandbox, { filename: 'service-worker.js' });
+
+    /**
+     * Dispatch an event exactly as given, awaiting nothing.
+     *
+     * `dispatch` below settles every `waitUntil` before it returns, which is what almost
+     * every test wants and precisely what a test about *ordering* must not do. Whether the
+     * response comes back without waiting for the cache write is only observable if the
+     * caller supplies its own `waitUntil` and keeps hold of the promises.
+     */
+    const emit = (name, event) => {
+        for (const fn of listeners[name] || []) {
+            fn(event);
+        }
+    };
 
     /** Dispatch an event and settle everything it passed to `waitUntil`. */
     const dispatch = async (name, event = {}) => {
@@ -385,5 +408,16 @@ export function createWorker({ manifest, caches = new FakeCaches(), routes }) {
     const sentRequest = (path) =>
         requests.find((sent) => new URL(sent.url).pathname + new URL(sent.url).search === path);
 
-    return { dispatch, request, navigate, caches, fetches, requests, sentRequest, log, failed };
+    return {
+        dispatch,
+        emit,
+        request,
+        navigate,
+        caches,
+        fetches,
+        requests,
+        sentRequest,
+        log,
+        failed,
+    };
 }

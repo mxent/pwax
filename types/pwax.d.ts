@@ -143,6 +143,29 @@ declare namespace Pwax {
         flush(): void;
     }
 
+    /**
+     * A launch delivered by the operating system: a file opened, a `web+…` link followed,
+     * or a page shared to a GET share target.
+     */
+    interface Launch {
+        /** `FileSystemFileHandle`s the user granted, for a `file_handlers` launch. */
+        readonly files: FileSystemFileHandle[];
+        readonly targetURL: string | null;
+        /** Has the runtime already routed to `targetURL`? True for a replayed launch. */
+        readonly navigated: boolean;
+    }
+
+    interface LaunchApi {
+        readonly supported: boolean;
+        /** Launches that arrived before a consumer was registered. */
+        readonly pending: Launch[];
+        /**
+         * Receive launches, including any buffered before this was called. Return `false`
+         * to stop the runtime routing to the launch's target URL. Returns an unsubscriber.
+         */
+        consume(fn: (launch: Launch) => unknown): () => void;
+    }
+
     interface Runtime {
         readonly version: string;
         readonly config: Config;
@@ -164,6 +187,14 @@ declare namespace Pwax {
         readonly storage: StorageApi;
         readonly push: PushApi;
         readonly sync: SyncApi;
+        readonly launch: LaunchApi;
+        /**
+         * Open the platform share sheet. Must be called from a user gesture.
+         *
+         * `'unavailable'` where there is no share sheet, so a caller can fall back to
+         * copying a link without feature-detecting first.
+         */
+        share(data: ShareData): Promise<'shared' | 'dismissed' | 'unavailable'>;
         readonly progress: Progress | null;
     }
 
@@ -180,6 +211,8 @@ declare namespace Pwax {
         'pwax:push-subscribed': CustomEvent<{ subscription: PushSubscription }>;
         'pwax:push-unsubscribed': CustomEvent<void>;
         'pwax:queued': CustomEvent<{ url: string }>;
+        /** Cancelable: `preventDefault()` keeps the runtime from routing to `targetURL`. */
+        'pwax:launch': CustomEvent<Launch>;
     }
 }
 

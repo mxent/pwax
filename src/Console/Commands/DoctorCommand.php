@@ -4,6 +4,7 @@ namespace Mxent\Pwax\Console\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository as Config;
+use Illuminate\Http\Request;
 use Mxent\Pwax\Pwa\AssetManifest;
 use Mxent\Pwax\Pwa\ComponentRegistry;
 use Mxent\Pwax\Pwa\Strategy;
@@ -11,6 +12,8 @@ use Mxent\Pwax\Pwa\WebManifest;
 use Mxent\Pwax\Pwax;
 use Mxent\Pwax\Support\RenderFunctionStore;
 use Mxent\Pwax\Support\Shell;
+use Symfony\Component\HttpKernel\Exception\MethodNotAllowedHttpException;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Throwable;
 
 /**
@@ -474,6 +477,235 @@ class DoctorCommand extends Command
             $this->warn_(
                 'pwax.manifest.screenshots is empty. Chromium falls back to a minimal install '
                 . 'prompt without at least one wide and one narrow screenshot.'
+            );
+        }
+
+        $this->checkManifestTargets($manifest, $scope);
+    }
+
+    /**
+     * The manifest members that name a URL the operating system will send the app to.
+     *
+     * `share_target`, `file_handlers`, `protocol_handlers` and `shortcuts` are declarations
+     * that something outside the browser may now open this application at a particular
+     * address. They pass straight through to the manifest, so declaring one is a promise
+     * the package cannot keep on the application's behalf — and the failure lands on a user
+     * who shared a photo to an installed app and got a 404, hours after the deploy, with
+     * nothing in any log tying it to a config change.
+     *
+     * Every declared target is resolved against the real route table here, with the method
+     * the browser will actually use. A target outside `scope` is checked too: the browser
+     * silently ignores those, so the member appears to work and simply never fires.
+     *
+     * @param  array<string, mixed>  $manifest
+     */
+    private function checkManifestTargets(array $manifest, string $scope): void
+    {
+        $targets = [];
+
+        /** @var array<string, mixed>|null $share */
+        $share = is_array($manifest['share_target'] ?? null) ? $manifest['share_target'] : null;
+
+        if ($share !== null) {
+            $this->checkShareTarget($share);
+
+            $method = strtoupper((string) ($share['method'] ?? 'GET'));
+
+            $targets['share_target.action'] = [
+                (string) ($share['action'] ?? ''),
+                in_array($method, ['GET', 'POST'], true) ? $method : 'GET',
+            ];
+        }
+
+        foreach ((array) ($manifest['file_handlers'] ?? []) as $index => $handler) {
+            if (! is_array($handler)) {
+                continue;
+            }
+
+            if (! is_array($handler['accept'] ?? null) || $handler['accept'] === []) {
+                $this->fail_(sprintf(
+                    'pwax.manifest.file_handlers.%s has no "accept" map, so the browser will '
+                    . 'register it for nothing. Give it {"text/csv": [".csv"]}.',
+                    (string) $index
+                ));
+            }
+
+            $targets[sprintf('file_handlers.%s.action', (string) $index)]
+                = [(string) ($handler['action'] ?? ''), 'GET'];
+        }
+
+        foreach ((array) ($manifest['protocol_handlers'] ?? []) as $index => $handler) {
+            if (! is_array($handler)) {
+                continue;
+            }
+
+            $protocol = (string) ($handler['protocol'] ?? '');
+            $url = (string) ($handler['url'] ?? '');
+
+            // Custom schemes must be `web+…`; the rest of the allowance is a fixed list in
+            // the specification. A scheme outside both is dropped without a word.
+            if ($protocol !== '' && ! str_starts_with($protocol, 'web+')
+                && ! in_array($protocol, self::SAFELISTED_SCHEMES, true)) {
+                $this->fail_(sprintf(
+                    'pwax.manifest.protocol_handlers.%s registers "%s". Custom schemes must begin '
+                    . 'with "web+"; browsers ignore the handler otherwise.',
+                    (string) $index,
+                    $protocol
+                ));
+            }
+
+            if ($url !== '' && ! str_contains($url, '%s')) {
+                $this->fail_(sprintf(
+                    'pwax.manifest.protocol_handlers.%s has no %%s in its url, so the handler has '
+                    . 'nowhere to put the link that was followed.',
+                    (string) $index
+                ));
+            }
+
+            // `%s` is where the browser substitutes the whole percent-encoded link. Any
+            // value stands in for the route test; what is being checked is the path.
+            $targets[sprintf('protocol_handlers.%s.url', (string) $index)]
+                = [str_replace('%s', 'x', $url), 'GET'];
+        }
+
+        foreach ((array) ($manifest['shortcuts'] ?? []) as $index => $shortcut) {
+            if (is_array($shortcut)) {
+                $targets[sprintf('shortcuts.%s.url', (string) $index)]
+                    = [(string) ($shortcut['url'] ?? ''), 'GET'];
+            }
+        }
+
+        if ($targets === []) {
+            return;
+        }
+
+        $broken = 0;
+
+        foreach ($targets as $key => [$url, $method]) {
+            $broken += $this->checkTarget($key, $url, $method, $scope) ? 0 : 1;
+        }
+
+        if ($broken === 0) {
+            $this->ok(sprintf('All %d manifest target(s) resolve', count($targets)));
+        }
+    }
+
+    /**
+     * Schemes a protocol handler may claim without the `web+` prefix.
+     *
+     * @var list<string>
+     */
+    private const SAFELISTED_SCHEMES = [
+        'bitcoin', 'cabal', 'dat', 'did', 'doi', 'dweb', 'ethereum', 'ftp', 'ftps', 'geo',
+        'gopher', 'hyper', 'im', 'ipfs', 'ipns', 'irc', 'ircs', 'magnet', 'mailto', 'matrix',
+        'mms', 'news', 'nntp', 'openpgp4fpr', 'sftp', 'sip', 'sms', 'smsto', 'ssb', 'ssh',
+        'tel', 'urn', 'webcal', 'wtai', 'xmpp',
+    ];
+
+    /**
+     * One declared target: inside scope, and answered by a route.
+     */
+    private function checkTarget(string $key, string $url, string $method, string $scope): bool
+    {
+        if (trim($url) === '') {
+            $this->fail_(sprintf('pwax.manifest.%s is empty.', $key));
+
+            return false;
+        }
+
+        $path = $this->pathOf($url);
+
+        if (! str_starts_with($path, $this->pathOf($scope))) {
+            $this->fail_(sprintf(
+                'pwax.manifest.%s (%s) is outside pwax.manifest.scope (%s), so the browser '
+                . 'will ignore it.',
+                $key,
+                $url,
+                $scope
+            ));
+
+            return false;
+        }
+
+        try {
+            $this->laravel->make('router')->getRoutes()->match(Request::create($path, $method));
+
+            return true;
+        } catch (MethodNotAllowedHttpException) {
+            $this->fail_(sprintf(
+                'pwax.manifest.%s (%s) has a route, but it does not accept %s — which is the '
+                . 'method the browser will use.',
+                $key,
+                $url,
+                $method
+            ));
+        } catch (NotFoundHttpException) {
+            $this->fail_(sprintf(
+                'pwax.manifest.%s (%s) matches no route. The manifest tells the operating '
+                . 'system to send the app there; nothing answers.',
+                $key,
+                $url
+            ));
+        } catch (Throwable $e) {
+            // A route that needs a bound model, a domain constraint the CLI cannot satisfy.
+            // Not knowing is not the same as knowing it is broken.
+            $this->warn_(sprintf(
+                'pwax.manifest.%s (%s) could not be resolved here: %s',
+                $key,
+                $url,
+                $e->getMessage()
+            ));
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * The share target's own shape, which the route table cannot speak to.
+     *
+     * @param  array<string, mixed>  $share
+     */
+    private function checkShareTarget(array $share): void
+    {
+        $method = strtoupper((string) ($share['method'] ?? 'GET'));
+
+        if (! in_array($method, ['GET', 'POST'], true)) {
+            $this->fail_(sprintf(
+                'pwax.manifest.share_target.method is "%s". Only GET and POST are allowed.',
+                $method
+            ));
+        }
+
+        /** @var array<string, mixed> $params */
+        $params = is_array($share['params'] ?? null) ? $share['params'] : [];
+
+        $hasFiles = ($params['files'] ?? []) !== [];
+
+        if ($hasFiles && $method !== 'POST') {
+            $this->fail_(
+                'pwax.manifest.share_target accepts files but is not a POST. A shared file '
+                . 'cannot be delivered in a query string.'
+            );
+        }
+
+        $enctype = strtolower((string) ($share['enctype'] ?? ''));
+
+        if ($method === 'POST' && $hasFiles && $enctype !== 'multipart/form-data') {
+            $this->fail_(
+                'pwax.manifest.share_target accepts files, so its enctype must be '
+                . '"multipart/form-data".'
+            );
+        }
+
+        if ($method === 'POST') {
+            $this->warn_(
+                'pwax.manifest.share_target posts to your application from outside it, so its '
+                . 'route needs CSRF exemption and its own validation. The service worker leaves '
+                . 'non-GET requests to the network, so a share received offline fails rather '
+                . 'than being queued — deliberately: replaying an arbitrary POST is not '
+                . 'something a package can decide for you.'
             );
         }
     }

@@ -155,6 +155,15 @@ class PwaxController extends Controller
         $response->headers->set('Cache-Control', 'public, max-age=86400');
         $response->headers->set('ETag', '"' . $manifest->hash() . '"');
 
+        // `lang`, `name`, `short_name` and `description` all follow the application locale,
+        // and this is served `public` for a day. Today the route sits outside the `web`
+        // group, so nothing has set a locale by the time it renders and every visitor gets
+        // the same document — but that is a property of the middleware list, not of this
+        // response, and `routes.static_middleware` is a config key. One `Vary` costs
+        // nothing and means adding locale middleware there cannot turn a shared cache into
+        // a machine for serving one visitor's language to the next.
+        $response->headers->set('Vary', 'Accept-Language');
+
         return $this->finish($request, $response);
     }
 

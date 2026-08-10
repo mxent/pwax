@@ -654,6 +654,32 @@ return [
         'launch_handler' => null,
 
         'handle_links' => null,
+
+        /*
+        | The three members that hand your application an entry point from outside the
+        | browser. Each names a URL the operating system will open the app at, and the
+        | route behind it is yours to write — the manifest makes the promise, your
+        | application keeps it. `php artisan pwax:doctor` resolves every one of them
+        | against the real route table, with the method the browser will use.
+        |
+        | A file handler and a protocol handler are delivered through the launch queue,
+        | which the runtime consumes: `window.pwax.launch.consume(fn)`. A POST share
+        | target is an ordinary form POST from outside your app, so its route needs CSRF
+        | exemption and its own validation.
+        |
+        |   'protocol_handlers' => [
+        |       ['protocol' => 'web+invoice', 'url' => '/invoices/open?ref=%s'],
+        |   ],
+        |   'file_handlers' => [
+        |       ['action' => '/import', 'accept' => ['text/csv' => ['.csv']]],
+        |   ],
+        |   'share_target' => [
+        |       'action' => '/share',
+        |       'method' => 'POST',
+        |       'enctype' => 'multipart/form-data',
+        |       'params' => ['title' => 'title', 'text' => 'text', 'url' => 'url'],
+        |   ],
+        */
         'protocol_handlers' => [],
         'file_handlers' => [],
         'share_target' => null,

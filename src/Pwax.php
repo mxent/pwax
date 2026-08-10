@@ -128,7 +128,7 @@ class Pwax
             $bindings = $this->renderFunctions?->bindings($component->template);
 
             if ($bindings !== null) {
-                $payload['script'] = trim($bindings . "\n" . $payload['script']);
+                $payload['script'] = trim($bindings . "\n" . (string) $payload['script']);
             }
         }
 

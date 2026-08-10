@@ -152,9 +152,10 @@ class RenderFunctionStore
      */
     public function views(): array
     {
+        /** @var mixed $views */
         $views = $this->meta()['views'] ?? [];
 
-        return is_array($views) ? array_filter($views, 'is_string') : [];
+        return is_array($views) ? self::strings($views) : [];
     }
 
     /**
@@ -259,8 +260,29 @@ class RenderFunctionStore
         /** @var mixed $functions */
         $functions = $loaded['functions'] ?? [];
 
-        return $this->functions = is_array($functions)
-            ? array_filter($functions, 'is_string')
-            : [];
+        return $this->functions = is_array($functions) ? self::strings($functions) : [];
+    }
+
+    /**
+     * The string-keyed, string-valued entries of an array read from disk.
+     *
+     * The file is generated, so in practice everything in it is already the right shape.
+     * It is also a file on disk that a deploy can truncate and a person can edit, and this
+     * is the boundary where that stops being someone else's problem.
+     *
+     * @param  array<array-key, mixed>  $values
+     * @return array<string, string>
+     */
+    private static function strings(array $values): array
+    {
+        $strings = [];
+
+        foreach ($values as $key => $value) {
+            if (is_string($value)) {
+                $strings[(string) $key] = $value;
+            }
+        }
+
+        return $strings;
     }
 }

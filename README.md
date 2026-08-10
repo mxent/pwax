@@ -63,6 +63,8 @@ table in JavaScript.
 - [Plugins, directives and middleware](#plugins-directives-and-middleware)
 - [Progressive web app](#progressive-web-app)
 - [Being opened by the operating system](#being-opened-by-the-operating-system)
+- [Push notifications](#push-notifications)
+- [Extending the service worker](#extending-the-service-worker)
 - [Frontend assets](#frontend-assets)
 - [Performance](#performance)
 - [Precompiling templates](#precompiling-templates)
@@ -666,7 +668,7 @@ window.pwax.install.standalone;              // running as an installed app?
 await window.pwax.badge.set(3);              // the count on the app icon
 await window.pwax.storage.persist();         // ask to be exempt from eviction
 
-await window.pwax.push.subscribe();          // Web Push, using push.public_key
+await window.pwax.push.subscribe();          // Web Push — see Push notifications
 await window.pwax.sync.enqueue('/notes', { method: 'POST', body: note });
 
 await window.pwax.share({ title, url });     // the platform share sheet
@@ -1036,6 +1038,167 @@ checks on demand.
 document.addEventListener('pwax:offline', () => banner.hidden = false);
 document.addEventListener('pwax:online', () => banner.hidden = true);
 ```
+
+### Push notifications
+
+Four steps, and the first one is the one every other guide assumes you already have.
+
+**1. Generate a VAPID key pair.** No Node needed — this uses `ext-openssl`, which Laravel
+already requires.
+
+```bash
+php artisan pwax:vapid
+```
+
+```dotenv
+VAPID_PUBLIC_KEY=BE1cBl7BxUtZ…
+VAPID_PRIVATE_KEY=BBD3vKF0zkf…
+```
+
+The public key goes to the browser at subscribe time, so it is safe in a page. The private
+one never leaves the server. Rotating them invalidates every existing subscription, so
+generate once and keep them.
+
+**2. Point the config at the key and at an endpoint of yours.**
+
+```php
+'push' => [
+    'public_key' => env('VAPID_PUBLIC_KEY'),
+    'endpoint'   => '/push/subscriptions',
+    'title'      => config('app.name'),   // used when a message sends no title
+    'icon'       => '/images/icons/icon-192.png',
+    'badge'      => '/images/icons/badge-72.png',
+],
+```
+
+**3. Write the endpoint.** Pwax posts the browser's subscription there and deletes it on
+unsubscribe. It never invents the shape — the body is `PushSubscription.toJSON()` verbatim:
+
+```json
+{
+  "endpoint": "https://fcm.googleapis.com/fcm/send/…",
+  "expirationTime": null,
+  "keys": { "p256dh": "BN…", "auth": "k9…" }
+}
+```
+
+```php
+Route::post('/push/subscriptions', function (Request $request) {
+    $data = $request->validate([
+        'endpoint'   => ['required', 'url'],
+        'keys.p256dh' => ['required', 'string'],
+        'keys.auth'   => ['required', 'string'],
+    ]);
+
+    $request->user()->pushSubscriptions()->updateOrCreate(
+        ['endpoint' => $data['endpoint']],
+        ['p256dh' => $data['keys']['p256dh'], 'auth' => $data['keys']['auth']],
+    );
+
+    return response()->noContent();
+})->middleware('auth');
+
+Route::delete('/push/subscriptions', function (Request $request) {
+    $request->user()->pushSubscriptions()
+        ->where('endpoint', $request->input('endpoint'))
+        ->delete();
+
+    return response()->noContent();
+})->middleware('auth');
+```
+
+Both requests carry the session cookie and Pwax's CSRF token, so `auth` and `web` work
+normally.
+
+**4. Subscribe, from a user gesture.**
+
+```js
+if (window.pwax.push.supported && window.pwax.push.permission === 'default') {
+    await window.pwax.push.subscribe();       // asks permission, then posts to your endpoint
+}
+```
+
+`subscribe()` resolves to the subscription or `null` if permission was refused.
+`unsubscribe()` tells your endpoint first and drops the local subscription second, so a
+failure leaves you with a subscription that still exists on both sides rather than one the
+server will keep pushing to forever.
+
+#### Sending
+
+Deliberately not part of this package. Storing subscriptions and signing VAPID requests is
+what [`laravel-notification-channels/webpush`](https://github.com/laravel-notification-channels/webpush)
+already does well, and a second implementation inside a PWA package would be a worse one.
+Install it, point it at the same keys, and Pwax's worker will render what it sends.
+
+#### What the worker does with a message
+
+The payload shape is the Notification API's own, so anything that library sends works
+untranslated:
+
+```json
+{
+  "title": "Invoice paid",
+  "body": "#1043 — £240.00",
+  "icon": "/images/icons/icon-192.png",
+  "tag": "invoice-1043",
+  "data": { "url": "/invoices/1043" }
+}
+```
+
+`title` falls back to `push.title`, and `icon`/`badge` to their config values. A push that
+arrives with no payload at all still shows something: every browser requires
+`userVisibleOnly`, and showing nothing is how an origin loses its push permission.
+
+A click closes the notification and goes to `data.url`. If a window is already open on that
+URL it is focused; if a window is open elsewhere it is navigated; only if neither is true is
+a new one opened. Opening a second tab on a page the user already has open is the thing
+they notice and dislike.
+
+### Extending the service worker
+
+The worker is a built bundle rather than a Blade view since 4.1, so it is no longer edited
+by publishing it. Two ways in, and the first is almost always the right one.
+
+**Append your own handlers.** Each entry is a view name or an absolute path. The contents
+are appended after the worker and share its scope, so `CONFIG`, `PREFIX` and the cache
+helpers are all in reach:
+
+```php
+'service_worker' => [
+    'extend' => ['js.analytics-sync'],
+],
+```
+
+```blade
+{{-- resources/views/js/analytics-sync.blade.php --}}
+self.addEventListener('periodicsync', (event) => {
+    if (event.tag === 'refresh-feed') {
+        event.waitUntil(fetch('/feed/refresh'));
+    }
+});
+```
+
+It is a Blade view rendered with no variables, so reach for `config()` and `@json()` —
+the value is resolved at request time rather than baked into a published file. Everything
+the worker itself was given is on `self.__PWAX_SW__`. The worker is served `no-cache`, so a
+change reaches clients on their next update check.
+
+This is the supported seam and the reason to prefer it: you get every future fix to the
+1,600 lines you did not fork.
+
+**Replace it outright.** Still supported, and always will be:
+
+```php
+'service_worker' => [
+    'blade' => 'js.my-worker',
+],
+```
+
+Your view receives `$manifest` — the whole asset manifest, the same array `/sw.json`
+serves. Nothing else in the package is involved after that, including the fixes.
+
+Either way `php artisan pwax:precache` shows what the manifest will tell your worker to
+install, and `/sw.js` in a browser shows exactly what is being served.
 
 ## Frontend assets
 
@@ -1447,6 +1610,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `pwax:component <name>` | Scaffold a component view (`--plain`, `--force`) |
 | `pwax:precache` | List everything available offline (`--verify`, `--json`) |
 | `pwax:compile` | Precompile templates to render functions — optional, needs Node (`--clear`, `--json`) |
+| `pwax:vapid` | Generate a VAPID key pair for Web Push (`--json`) |
 | `pwax:doctor` | Check for common misconfigurations |
 | `pwax:clear` | Flush compiled caches and the offline manifest |
 

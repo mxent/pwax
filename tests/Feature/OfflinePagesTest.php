@@ -100,6 +100,21 @@ class OfflinePagesTest extends TestCase
         $this->assertFalse($this->get('/sw.json')->json('pageRuntime'));
     }
 
+    /**
+     * A page answers two ways — a payload to the runtime, a document to a navigation — and
+     * the install used to fetch only the payload. A route the visitor had never opened
+     * therefore had no HTML at all, so a cold start on it offline meant the shell and a
+     * spinner while the runtime fetched a payload already sitting on disk.
+     */
+    public function test_page_documents_are_precached_by_default(): void
+    {
+        $this->assertTrue($this->get('/sw.json')->json('pageDocuments'));
+
+        config()->set('pwax.service_worker.pages.documents', false);
+
+        $this->assertFalse($this->get('/sw.json')->json('pageDocuments'));
+    }
+
     public function test_the_navigation_strategy_and_urls_reach_the_manifest(): void
     {
         config()->set('pwax.service_worker.navigation_strategy', 'cache-first');

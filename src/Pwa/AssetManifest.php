@@ -280,6 +280,10 @@ class AssetManifest
             // be satisfied on lookup. A test asserts this agrees with `Pwax::VARY`.
             'pageHeaders' => self::PAGE_HEADERS,
             'pageRuntime' => (bool) $this->config->get('pwax.service_worker.pages.runtime', true),
+            // Whether the install fetches each page's HTML as well as its payload. A page
+            // answers two ways and precaching one of them left every unvisited route
+            // without a document to show on a cold start.
+            'pageDocuments' => (bool) $this->config->get('pwax.service_worker.pages.documents', true),
             'pageDefaults' => $this->pageDefaults(),
             'assetGroups' => $groups,
             'dataGroups' => $this->dataGroups(),

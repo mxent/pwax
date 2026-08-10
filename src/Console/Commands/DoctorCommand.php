@@ -821,6 +821,22 @@ class DoctorCommand extends Command
             );
         }
 
+        // The page caches are bounded and evicted oldest-first, and an install fills them
+        // before any browsing does. Precache more pages than the bound and the install's
+        // own work is the first thing thrown away — silently, on the visitor's first few
+        // navigations, leaving exactly the routes they never opened missing offline.
+        $maxEntries = (int) $config->get('pwax.service_worker.pages.max_entries', 60);
+
+        if ($pages > 0 && $maxEntries > 0 && $pages > $maxEntries) {
+            $this->warn_(sprintf(
+                '%d pages are precached but service_worker.pages.max_entries is %d, so '
+                . 'browsing evicts what the install stored. Raise it to at least %d.',
+                $pages,
+                $maxEntries,
+                $pages
+            ));
+        }
+
         if ((bool) $config->get('pwax.service_worker.pages.runtime', true)) {
             $this->warn_(
                 'Pages are cached as they are visited (service_worker.pages.runtime). Caches '

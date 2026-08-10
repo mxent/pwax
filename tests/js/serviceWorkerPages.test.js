@@ -130,6 +130,21 @@ function offline(current, caches) {
 /** The request the client runtime makes for a page. */
 const asRuntime = (path) => new Request(path, { headers: PAGE_HEADERS });
 
+/**
+ * Which document came back.
+ *
+ * The shell and a page's own HTML are both `<html>` with a `pwax-initial` island, so
+ * asserting on either of those cannot tell them apart — three tests here did exactly that
+ * and passed on the shell while claiming to prove the page document was served. The URL
+ * inside the island is the only thing that discriminates.
+ */
+async function documentUrl(response) {
+    const body = await (await response).text();
+    const island = /id="pwax-initial">(.*?)<\/script>/s.exec(body);
+
+    return island ? JSON.parse(island[1]).url : null;
+}
+
 /** Ask for a page the way the runtime does. */
 const visit = (worker, path) =>
     worker.dispatch('fetch', {
@@ -240,9 +255,9 @@ describe('page payloads offline', () => {
 
         await boot(current, { caches });
 
-        const response = await offline(current, caches).navigate(ABOUT);
-
-        await expect((await response).text()).resolves.toContain('pwax-initial');
+        // Precached at install, not visited first: an install fetches both halves of a
+        // page, so a route the visitor has never opened still has its own HTML.
+        await expect(documentUrl(offline(current, caches).navigate(ABOUT))).resolves.toBe(ABOUT);
     });
 
     it('falls back to the shell for a page it has no document for', async () => {
@@ -254,9 +269,126 @@ describe('page payloads offline', () => {
         // Visited, so its payload is cached — but no document was ever precached for it.
         await visit(worker, DASHBOARD);
 
-        const response = await offline(current, caches).navigate(DASHBOARD);
+        // /dashboard is not in the manifest and was never navigated to, so nothing has
+        // its document — the shell is the correct answer, and this is what it looks like.
+        await expect(documentUrl(offline(current, caches).navigate(DASHBOARD))).resolves.toBe(
+            SHELL
+        );
+    });
 
-        await expect((await response).text()).resolves.toContain('pwax-initial');
+    /**
+     * The install fetches a page twice: once with the component header for the payload,
+     * once without for the document. Before 4.2 it fetched only the first, so every route
+     * the visitor had not personally opened had no HTML — offline and on a cold start they
+     * got the shell and a spinner while the runtime fetched a payload already on disk.
+     */
+    it('precaches both halves of a page', async () => {
+        const caches = new FakeCaches();
+        const worker = await boot(manifest(), { caches });
+
+        const asked = worker.requests
+            .filter((sent) => new URL(sent.url).pathname === ABOUT)
+            .map((sent) => sent.headers.get('X-Pwax-Component'));
+
+        expect(asked).toEqual(['true', null]);
+
+        await expect((await caches.open('pwax-documents-h1')).match(ABOUT)).resolves.toBeDefined();
+    });
+
+    it('precaches only the payload when documents are turned off', async () => {
+        const current = manifest({ pageDocuments: false });
+        const caches = new FakeCaches();
+
+        await boot(current, { caches });
+
+        expect(await caches.keys()).not.toContain('pwax-documents-h1');
+
+        // And the page still works offline — through the shell, which is the trade.
+        await expect(documentUrl(offline(current, caches).navigate(ABOUT))).resolves.toBe(SHELL);
+    });
+
+    /**
+     * `->offline(false)` is the per-route refusal, and it has to hold on the path that
+     * fetches a document nobody asked for as much as on the one that stores a visit.
+     */
+    it('does not precache the document of a page that opted out', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        const worker = createWorker({
+            manifest: current,
+            caches,
+            routes: (path, request) => {
+                if (path === '/sw.json') {
+                    return Response.json(current);
+                }
+
+                if (path === ABOUT && request.headers.get('X-Pwax-Component') !== 'true') {
+                    return new Response('<html>secret</html>', {
+                        headers: { 'Content-Type': 'text/html', 'X-Pwax-Cache': 'none' },
+                    });
+                }
+
+                return server(current)(path, request);
+            },
+        });
+
+        await worker.dispatch('install');
+        await worker.dispatch('activate');
+
+        await expect(
+            (await caches.open('pwax-documents-h1')).match(ABOUT)
+        ).resolves.toBeUndefined();
+    });
+
+    /**
+     * A route behind `auth` answers a document request with the login screen, and the
+     * payload half already refuses that. The document half must too, or the login page is
+     * pinned under that route's URL until the next deploy.
+     */
+    it('does not precache a document that is not html', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        const worker = createWorker({
+            manifest: current,
+            caches,
+            routes: (path, request) =>
+                path === ABOUT && request.headers.get('X-Pwax-Component') !== 'true'
+                    ? new Response('{}', { headers: { 'Content-Type': 'application/json' } })
+                    : server(current)(path, request),
+        });
+
+        await worker.dispatch('install');
+        await worker.dispatch('activate');
+
+        await expect(
+            (await caches.open('pwax-documents-h1')).match(ABOUT)
+        ).resolves.toBeUndefined();
+    });
+
+    /** A document that could not be fetched must not fail the install. */
+    it('installs successfully when a document cannot be fetched', async () => {
+        const current = manifest();
+        const caches = new FakeCaches();
+
+        const worker = createWorker({
+            manifest: current,
+            caches,
+            routes: (path, request) =>
+                path === ABOUT && request.headers.get('X-Pwax-Component') !== 'true'
+                    ? null
+                    : server(current)(path, request),
+        });
+
+        await worker.dispatch('install');
+
+        expect(worker.failed()).toBe(false);
+
+        // The payload — the half offline correctness actually rests on — is still there.
+        await expect(
+            (await caches.open('pwax-pages-h1')).match(asRuntime(ABOUT))
+        ).resolves.toBeDefined();
     });
 
     it('never answers a navigation with a page payload', async () => {
@@ -637,10 +769,10 @@ describe('documents cached as they are visited', () => {
         // /dashboard is not in the manifest, so install stored no document for it.
         await worker.navigate(DASHBOARD);
 
-        const response = await offline(current, caches).navigate(DASHBOARD);
-
         // The real page, inlined component and all — not the shell and a spinner.
-        await expect(response.text()).resolves.toContain('pwax-initial');
+        await expect(documentUrl(offline(current, caches).navigate(DASHBOARD))).resolves.toBe(
+            DASHBOARD
+        );
     });
 
     it('stores a document rendered for any visitor', async () => {
@@ -654,9 +786,9 @@ describe('documents cached as they are visited', () => {
         const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
         await worker.navigate(DASHBOARD);
 
-        const response = await offline(current, caches).navigate(DASHBOARD);
-
-        await expect(response.text()).resolves.toContain('pwax-initial');
+        await expect(documentUrl(offline(current, caches).navigate(DASHBOARD))).resolves.toBe(
+            DASHBOARD
+        );
     });
 
     it('stores nothing when runtime page caching is off', async () => {
@@ -668,6 +800,18 @@ describe('documents cached as they are visited', () => {
 
         const worker = await boot(current, { caches, cacheable: [ABOUT, DASHBOARD] });
         await worker.navigate(DASHBOARD);
+
+        expect(await caches.keys()).not.toContain('pwax-documents-h1');
+    });
+
+    it('precaches nothing either when runtime page caching is off', async () => {
+        // The install writes documents now, so the switch that is documented as keeping
+        // rendered markup off disk has to govern that too — otherwise turning it off
+        // stopped one source of documents and a deploy started another.
+        const current = manifest({ pageRuntime: false });
+        const caches = new FakeCaches();
+
+        await boot(current, { caches });
 
         expect(await caches.keys()).not.toContain('pwax-documents-h1');
     });

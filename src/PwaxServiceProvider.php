@@ -25,6 +25,7 @@ use Mxent\Pwax\Console\Commands\ComponentMakeCommand;
 use Mxent\Pwax\Console\Commands\DoctorCommand;
 use Mxent\Pwax\Console\Commands\InstallCommand;
 use Mxent\Pwax\Console\Commands\PrecacheCommand;
+use Mxent\Pwax\Console\Commands\VapidCommand;
 use Mxent\Pwax\Contracts\Minifier;
 use Mxent\Pwax\Http\Middleware\HandlePwaxRequests;
 use Mxent\Pwax\Minification\CachedMinifier;
@@ -58,6 +59,7 @@ class PwaxServiceProvider extends ServiceProvider
                 DoctorCommand::class,
                 PrecacheCommand::class,
                 CompileCommand::class,
+                VapidCommand::class,
             ]);
         }
     }

@@ -9,6 +9,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`php artisan pwax:vapid`.** Web Push needed a VAPID key pair, and every guide to
+  generating one reaches for a Node tool — which is the one thing an application built on
+  this package is entitled not to have. This needs only `ext-openssl`, and prints both keys
+  ready to paste into `.env`.
+
+
 - **The manifest members that hand your app to the operating system now work.**
   `share_target`, `file_handlers` and `protocol_handlers` passed straight through to the
   manifest and nothing else happened: the browser registered the app for them, and the
@@ -37,7 +43,136 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `'shared' | 'dismissed' | 'unavailable'` so a caller can fall back to copying a link
   without feature-detecting, and separating a cancelled sheet from a broken one.
 
+### Changed
+
+- **A navigation that fails for a reason other than an HTTP status now says so in the
+  console.** The visitor is still shown "this page needs an internet connection", which is
+  what they can act on and is true nine times out of ten. The tenth is a bug or a
+  misconfiguration — a component that will not compile, a middleware that threw — and it was
+  reported to the developer as a network problem, which is the wrong place to start looking.
+- **The service worker is built, not templated.** It was 1,611 lines of JavaScript inside a
+  Blade file — never linted, never formatted, never minified, and testable only through a
+  hand-written Blade emulator that its own docblock admitted was crude. It is now
+  `src/js/sw/index.js`, built by esbuild to `dist/pwax-sw.js` and served behind a small
+  generated preamble carrying the four values the server actually decides. Served bytes
+  drop from ~55 kB of commented source to ~13 kB, on a file refetched on every update
+  check.
+
+  Linting it for the first time immediately found a dead parameter.
+
+  `service_worker.extend` is the supported way to add a `push` or `sync` handler now —
+  views or files appended after the worker, sharing its scope — instead of forking the
+  whole thing to add ten lines and never receiving a fix again.
+  `service_worker.blade` still replaces the worker outright and always will, so a fork
+  made against 4.0 keeps working.
+- **The offline document is a Blade view**, `pwax::js.offline`, rather than forty lines of
+  HTML in a JavaScript string. It picks up the application's `lang` and `dir` — it was
+  hardcoded to `lang="en"` — and publishes on its own with
+  `vendor:publish --tag=pwax-service-worker`.
+- **One vocabulary for every strategy.** Four config keys answered "when do we go to the
+  network?" in three different languages — `runtime_strategy` said `network-first` where
+  `pages.strategy` said `freshness` for the same behaviour, and `navigation_strategy` said
+  `app-shell` where both meant `cache-first`. They now share one set of names, the ones the
+  rest of the web uses. `freshness` is `network-first`, `performance` is `cache-first`, and
+  `app-shell` is `cache-first`.
+
+  Every old spelling still resolves and will for this major cycle; `pwax:doctor` names the
+  ones still in use. Normalising happens server-side, so the manifest only ever carries the
+  new vocabulary and the worker knows one set of words.
+- **`pwax.assets.strategy` is `pwax.assets.source`.** It chooses where the framework is
+  served from — `local` or `cdn` — and nothing about caching, so it was the fifth key called
+  "strategy" in a config where the other four mean something else. The old key still works.
+
+
+- **One set of caches, named for the build.** `pwax-precache-<build>`,
+  `pwax-pages-<build>`, `pwax-documents-<build>`, `pwax-runtime`, `pwax-lazy` and
+  `pwax-data-<group>-v<n>`, where `<build>` is the manifest's content hash. No per-visitor
+  names, no per-visitor sets: one cost a fresh copy of the application per person and an
+  empty set minted on every sign-in, and it never delivered the isolation it was named
+  for. `service_worker.identity_cache_limit` is gone with the per-person sets it bounded;
+  `pwax:doctor` names it.
+- **`data_groups[].version` now names the group's cache**, which is the only thing it was
+  ever for. It reached the manifest and was read by nothing: bumping it changed the
+  manifest hash, so it re-precached the entire application on every client, and left the
+  one cache it was meant to discard exactly as it was. Cache names carry the version, and
+  `activate()` sweeps the versions no group claims any more. Upgrading orphans each
+  existing data cache once; they repopulate on the next request.
+
+
+- **A stored copy is used when the origin cannot be reached through, not only when the
+  network throws.** A proxy that cannot get an answer out of the application, or an
+  application mid-deploy, produces a *reply* — so the fallback never ran and the visitor
+  saw an error with a usable copy on the device. The rule applies everywhere there is
+  something to fall back to: page payloads, data groups, full navigations — which answer
+  from the stored document, so a reload during a deploy still gets the installed
+  application — and the runtime cache.
+
+  Exactly `502`, `503` and `504`, none of which is distinguishable from a bad connection
+  from the device: a proxy that could not reach the application, one refusing for now
+  (`php artisan down` answers `503`), and one that waited and gave up. **A `500` is shown,
+  like a `404`** — the application ran and threw, and answering that from cache hides the
+  bug twice: the visitor sees a page that works and reports nothing, and whoever deployed
+  it does not learn the route is broken. When a stored copy does stand in, the worker says
+  so on the console with the status and the URL.
+- `service_worker.strategy` is `service_worker.runtime_strategy`, and defaults to
+  `network-only`. The old default kept a copy of every same-origin GET it passed through,
+  including URLs the application never declared.
+- Data groups are written flat, and `max_size` is `max_entries` — the same quantity that
+  the pages block and the runtime cache already spelled that way.
+- `pwax.sw.registration` is `pwax.sw.controller`; `pwax.sw.registration()` returns the
+  registration.
+- Navigation preload is consumed rather than discarded, so a navigation the worker declines
+  to handle no longer costs the server two requests.
+- The view-tree walk and the route walk happen once per manifest build rather than two and
+  four times.
+- Middleware modules no longer delay the first paint. Plugins and directives still do,
+  because Vue offers no way to register either after mount.
+
+
+- **BREAKING:** `pwax_component()` is now `pwaxRender()`, `pwax_route()` is `pwaxRoute()`,
+  and the `@pwax` directive is `@pwaxImport`. `Pwax::importExpression()` is `Pwax::import()`.
+  Each helper is now named after the facade method it wraps. See `UPGRADE.md`.
+- **BREAKING:** the 1.x `vue()` and `router()` helpers and the `pwax.helpers.global` config
+  key are removed. They were deprecated in 2.0.
+- **BREAKING:** the service worker moves from `/service-worker.js` to `/sw.js` and the web
+  manifest from `/manifest.webmanifest` to `/manifest.json`. No redirect or shim is shipped
+  for either — a worker script response cannot be a redirect, so a worker already registered
+  at the old path has to be unregistered once in the browser. See `UPGRADE.md`. Installs
+  survive the manifest move: its `id` defaults to `start_url`.
+- **BREAKING:** `pwax.components.directive` now replaces the default name rather than
+  registering a second directive alongside it, so an application has exactly one spelling.
+  The 1.x `@import('…')` form is no longer special-cased in config values.
+- **BREAKING:** `service_worker.precache` becomes `service_worker.pages.urls` and
+  `service_worker.files` becomes `service_worker.asset_groups`.
+- Page payloads may now be stored by the service worker when a route opts in, where
+  previously `no-store` kept every one of them off disk. The three controls that make that
+  safe — the opt-in itself, anonymous install-time fetches, and identity-partitioned caches
+  — are described in the published config.
+
 ### Fixed
+
+- **A page's HTML was only ever cached by visiting it.** A page answers two ways — a JSON
+  payload to the client runtime, an HTML document to a browser navigation — and the install
+  fetched only the payload. Every route the visitor had not personally opened therefore had
+  no document at all: offline, or on a cold start, they got the shell and a spinner while
+  the runtime fetched a payload that was already sitting on disk, instead of the HTML the
+  server had already rendered.
+
+  The install now fetches both halves. `service_worker.pages.documents => false` opts out,
+  and `pages.runtime => false` still overrides everything — it is documented as keeping
+  rendered markup off disk, so a deploy must not start writing documents when it is set.
+  `->offline(false)` is honoured on this path as on every other.
+
+  A test named "answers an offline navigation with the page's own document" had been passing
+  for two releases: the fake shell and the fake page document both contained the string it
+  asserted on, so it could not tell which one came back — and it was the shell. It asserts on
+  the URL inside the document's own island now, and fails against the old behaviour.
+
+- **`pwax:doctor` now warns when more pages are precached than `pages.max_entries` allows.**
+  The page caches are bounded and evicted oldest-first, and the install fills them before any
+  browsing does — so with the default of 60 an application with more routes than that had the
+  install's own work thrown away by the visitor's first few navigations.
+
 
 - **`/manifest.json` had no `Vary: Accept-Language`.** Its `lang`, `name` and `description`
   all follow the application locale and it is served `public, max-age=86400`. The route sits
@@ -48,7 +183,135 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The "Vue is not loaded" error still said the runtime-only build could never work.** It
   has been serviceable since `pwax:compile` landed.
 
+
+- **A CDN subresource-integrity map keyed only on the package name.** Vue publishes two
+  builds and Pwax can serve either, so `assets.cdn.integrity['vue']` would have sent the
+  full build's digest with `vue.runtime.global.prod.js` — and a browser refuses a script
+  whose digest does not match, which is the whole application failing to start. The map now
+  accepts a filename key, which wins over the package name, and ships the runtime build's
+  hash.
+- **The client runtime bundle could never update in a browser that had cached it.**
+  `/__pwax__/pwax.js` carries no version in its URL and is served `immutable`, which tells
+  a browser not to revalidate for a year — not even conditionally, so its ETag was never
+  consulted. Upgrading the package left returning visitors on the runtime they first
+  downloaded. Invisible with the service worker on, since that precaches by content hash;
+  entirely visible with it off, which is the default. The URL is now fingerprinted by the
+  bundle's contents, and the source map is revalidated rather than cached hard so it cannot
+  be paired with a newer bundle.
+- **Every lazily-cached asset was discarded on every deploy.** A lazy asset group is where
+  the big files go — `/images/**`, `/fonts/**` and `/media/**` are the shipped defaults —
+  and the point of declaring one is that what it fetches is then kept. It was kept in the
+  precache, which is named for the build and deleted wholesale by the next one, and lazy
+  entries never enter the install set so nothing carried them across. So a release that
+  changed one component re-downloaded every image and font on the device: precisely the
+  churn the delta install exists to prevent, applied to the largest files in the
+  application. They now live in `pwax-lazy`, which survives a deploy the way the runtime
+  cache does, and only entries whose own content hash changed are acted on.
+- **`asset_groups[].update_mode` did nothing at all.** Documented as choosing what happens
+  to a changed entry on the next deploy, it was emitted into `sw.json` and never read —
+  while still forming part of the manifest hash, so editing it forced every client to
+  re-precache the whole application for no change in behaviour. It now selects what the
+  install does with a changed file the device already holds: `prefetch` brings it up to
+  date there and then, `lazy` drops it for the next request to fetch. Files the device
+  never asked for are still not fetched — that is `install_mode`'s decision, not this one.
+- **The compiled-component cache grew without bound on a personalised page.** The cache
+  key is a digest of the rendered output, which is what makes an entry impossible to serve
+  stalely — a changed component simply produces a new key. For a page rendered with
+  controller data it inverts: the output is particular to the request, so every visitor
+  minted an entry, written with `forever()`, that no later request could ever hit. On a
+  busy application that is unbounded growth driven by traffic, on a store whose only purge
+  is to flush everything. Renders given no data are stored as before; renders given data
+  are not, unless the route calls `->cacheable()` — which already declares the page renders
+  the same for everyone.
+- **A component compiled twice in one request reached the cache store twice.** Two
+  `@pwaxImport`s of the same component, or a caller reading `toArray()` before returning
+  the response, each paid a full round trip to Redis for an answer already in hand. A
+  bounded in-process memo answers the second one.
+- **A page waited for its own cache write before it was delivered.** `page()` opened a
+  cache, wrote to it and walked its keys to trim, all before returning the response the
+  runtime was waiting on; a data group's response paid three storage round-trips the same
+  way. None of that work is for the current visit. It moves to `event.waitUntil`, where
+  `navigate()` already put it.
+- **`trim()` walked every key in the cache on every single write.** `cache.keys()`
+  materialises a `Request` per entry, so a sixty-entry page cache built sixty objects per
+  navigation to discover that nothing needed deleting. An advisory counter, seeded from
+  one real walk, gates the check; nothing is deleted without the real walk still running.
+- **The install probed each previous build in turn for every unchanged asset.** With three
+  builds retained that is up to three serial storage round-trips per file, inside a
+  six-way limiter, on the one path a deploy is supposed to make cheap. The manifest scan
+  that already reads those caches now records which one holds each URL.
+- **A new page component type was minted on every navigation.**
+  `defineAsyncComponent(() => Promise.resolve(options))` wrapped an object that was
+  already resolved, costing a microtask and a render pass in which the page was truthy but
+  drew nothing — and, because Vue compares component types by identity, making a return to
+  an already-visited path unmount and rebuild from scratch.
+- **The whole application was announced as "Loading".** The mount element carried
+  `role="status"`, `aria-live="polite"` and `aria-label="Loading"` for the spinner, and the
+  runtime removed only the class on mount — so for the rest of the session every reactive
+  text change anywhere in the app was read aloud by a screen reader.
+- **A route change told a screen reader nothing.** The shell now carries a live region and
+  the runtime announces each navigation's title into it.
+- Function default exports are returned as themselves, so client middleware and Vue
+  functional components work. Spreading a function into an object produced `{}`.
+- `pwax.sw.registration` returned the controlling `ServiceWorker`, not the
+  `ServiceWorkerRegistration` — see **Changed**.
+- `dist/pwax.js.map` is served. The bundle has always ended with a `sourceMappingURL`
+  comment pointing at a route that did not exist.
+- A `navigation_urls` pattern that will not compile is skipped with a warning instead of
+  thrown, where it previously turned every navigation in the application into the offline
+  page.
+- **An expired CSRF token could reload the page forever.** A `419` is answered by reloading
+  to pick up a fresh token, which assumes the reload reaches the server — and under
+  `navigation_strategy => 'app-shell'` it does not, because the worker answers navigations
+  from disk and returns the same expired token. One reload per tab now, re-armed whenever a
+  page loads successfully; a second `419` renders the error template.
+- `pwax.sw.applyUpdate()` no longer depends on `this`, so `const { applyUpdate } =
+  window.pwax.sw` works.
+
+
+- **Client middleware was always "unknown".** A middleware is written as
+  `export default async function (…) {}`, exactly as the README shows, but the module
+  loader spread every default export into a fresh object to merge in the Blade template.
+  A function has no own enumerable properties, so the spread produced `{}` and
+  `runMiddleware` reported `pwax: unknown middleware "name"` for a middleware that had
+  loaded perfectly. A function default export is now returned as itself, which also fixes
+  Vue functional components silently rendering nothing.
+- **`service_worker.precache` never worked.** The worker fetched each listed route without
+  the `X-Pwax-Component` header, so the server answered with the HTML shell; that shell is
+  `no-store`, which the worker correctly refused to store. Every entry was skipped in
+  silence while the documentation described the feature as working.
+- **Cached page entries could never be matched.** Responses carry
+  `Vary: X-Pwax-Component, X-Requested-With, Accept`, and entries were stored under a bare
+  URL with none of those headers set.
+- **The offline shell's hash ignored the shell.** It was computed from a list of config
+  values and `Pwax::shell()` — which returns the shell's *view name*, a constant. Editing
+  the shell layout, either `includes/` partial or any Blade override left it unchanged, so
+  the worker copied a stale shell forward across every deploy.
+- **Configured `pwax.styles` sheets were never precached**, so an application with them set
+  went offline unstyled.
+- The service worker fetched precache URLs with `credentials: 'same-origin'`, so an install
+  triggered while signed in would have stored that user's private renderings once page
+  caching worked. Pages are now fetched anonymously.
+- `resources/views/layouts/shell.blade.php` discarded the `Shell` passed to it and resolved
+  a new one from the container, making the parameter dead and blocking a request-free
+  render.
+- `AssetManifest` compared against a hardcoded `/manifest.webmanifest` default that differed
+  from the one it emitted, so a configured manifest path went unhashed.
+- The `Pwax` facade documented `payload()`'s second argument as `$includeScript`; it has
+  been `$addressable` since 2.0.
+
 ### Documentation
+
+- **How to use push, end to end**, which was previously one line in a code block: generating
+  keys, the config, the exact JSON your endpoint receives, a worked controller, what the
+  worker does with a payload, and why sending is left to
+  `laravel-notification-channels/webpush`.
+- **How to extend the service worker**, which stopped being obvious when it stopped being a
+  Blade view. `service_worker.extend` appends your own handlers into the worker's scope and
+  was documented only in a comment in the published config; `service_worker.blade` still
+  replaces the worker outright. Both are in the README now, with what each one's view
+  receives.
+
 
 - The README documented none of `pwax.install`, `pwax.badge`, `pwax.storage`, `pwax.push` or
   `pwax.sync` — they shipped with an entry in this file and nothing a reader would find.
@@ -227,230 +490,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the head, in a fixed order.
 - `pwax:doctor` and `pwax:precache` report manifest `warnings`, including a glob truncated
   by `max_files` or `max_bytes`.
-
-### Changed
-
-- **A navigation that fails for a reason other than an HTTP status now says so in the
-  console.** The visitor is still shown "this page needs an internet connection", which is
-  what they can act on and is true nine times out of ten. The tenth is a bug or a
-  misconfiguration — a component that will not compile, a middleware that threw — and it was
-  reported to the developer as a network problem, which is the wrong place to start looking.
-- **The service worker is built, not templated.** It was 1,611 lines of JavaScript inside a
-  Blade file — never linted, never formatted, never minified, and testable only through a
-  hand-written Blade emulator that its own docblock admitted was crude. It is now
-  `src/js/sw/index.js`, built by esbuild to `dist/pwax-sw.js` and served behind a small
-  generated preamble carrying the four values the server actually decides. Served bytes
-  drop from ~55 kB of commented source to ~13 kB, on a file refetched on every update
-  check.
-
-  Linting it for the first time immediately found a dead parameter.
-
-  `service_worker.extend` is the supported way to add a `push` or `sync` handler now —
-  views or files appended after the worker, sharing its scope — instead of forking the
-  whole thing to add ten lines and never receiving a fix again.
-  `service_worker.blade` still replaces the worker outright and always will, so a fork
-  made against 4.0 keeps working.
-- **The offline document is a Blade view**, `pwax::js.offline`, rather than forty lines of
-  HTML in a JavaScript string. It picks up the application's `lang` and `dir` — it was
-  hardcoded to `lang="en"` — and publishes on its own with
-  `vendor:publish --tag=pwax-service-worker`.
-- **One vocabulary for every strategy.** Four config keys answered "when do we go to the
-  network?" in three different languages — `runtime_strategy` said `network-first` where
-  `pages.strategy` said `freshness` for the same behaviour, and `navigation_strategy` said
-  `app-shell` where both meant `cache-first`. They now share one set of names, the ones the
-  rest of the web uses. `freshness` is `network-first`, `performance` is `cache-first`, and
-  `app-shell` is `cache-first`.
-
-  Every old spelling still resolves and will for this major cycle; `pwax:doctor` names the
-  ones still in use. Normalising happens server-side, so the manifest only ever carries the
-  new vocabulary and the worker knows one set of words.
-- **`pwax.assets.strategy` is `pwax.assets.source`.** It chooses where the framework is
-  served from — `local` or `cdn` — and nothing about caching, so it was the fifth key called
-  "strategy" in a config where the other four mean something else. The old key still works.
-
-
-- **One set of caches, named for the build.** `pwax-precache-<build>`,
-  `pwax-pages-<build>`, `pwax-documents-<build>`, `pwax-runtime`, `pwax-lazy` and
-  `pwax-data-<group>-v<n>`, where `<build>` is the manifest's content hash. No per-visitor
-  names, no per-visitor sets: one cost a fresh copy of the application per person and an
-  empty set minted on every sign-in, and it never delivered the isolation it was named
-  for. `service_worker.identity_cache_limit` is gone with the per-person sets it bounded;
-  `pwax:doctor` names it.
-- **`data_groups[].version` now names the group's cache**, which is the only thing it was
-  ever for. It reached the manifest and was read by nothing: bumping it changed the
-  manifest hash, so it re-precached the entire application on every client, and left the
-  one cache it was meant to discard exactly as it was. Cache names carry the version, and
-  `activate()` sweeps the versions no group claims any more. Upgrading orphans each
-  existing data cache once; they repopulate on the next request.
-
-
-- **A stored copy is used when the origin cannot be reached through, not only when the
-  network throws.** A proxy that cannot get an answer out of the application, or an
-  application mid-deploy, produces a *reply* — so the fallback never ran and the visitor
-  saw an error with a usable copy on the device. The rule applies everywhere there is
-  something to fall back to: page payloads, data groups, full navigations — which answer
-  from the stored document, so a reload during a deploy still gets the installed
-  application — and the runtime cache.
-
-  Exactly `502`, `503` and `504`, none of which is distinguishable from a bad connection
-  from the device: a proxy that could not reach the application, one refusing for now
-  (`php artisan down` answers `503`), and one that waited and gave up. **A `500` is shown,
-  like a `404`** — the application ran and threw, and answering that from cache hides the
-  bug twice: the visitor sees a page that works and reports nothing, and whoever deployed
-  it does not learn the route is broken. When a stored copy does stand in, the worker says
-  so on the console with the status and the URL.
-- `service_worker.strategy` is `service_worker.runtime_strategy`, and defaults to
-  `network-only`. The old default kept a copy of every same-origin GET it passed through,
-  including URLs the application never declared.
-- Data groups are written flat, and `max_size` is `max_entries` — the same quantity that
-  the pages block and the runtime cache already spelled that way.
-- `pwax.sw.registration` is `pwax.sw.controller`; `pwax.sw.registration()` returns the
-  registration.
-- Navigation preload is consumed rather than discarded, so a navigation the worker declines
-  to handle no longer costs the server two requests.
-- The view-tree walk and the route walk happen once per manifest build rather than two and
-  four times.
-- Middleware modules no longer delay the first paint. Plugins and directives still do,
-  because Vue offers no way to register either after mount.
-
-
-- **BREAKING:** `pwax_component()` is now `pwaxRender()`, `pwax_route()` is `pwaxRoute()`,
-  and the `@pwax` directive is `@pwaxImport`. `Pwax::importExpression()` is `Pwax::import()`.
-  Each helper is now named after the facade method it wraps. See `UPGRADE.md`.
-- **BREAKING:** the 1.x `vue()` and `router()` helpers and the `pwax.helpers.global` config
-  key are removed. They were deprecated in 2.0.
-- **BREAKING:** the service worker moves from `/service-worker.js` to `/sw.js` and the web
-  manifest from `/manifest.webmanifest` to `/manifest.json`. No redirect or shim is shipped
-  for either — a worker script response cannot be a redirect, so a worker already registered
-  at the old path has to be unregistered once in the browser. See `UPGRADE.md`. Installs
-  survive the manifest move: its `id` defaults to `start_url`.
-- **BREAKING:** `pwax.components.directive` now replaces the default name rather than
-  registering a second directive alongside it, so an application has exactly one spelling.
-  The 1.x `@import('…')` form is no longer special-cased in config values.
-- **BREAKING:** `service_worker.precache` becomes `service_worker.pages.urls` and
-  `service_worker.files` becomes `service_worker.asset_groups`.
-- Page payloads may now be stored by the service worker when a route opts in, where
-  previously `no-store` kept every one of them off disk. The three controls that make that
-  safe — the opt-in itself, anonymous install-time fetches, and identity-partitioned caches
-  — are described in the published config.
-
-### Fixed
-
-- **A CDN subresource-integrity map keyed only on the package name.** Vue publishes two
-  builds and Pwax can serve either, so `assets.cdn.integrity['vue']` would have sent the
-  full build's digest with `vue.runtime.global.prod.js` — and a browser refuses a script
-  whose digest does not match, which is the whole application failing to start. The map now
-  accepts a filename key, which wins over the package name, and ships the runtime build's
-  hash.
-- **The client runtime bundle could never update in a browser that had cached it.**
-  `/__pwax__/pwax.js` carries no version in its URL and is served `immutable`, which tells
-  a browser not to revalidate for a year — not even conditionally, so its ETag was never
-  consulted. Upgrading the package left returning visitors on the runtime they first
-  downloaded. Invisible with the service worker on, since that precaches by content hash;
-  entirely visible with it off, which is the default. The URL is now fingerprinted by the
-  bundle's contents, and the source map is revalidated rather than cached hard so it cannot
-  be paired with a newer bundle.
-- **Every lazily-cached asset was discarded on every deploy.** A lazy asset group is where
-  the big files go — `/images/**`, `/fonts/**` and `/media/**` are the shipped defaults —
-  and the point of declaring one is that what it fetches is then kept. It was kept in the
-  precache, which is named for the build and deleted wholesale by the next one, and lazy
-  entries never enter the install set so nothing carried them across. So a release that
-  changed one component re-downloaded every image and font on the device: precisely the
-  churn the delta install exists to prevent, applied to the largest files in the
-  application. They now live in `pwax-lazy`, which survives a deploy the way the runtime
-  cache does, and only entries whose own content hash changed are acted on.
-- **`asset_groups[].update_mode` did nothing at all.** Documented as choosing what happens
-  to a changed entry on the next deploy, it was emitted into `sw.json` and never read —
-  while still forming part of the manifest hash, so editing it forced every client to
-  re-precache the whole application for no change in behaviour. It now selects what the
-  install does with a changed file the device already holds: `prefetch` brings it up to
-  date there and then, `lazy` drops it for the next request to fetch. Files the device
-  never asked for are still not fetched — that is `install_mode`'s decision, not this one.
-- **The compiled-component cache grew without bound on a personalised page.** The cache
-  key is a digest of the rendered output, which is what makes an entry impossible to serve
-  stalely — a changed component simply produces a new key. For a page rendered with
-  controller data it inverts: the output is particular to the request, so every visitor
-  minted an entry, written with `forever()`, that no later request could ever hit. On a
-  busy application that is unbounded growth driven by traffic, on a store whose only purge
-  is to flush everything. Renders given no data are stored as before; renders given data
-  are not, unless the route calls `->cacheable()` — which already declares the page renders
-  the same for everyone.
-- **A component compiled twice in one request reached the cache store twice.** Two
-  `@pwaxImport`s of the same component, or a caller reading `toArray()` before returning
-  the response, each paid a full round trip to Redis for an answer already in hand. A
-  bounded in-process memo answers the second one.
-- **A page waited for its own cache write before it was delivered.** `page()` opened a
-  cache, wrote to it and walked its keys to trim, all before returning the response the
-  runtime was waiting on; a data group's response paid three storage round-trips the same
-  way. None of that work is for the current visit. It moves to `event.waitUntil`, where
-  `navigate()` already put it.
-- **`trim()` walked every key in the cache on every single write.** `cache.keys()`
-  materialises a `Request` per entry, so a sixty-entry page cache built sixty objects per
-  navigation to discover that nothing needed deleting. An advisory counter, seeded from
-  one real walk, gates the check; nothing is deleted without the real walk still running.
-- **The install probed each previous build in turn for every unchanged asset.** With three
-  builds retained that is up to three serial storage round-trips per file, inside a
-  six-way limiter, on the one path a deploy is supposed to make cheap. The manifest scan
-  that already reads those caches now records which one holds each URL.
-- **A new page component type was minted on every navigation.**
-  `defineAsyncComponent(() => Promise.resolve(options))` wrapped an object that was
-  already resolved, costing a microtask and a render pass in which the page was truthy but
-  drew nothing — and, because Vue compares component types by identity, making a return to
-  an already-visited path unmount and rebuild from scratch.
-- **The whole application was announced as "Loading".** The mount element carried
-  `role="status"`, `aria-live="polite"` and `aria-label="Loading"` for the spinner, and the
-  runtime removed only the class on mount — so for the rest of the session every reactive
-  text change anywhere in the app was read aloud by a screen reader.
-- **A route change told a screen reader nothing.** The shell now carries a live region and
-  the runtime announces each navigation's title into it.
-- Function default exports are returned as themselves, so client middleware and Vue
-  functional components work. Spreading a function into an object produced `{}`.
-- `pwax.sw.registration` returned the controlling `ServiceWorker`, not the
-  `ServiceWorkerRegistration` — see **Changed**.
-- `dist/pwax.js.map` is served. The bundle has always ended with a `sourceMappingURL`
-  comment pointing at a route that did not exist.
-- A `navigation_urls` pattern that will not compile is skipped with a warning instead of
-  thrown, where it previously turned every navigation in the application into the offline
-  page.
-- **An expired CSRF token could reload the page forever.** A `419` is answered by reloading
-  to pick up a fresh token, which assumes the reload reaches the server — and under
-  `navigation_strategy => 'app-shell'` it does not, because the worker answers navigations
-  from disk and returns the same expired token. One reload per tab now, re-armed whenever a
-  page loads successfully; a second `419` renders the error template.
-- `pwax.sw.applyUpdate()` no longer depends on `this`, so `const { applyUpdate } =
-  window.pwax.sw` works.
-
-
-- **Client middleware was always "unknown".** A middleware is written as
-  `export default async function (…) {}`, exactly as the README shows, but the module
-  loader spread every default export into a fresh object to merge in the Blade template.
-  A function has no own enumerable properties, so the spread produced `{}` and
-  `runMiddleware` reported `pwax: unknown middleware "name"` for a middleware that had
-  loaded perfectly. A function default export is now returned as itself, which also fixes
-  Vue functional components silently rendering nothing.
-- **`service_worker.precache` never worked.** The worker fetched each listed route without
-  the `X-Pwax-Component` header, so the server answered with the HTML shell; that shell is
-  `no-store`, which the worker correctly refused to store. Every entry was skipped in
-  silence while the documentation described the feature as working.
-- **Cached page entries could never be matched.** Responses carry
-  `Vary: X-Pwax-Component, X-Requested-With, Accept`, and entries were stored under a bare
-  URL with none of those headers set.
-- **The offline shell's hash ignored the shell.** It was computed from a list of config
-  values and `Pwax::shell()` — which returns the shell's *view name*, a constant. Editing
-  the shell layout, either `includes/` partial or any Blade override left it unchanged, so
-  the worker copied a stale shell forward across every deploy.
-- **Configured `pwax.styles` sheets were never precached**, so an application with them set
-  went offline unstyled.
-- The service worker fetched precache URLs with `credentials: 'same-origin'`, so an install
-  triggered while signed in would have stored that user's private renderings once page
-  caching worked. Pages are now fetched anonymously.
-- `resources/views/layouts/shell.blade.php` discarded the `Shell` passed to it and resolved
-  a new one from the container, making the parameter dead and blocking a request-free
-  render.
-- `AssetManifest` compared against a hardcoded `/manifest.webmanifest` default that differed
-  from the one it emitted, so a configured manifest path went unhashed.
-- The `Pwax` facade documented `payload()`'s second argument as `$includeScript`; it has
-  been `$addressable` since 2.0.
 
 ### Security
 

@@ -174,7 +174,7 @@ class ShellTest extends TestCase
      */
     public function test_a_module_reference_resolves_to_a_component_url(): void
     {
-        config()->set('pwax.plugins', ['toast' => "@pwaxImport('components.modal')"]);
+        config()->set('pwax.vue.plugins', ['toast' => "@pwaxImport('components.modal')"]);
 
         $entry = $this->shell()->runtimeConfig()['plugins']['toast'];
 
@@ -186,7 +186,7 @@ class ShellTest extends TestCase
 
     public function test_a_module_reference_supports_a_named_export(): void
     {
-        config()->set('pwax.plugins', ['backdrop' => "@pwaxImport('Backdrop from components.modal')"]);
+        config()->set('pwax.vue.plugins', ['backdrop' => "@pwaxImport('Backdrop from components.modal')"]);
 
         $this->assertSame('Backdrop', $this->shell()->runtimeConfig()['plugins']['backdrop']['export']);
     }
@@ -199,7 +199,7 @@ class ShellTest extends TestCase
      */
     public function test_an_unrecognised_spelling_is_not_treated_as_a_module(): void
     {
-        config()->set('pwax.directives', ['focus' => "@import('components.modal')"]);
+        config()->set('pwax.vue.directives', ['focus' => "@import('components.modal')"]);
 
         $this->assertSame('global', $this->shell()->runtimeConfig()['directives']['focus']['type']);
     }
@@ -211,14 +211,14 @@ class ShellTest extends TestCase
     public function test_config_values_follow_the_configured_directive_name(): void
     {
         config()->set('pwax.components.directive', 'component');
-        config()->set('pwax.directives', ['focus' => "@component('components.modal')"]);
+        config()->set('pwax.vue.directives', ['focus' => "@component('components.modal')"]);
 
         $this->assertSame('module', $this->shell()->runtimeConfig()['directives']['focus']['type']);
     }
 
     public function test_anything_else_is_treated_as_a_global_lookup_not_as_code(): void
     {
-        config()->set('pwax.plugins', ['lib' => 'MyLibrary.plugin']);
+        config()->set('pwax.vue.plugins', ['lib' => 'MyLibrary.plugin']);
 
         $entry = $this->shell()->runtimeConfig()['plugins']['lib'];
 
@@ -227,9 +227,32 @@ class ShellTest extends TestCase
 
     public function test_blank_extension_entries_are_ignored(): void
     {
-        config()->set('pwax.plugins', ['a' => '', 'b' => null, 'c' => '   ']);
+        config()->set('pwax.vue.plugins', ['a' => '', 'b' => null, 'c' => '   ']);
 
         $this->assertSame([], $this->shell()->runtimeConfig()['plugins']);
+    }
+
+    public function test_vue_middleware_entries_resolve_to_module_urls(): void
+    {
+        config()->set('pwax.vue.middleware', ['admin' => "@pwaxImport('middleware.admin')"]);
+
+        $entry = $this->shell()->runtimeConfig()['middleware']['admin'];
+
+        $this->assertSame('module', $entry['type']);
+        $this->assertStringEndsWith('.js', $entry['url']);
+    }
+
+    public function test_vue_plugins_and_directives_live_in_the_same_group(): void
+    {
+        config()->set('pwax.vue.plugins', ['toast' => "@pwaxImport('plugins.toast')"]);
+        config()->set('pwax.vue.directives', ['focus' => "@pwaxImport('directives.focus')"]);
+        config()->set('pwax.vue.middleware', ['admin' => "@pwaxImport('middleware.admin')"]);
+
+        $runtime = $this->shell()->runtimeConfig();
+
+        $this->assertArrayHasKey('toast', $runtime['plugins']);
+        $this->assertArrayHasKey('focus', $runtime['directives']);
+        $this->assertArrayHasKey('admin', $runtime['middleware']);
     }
 
     public function test_runtime_config_carries_what_the_client_needs(): void

@@ -473,13 +473,13 @@ export function createPageComponent({
 
                     if (typeof fn !== 'function') {
                         // The name and where it was asked for. Reporting the name alone
-                        // points at `middleware_js` in config, which is usually correct
+                        // points at `vue.middleware` in config, which is usually correct
                         // and occasionally a red herring — the entry can be present and
                         // have failed to load, and then the only way to find which page
                         // is affected is to guess.
                         console.warn(
                             `pwax: unknown middleware "${name}" on ${this.currentPath || 'this page'}. ` +
-                                'Check that it is listed in pwax.middleware_js and that its module loaded.'
+                                'Check that it is listed in pwax.vue.middleware and that its module loaded.'
                         );
                         continue;
                     }

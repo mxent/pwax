@@ -12,6 +12,8 @@ class CommandsTest extends TestCase
     protected function tearDown(): void
     {
         File::deleteDirectory(resource_path('views/scratch'));
+        File::deleteDirectory(base_path('.ai'));
+        File::deleteDirectory(base_path('scratch-skill'));
 
         parent::tearDown();
     }
@@ -474,5 +476,43 @@ class CommandsTest extends TestCase
             $t->string('auth', 64);
             $t->timestamps();
         });
+    }
+
+    public function test_the_skill_command_publishes_the_bundled_template(): void
+    {
+        $this->artisan('pwax:skill', ['--path' => 'scratch-skill'])
+            ->expectsOutputToContain('Published the Pwax skill')
+            ->assertSuccessful();
+
+        $path = base_path('scratch-skill/SKILL.md');
+
+        $this->assertFileExists($path);
+        $this->assertStringContainsString('name: pwax', File::get($path));
+    }
+
+    public function test_the_skill_command_refuses_to_overwrite_an_existing_file(): void
+    {
+        $this->artisan('pwax:skill', ['--path' => 'scratch-skill'])->assertSuccessful();
+
+        $this->artisan('pwax:skill', ['--path' => 'scratch-skill'])
+            ->expectsOutputToContain('already exists')
+            ->assertFailed();
+    }
+
+    public function test_the_skill_command_overwrites_with_force(): void
+    {
+        $this->artisan('pwax:skill', ['--path' => 'scratch-skill'])->assertSuccessful();
+
+        $this->artisan('pwax:skill', ['--path' => 'scratch-skill', '--force' => true])
+            ->expectsOutputToContain('Published the Pwax skill')
+            ->assertSuccessful();
+    }
+
+    public function test_the_install_command_publishes_the_skill_with_ai(): void
+    {
+        $this->artisan('pwax:install', ['--no-assets' => true, '--ai' => true, '--force' => true])
+            ->assertSuccessful();
+
+        $this->assertFileExists(base_path('.ai/skills/pwax/SKILL.md'));
     }
 }

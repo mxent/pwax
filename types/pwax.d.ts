@@ -178,6 +178,11 @@ declare namespace Pwax {
         component(url: string, exportName?: string): unknown;
         load(url: string, exportName?: string): Promise<unknown>;
         import(url: string): Promise<unknown>;
+        /**
+         * Reboot the runtime. Rarely needed; unmounts the current app and
+         * re-initialises. Returns a Promise that resolves when the reboot is complete.
+         */
+        start(): Promise<void>;
         /** Fetch a page's payload before it is asked for. */
         prefetch(path: string): Promise<unknown>;
         readonly sw: ServiceWorkerApi;

@@ -6,8 +6,8 @@ package is shaped, why it is shaped that way, and what counts as the wrong kind
 of change. Read it the way you would read a senior engineer's onboarding
 document: every section is a decision someone has already had to make.
 
-If a section says "always do X" and a task asks you to do not-X, the answer is
-almost always "raise it with the maintainer", not "do the task anyway".
+If a section says "always do X" and a task asks you to do not-X, the answer
+is almost always "raise it with the maintainer", not "do the task anyway".
 
 ---
 
@@ -18,20 +18,20 @@ and ships the resulting application as a progressive web app. The package is
 two things:
 
 - a **PHP layer** (`src/`) — service provider, console commands, HTTP
-  middleware, the component renderer, the manifest builder, the page discovery
-  service worker integration;
+  middleware, the component compiler, the manifest builder, the page-discovery
+  service worker integration, the head metadata resolver, the response object;
 - a **JavaScript layer** (`src/js/`) — the client runtime that consumes
   compiled components and the service worker source that pre-caches them.
 
 The PHP layer renders templates and serves endpoints. The JS layer is a single
-static bundle that reads one JSON block (`runtimeConfig`) — nothing on the
-server is interpolated into JavaScript, so a stray quote in `config/pwax.php`
-can no longer take the whole page down.
+static bundle reading one JSON block (`runtimeConfig`) — nothing on the server
+is interpolated into JavaScript, so a stray quote in `config/pwax.php` can no
+longer take the whole page down.
 
 A consumer installs the package, publishes `config/pwax.php`, scaffolds pages
 with `pwax:component`, and the application is a PWA. The package owns the
 contract: what the runtime receives, what the runtime emits, what the
-service worker caches.
+service worker caches, and what the head includes.
 
 ---
 
@@ -40,21 +40,42 @@ service worker caches.
 The boundary is one JSON block (`Shell::runtimeConfig()` → `window.pwax.config`
 → the bundle's `config.js`). Everything crossing that boundary is data:
 
-- **PHP → JS at boot:** a JSON blob with all settings. Read by `src/js/config.js`
-  on the client. Anything that ends up there must be serialisable.
+- **PHP → JS at boot:** a JSON blob with all settings. Read by
+  `src/js/config.js` on the client. Anything that ends up there must be
+  serialisable. Current keys are: `prefix`, `hashRouting`, `base`, `mount`,
+  `nonce`, `pinia`, `serviceWorker`, `serviceWorkerScope`, `cachePrefix`,
+  `push`, `csrf`, `home`, `progress`, `prefetch`, `plugins`, `directives`,
+  `middleware`, `templates`.
 - **JS → PHP at request time:** the three request headers
   (`X-Pwax-Component`, `X-Requested-With`, `Accept`). Read by
   `HandlePwaxRequests`. The page response varies on them — `Pwax::VARY` is the
   canonical list.
 - **PHP → JS at compile time:** the service worker is built by esbuild from
   `src/js/sw/index.js` into `dist/pwax-sw.js`. The PHP layer serves the built
-  file behind a generated preamble (the four values the server actually
-  decides: cache name, precache entries, scope, version).
+  file behind a generated preamble carrying the four values the server
+  actually decides.
 
-If you need to add a setting, add it to `runtimeConfig()` and read it from
-`config.js`. If you need to add a header, add it to `Pwax::VARY` and to
-`PAGE_HEADERS` in `AssetManifest` — they must agree, and the test
-`HeaderConstantsTest` enforces that.
+If you need to add a setting, follow the recipe in §9.1. If you need to add
+a header, add it to `Pwax::VARY` and to `PAGE_HEADERS` in `AssetManifest` —
+they must agree, and the test `HeaderConstantsTest` enforces that.
+
+### Component compilation pipeline
+
+A Blade view becomes a `Mxent\Pwax\Data\Component` value object through:
+
+```
+Blade view
+  → ComponentCompiler::compile()        (reads view once, splits blocks)
+    → BlockExtractor                      (separates <template>/<script>/<style>)
+    → TemplateStamper                     (rewrites template; scopes @ directives)
+    → StyleScoper                         (scoped selector rewriting + element stamping)
+  → Data\Component { template, script, style, hash, … }
+```
+
+`pwax:compile` runs this once and stores the result by content hash; the live
+runtime runs it on first request and caches by hash too (see §16). Either way
+the Blade render itself is **not** part of the cache — it runs on every
+request, because that is where a page's controller data enters.
 
 ---
 
@@ -191,11 +212,12 @@ fix.
 
 ### Components are Blade views, but their compile output is JavaScript
 
-`src/Pwa/ComponentRenderer` (and its helpers) produces a `Component` value
-object with `template`, `script`, `style` strings. The blade view is parsed
-once and cached by content hash. A developer who edits the view invalidates
-the cache; a developer who edits config does not. This separation is what
-lets `pwax:compile` be background-safe.
+`src/Compiler/ComponentCompiler` (and its helpers `BlockExtractor`,
+`StyleScoper`, `TemplateStamper`) produces a `Mxent\Pwax\Data\Component`
+value object with `template`, `script`, `style` strings. The blade view is
+parsed once and cached by content hash. A developer who edits the view
+invalidates the cache; a developer who edits config does not. This
+separation is what lets `pwax:compile` be background-safe.
 
 ---
 
@@ -206,21 +228,62 @@ fine; removing from them is a major version.
 
 ### PHP API
 
-- All commands under `php artisan pwax:*`.
+- All commands under `php artisan pwax:*` (`pwax:install`, `pwax:component`,
+  `pwax:doctor`, `pwax:precache`, `pwax:compile`, `pwax:vapid`,
+  `pwax:push-endpoint`, `pwax:routes`, `pwax:clear`, `pwax:skill`).
 - The `Pwax` facade and the underlying `Mxent\Pwax\Pwax` class.
-- `pwaxRender()`, `pwax_route()`, `pwax_component()` global helpers.
-- The configuration keys in `config/pwax.php`. A rename is a breaking change
-  unless the old key continues to work; if it doesn't, document the
+- The global helpers: `pwax()`, `pwaxRender()`, `pwaxRoute()`. Knowing one
+  spelling gives you the others.
+- `Mxent\Pwax\Http\Responses\ComponentResponse` and its fluent API:
+  `title()`, `description()`, `canonical()`, `meta()`, `property()`,
+  `offline()`, `status()`. Implements `Responsable`, so a controller can
+  `return $response;`.
+- The `Mxent\Pwax\Pwa\HeadMeta` resolver and its `Data\Head` value object —
+  page metadata flows through this, and the runtime carries the resolved
+  head in the payload so client-side navigations update `<title>` and the
+  meta tags too.
+- The `Mxent\Pwax\Pwa\Strategy` constants: `NETWORK_ONLY`,
+  `NETWORK_FIRST`, `CACHE_FIRST`, `STALE_WHILE_REVALIDATE`. Their old
+  aliases (`freshness`, `performance`, `app-shell`) are still accepted.
+- The configuration keys in `config/pwax.php`. A rename is a breaking
+  change unless the old key continues to work; if it doesn't, document the
   migration in `CHANGELOG.md` under `### Changed` with a copy-pasteable
   diff (see the `plugins` / `directives` / `middleware_js` →
   `vue.*` move for the canonical recipe).
 - The HTTP routes registered by `routes/web.php` (the `__pwax__/*` prefix).
 - The HTTP headers `X-Pwax-Component` and `X-Pwax-Location`.
+- The response headers set by `pwax.security.*` (`COOP`, `COEP`,
+  `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`).
 
 ### JavaScript API
 
-- The `window.pwax` namespace and everything reachable from it
-  (`pwax.config`, `pwax.start()`, `pwax.share()`, `pwax.launch.consume()`).
+The `window.pwax` namespace, populated by `src/js/index.js`. Anything
+reachable from this object is part of the contract:
+
+- `window.pwax.version` — the bundle's version.
+- `window.pwax.config` — the runtime config the server supplied
+  (`prefix`, `mount`, `csrf`, `serviceWorker`, …).
+- `window.pwax.app` — the Vue application instance.
+- `window.pwax.router` — the Vue Router instance; the runtime reads this
+  for `push`, `replace`, and back/forward navigation.
+- `window.pwax.start()` — reboot the runtime (rarely needed). Unmounts the
+  current app and re-initialises; returns a Promise.
+- `window.pwax.http.{json,request,headers}` — the runtime HTTP helper.
+- `window.pwax.styles.{acquire,release,link,script}` — the style manager.
+- `window.pwax.component.{resolve,render,hash}` — component helpers.
+- `window.pwax.import(view)` — runtime-side equivalent of `@pwaxImport`.
+- `window.pwax.sw.{controller,registration,update,applyUpdate,clearCaches,unregister}` —
+  service-worker API.
+- `window.pwax.install.{available,installed,isInstalled}` — install prompt.
+- `window.pwax.badge` — app-badge API.
+- `window.pwax.storage` — persistent local storage helper.
+- `window.pwax.push.{subscribe,unsubscribe}` — Web Push subscription.
+- `window.pwax.sync.{register,unregister}` — background sync.
+- `window.pwax.launch.consume(fn)` — consume manifest launch events
+  (file_handlers, protocol_handlers, share_target).
+- `window.pwax.share` — Web Share integration.
+- `window.pwax.prefetch(url)` — explicit prefetch.
+- `window.pwax.progress.{start,done,reset}` — the progress bar.
 - The service worker registration at `/sw.js`.
 - The web manifest at `/manifest.json` and `/manifest.webmanifest`.
 - The component route prefix `__pwax__` and the URL shape `__pwax__/c/{id}.js`.
@@ -247,7 +310,7 @@ the public API and document it, not to keep the internal shape stable.
 - **Cross-origin isolation is on by default.** The shell emits the
   `Cross-Origin-Opener-Policy: same-origin` and
   `Cross-Origin-Embedder-Policy: require-corp` headers. Cross-origin assets
-  must be loaded with `crossorigin`; the doctor catches this.
+  then need an explicit `crossorigin` attribute; the doctor catches this.
 - **Authorisation belongs on the server.** Client middleware is a UX
   affordance, not access control. Document this in any user-facing note
   about `pwax.vue.middleware`.
@@ -277,7 +340,170 @@ application's file, not the package's, so an upgrade cannot rewrite it.
 
 ---
 
-## 9. What the maintainers will push back on
+## 9. Recipes for adding to the package
+
+These are the most common tasks. Each one names the files to touch and the
+ones to leave alone.
+
+### 9.1 Adding a new runtime config key
+
+If a setting needs to reach the client runtime:
+
+1. Add it to `Shell::runtimeConfig()` (`src/Support/Shell.php`). Pick a
+   descriptive name; the existing keys are short, not abbreviated.
+2. Read it in `src/js/config.js` (extend `DEFAULTS` if the runtime should
+   tolerate a missing value).
+3. If the new value affects the cache identity — and most settings don't,
+   but `service_worker.cache_name`, `assets.versions`, `manifest.*` and
+   anything serialised into `sw.json` do — add it to
+   `AssetManifest::configurationHash()`'s input list
+   (`src/Pwa/AssetManifest.php`). Otherwise the worker will not bust
+   cached entries when the value changes.
+4. If the new value is part of the public JS API surface, add it to
+   `types/pwax.d.ts` under the `Pwax.Config` interface.
+5. CHANGELOG entry.
+
+### 9.2 Adding a new Artisan command
+
+1. `src/Console/Commands/{Name}Command.php` extending
+   `Illuminate\Console\Command`. Use constructor property promotion for
+   dependencies.
+2. Register it in `PwaxServiceProvider::register()`'s `$this->commands([…])`
+   list (the block immediately after `$this->commands([` in `register()`).
+   The list is the only place consumers see it.
+3. Set the `$description` property — it appears in `php artisan list`.
+4. If the command publishes files, follow the existing pattern (see
+   `InstallCommand` for `vendor:publish` calls) and add the new tag to the
+   list of publishable tags.
+
+### 9.3 Adding a new cache strategy
+
+1. Add the name to `Mxent\Pwax\Pwa\Strategy` as a class constant.
+2. Update `Strategy::resolve()` if the name has an alias.
+3. Read the constant in the matching `*_strategy` config reader
+   (`src/Support/Shell.php` for `runtime_strategy`, `AssetManifest.php` for
+   `navigation_strategy`, etc.).
+4. Add the case to the service worker's `fetch` handler
+   (`src/js/sw/index.js`).
+5. The doctor names unknown strategies; add a friendly check if it deserves
+   one.
+6. Document in CHANGELOG and update `Strategy`'s class docblock.
+
+### 9.4 Adding a new `window.pwax.*` namespace
+
+1. Add the implementation in `src/js/` (a new file unless the namespace
+   naturally lives in an existing one).
+2. Wire it into the `window.pwax = { … }` object in `src/js/index.js`.
+3. Add the type to `types/pwax.d.ts` under the `Pwax.*` namespace.
+4. Update §6 above with the new namespace and a one-line description of
+   its purpose.
+5. CHANGELOG entry under `### Added` (not `### Internal`).
+
+### 9.5 Adding a new prefab shell partial or extension point
+
+The shell ships several partials (`layouts/shell`, `components/includes/head`,
+`components/includes/foot`, `components/content`, `components/loader`,
+`components/error`) and one named extension stack (`@stack('pwax-head')`).
+Adding a new partial:
+
+1. Place the file in `resources/views/` under the appropriate subdir.
+2. If it should be auto-included for every page, edit `layouts/shell.blade.php`
+   to add the `@include(...)` (read what is there first; the convention is
+   to let the consumer add conditional `@includeWhen(View::exists(...))`
+   after they have published the shell with `--views`).
+3. Document it in `resources/ai/pwax-skill.md` and the README so consumers
+   know it exists.
+
+### 9.6 Adding a new runner config key (CLI)
+
+`pwax.assets.{render_functions,node,vue_build}` controls the `pwax:compile`
+runner. Adding another option:
+
+1. Document it in `config/pwax.php` with the same prose style as the
+   surrounding options.
+2. Read it in `CompileCommand` (`src/Console/Commands/CompileCommand.php`).
+3. If it changes what the worker caches, add it to the runtime config
+   (see §9.1) — but most runner settings do not.
+
+---
+
+## 10. The shell extension surface
+
+The shell is the one place an application can extend the package without
+forking it. Three mechanisms, in order of preference:
+
+- **`@stack('pwax-head')`** — push arbitrary content to `<head>` from any
+  view or partial. The runtime replaces `data-pwax-head`-marked tags on
+  client-side navigations but keeps `@stack` content as-is, so any
+  non-`<title>`/`<meta>`/`<link>` head content belongs here.
+- **`pwax.blade.{content, head, foot, error, loader}`** — point any of
+  these at one of your own Blade views to replace a bundled partial
+  without publishing the whole view directory.
+- **`php artisan pwax:install --views`** publishes the views into
+  `resources/views/vendor/pwax/` so the application can edit them.
+  Published views take priority over the package's bundled view of the
+  same name; there is no upstream merge. Fork knowingly.
+
+The package's bundled shell does **not** `@includeWhen(View::exists(...))`
+anything — that pattern is one a consumer adds once they have published
+their own shell.
+
+---
+
+## 11. The doctor categories
+
+`Mxent\Pwax\Console\Commands\DoctorCommand` reports in three bands:
+
+- **`failed`** — something does not work. Manifest target points at a route
+  the router does not know, `pwax.middleware` is empty (`pwax:component`
+  endpoints would be public), `APP_KEY` is missing so component ids cannot
+  be signed. Fix before shipping.
+- **`warned`** — something works but should change. Unknown strategy names,
+  missing manifest icons (PWA is not installable), CDN assets without SRI
+  hashes (the browser will refuse to run them).
+- **`info`** — environment-specific. Local asset versions drift from the
+  pinned Vue/Vue Router/Pinia versions.
+
+When the doctor says "no problems, N warnings", every warning is a thing
+that **still works** but should change. The full check list lives in
+`DoctorCommand.php`; do not duplicate it elsewhere.
+
+---
+
+## 12. What NOT to add (the consumer-confusion list)
+
+These show up in application code and PRs against the package. They are
+**not** Pwax features, and adding them as if they were is the bug behind
+half of the issues that arrive on the maintainer queue:
+
+- **`View::share('pwaxMeta', [...])`** — no view in the package reads
+  `$pwaxMeta`. The meta flow goes through
+  `ComponentResponse::title/description/canonical/meta/property` and
+  `Pwa\HeadMeta::resolve()`. A consumer setting `pwaxMeta` is dead code.
+- **Manual `<script src="/__pwax__/pwax.js">` in a published shell** — the
+  package adds the runtime itself.
+- **Custom registration of `pwax/sw.js` from the application** — let the
+  package register it via `serviceWorker.enabled`.
+- **`<x-pwax::head>` from inside a page component** — pages do not render
+  the shell. Use the fluent API on the response.
+- **A new `window.pwax.*` namespace named after the application** — the
+  namespace is the package's, not the consumer's. Applications attach
+  their own data to `window`, not to `window.pwax`.
+- **Custom `@stack('pwax-body')`, `@stack('pwax-foot')`** — only
+  `@stack('pwax-head')` is wired up. The shell renders foot content via
+  the `pwax.blade.foot` override.
+- **A `pwax_component()` global helper** — it does not exist (was
+  removed). The function is `pwaxImport()` (camelCase), and it is called
+  via `@pwaxImport(...)` inside Blade, not as a free helper.
+
+When a contributor reaches for one of these, the answer is **not**
+"make it work" — it is "stop and use the existing surface". Most of these
+mistakes come from a maintainer or AI assistant who did not read AGENTS.md
+before answering.
+
+---
+
+## 13. What the maintainers will push back on
 
 - **Anything that re-templatizes the service worker.** The worker is
   JavaScript in `src/js/`. Blade is for views.
@@ -295,10 +521,18 @@ application's file, not the package's, so an upgrade cannot rewrite it.
 - **Adding a new dependency without checking the consumer.** A Laravel
   package is consumed by hundreds of apps; a new hard dependency is a
   surprise to all of them. Talk to the maintainers first.
+- **Adding config that is dead code** (`runtimeConfig()` keys with no JS
+  reader, PHP config with no consumer, fluent methods with no caller).
+  Audit `runtimeConfig()` against `config.<key>` references in `src/js/`
+  before merging.
+- **Skipping the doctor update when adding a setting.** The doctor is the
+  one place a published `config/pwax.php` learns about new keys; if you
+  add a config without telling the doctor, an upgrade cannot warn about
+  it.
 
 ---
 
-## 10. Where to read more
+## 14. Where to read more
 
 - `README.md` — the user-facing manual; its structure is the user's
   mental model of the package.

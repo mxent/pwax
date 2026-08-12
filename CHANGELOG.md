@@ -9,6 +9,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`window.pwax.start()` — reboot the runtime.** Unmounts the current Vue app and
+  re-initialises; returns a Promise. Rarely needed, but it is the supported way to recover
+  from a hot-reload in development or to apply a configuration change without a full page
+  reload.
+- **`pwax.push.private_key` config key.** The VAPID private key, mapped to
+  `VAPID_PRIVATE_KEY`. Pwax does not use it (it is the browser half only), but
+  `pwax:doctor` validates its shape so a malformed key is caught before it reaches the
+  push service as a 401.
+
+
 - **`php artisan pwax:skill` and `pwax:install --ai`.** A Pwax-using project is the
   one place an AI assistant is most likely to invent package conventions from
   scratch, and the one place it is least likely to land. The package now ships a
@@ -415,6 +425,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from the one it emitted, so a configured manifest path went unhashed.
 - The `Pwax` facade documented `payload()`'s second argument as `$includeScript`; it has
   been `$addressable` since 2.0.
+- **`window.pwax.start()` was documented but did not exist.** AGENTS.md listed it as part
+  of the public JavaScript API, but `start()` in `index.js` was local and never assigned to
+  `window.pwax`. A consumer calling it got `undefined is not a function`. The runtime now
+  exposes `start()` — which unmounts the current Vue app, resets the module cache, and
+  re-runs the full boot sequence, returning a Promise that resolves when the reboot
+  completes. The type declaration in `types/pwax.d.ts` was updated to match.
+- **`pwax.push.private_key` was checked by the doctor but never defined in config.**
+  `DoctorCommand::checkPush()` validated the private key's shape, but `config/pwax.php`
+  had no `private_key` entry — so the check always silently skipped. The config key now
+  exists (mapped to `VAPID_PRIVATE_KEY`), and `pwax:vapid` names it alongside `public_key`
+  and `endpoint` in its guidance. Pwax itself does not use the private key (it is the
+  browser half only); the config key exists so the doctor can validate it and the
+  application's own push-sending code can read it.
 
 ### Deprecated
 

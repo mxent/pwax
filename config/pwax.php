@@ -513,12 +513,16 @@ return [
     | second implementation inside a PWA package would be a worse one. Install it, point
     | `endpoint` at a route that persists what the browser posts, and the two halves meet.
     |
-    | public_key  Your VAPID public key. Without it `pwax.push.subscribe()` does nothing.
-    | endpoint    A route of yours. It receives POST with the PushSubscription as JSON
-    |             when someone subscribes, and DELETE with the same when they leave.
-    | title/icon  Fallbacks for a push whose payload omits them. Every browser that
-    |             implements push requires a notification to be shown for every message,
-    |             so a payload that says nothing must still produce something.
+    | public_key   Your VAPID public key. Without it `pwax.push.subscribe()` does nothing.
+    | private_key  Your VAPID private key. Pwax does not use it — it is the browser half
+    |              only — but `pwax:doctor` validates its shape so a typo is caught here
+    |              rather than as a 401 from the push service. The application's own
+    |              push-sending code reads this; Pwax itself never does.
+    | endpoint     A route of yours. It receives POST with the PushSubscription as JSON
+    |              when someone subscribes, and DELETE with the same when they leave.
+    | title/icon   Fallbacks for a push whose payload omits them. Every browser that
+    |              implements push requires a notification to be shown for every message,
+    |              so a payload that says nothing must still produce something.
     |
     | Nothing is asked of the visitor automatically. `subscribe()` must be called from a
     | user gesture, because browsers reject permission requests that are not — and a page
@@ -528,6 +532,7 @@ return [
 
     'push' => [
         'public_key' => env('VAPID_PUBLIC_KEY'),
+        'private_key' => env('VAPID_PRIVATE_KEY'),
         'endpoint' => null,
         'title' => null,
         'icon' => null,

@@ -6,6 +6,7 @@
  * be generated or interpolated.
  */
 
+import { resetModuleCache } from './modules.js';
 import { createComponentLoader } from './components.js';
 import { loadConfig, loadInitialPayload } from './config.js';
 import { resolveExtensions } from './extensions.js';
@@ -166,6 +167,11 @@ async function boot() {
     if (config.serviceWorker) {
         registerServiceWorker(config.serviceWorker, { scope: config.serviceWorkerScope || '/' });
     }
+
+    // Published last, so a reboot called during boot does not see a half-built object.
+    // `boot()` rebuilds `window.pwax` from scratch, so this assignment is what makes
+    // `start` survive the reboot it triggers — each boot re-arms it.
+    window.pwax.start = reboot;
 }
 
 function fail(error) {
@@ -197,6 +203,36 @@ function fail(error) {
     // package documents has no `unsafe-inline`, and an inline handler would be dropped —
     // leaving a button that looks like the way out and does nothing.
     mount.querySelector('.pwax-reload')?.addEventListener('click', () => window.location.reload());
+}
+
+/**
+ * Reboot the runtime: unmount the current Vue app and re-initialise.
+ *
+ * Rarely needed — the runtime is designed to run for the life of the page — but it is
+ * the supported way to recover from a hot-reload in development or to apply a
+ * configuration change without a full page reload.
+ *
+ * Unmounts the existing app first so no orphaned Vue instance or duplicate event
+ * listener survives. The module cache is reset too: a component edited on the server
+ * after the first boot should not be served from the in-memory cache on reboot.
+ *
+ * Returns a Promise that resolves when the reboot is complete, so a caller can await
+ * it in a test or a scripted workflow. Failures go through the same `fail()` path as
+ * the initial boot.
+ */
+function reboot() {
+    try {
+        window.pwax?.app?.unmount?.();
+    } catch {
+        // An unmount that throws is not a reason to abort the reboot: the old app is
+        // being discarded either way, and the new boot builds a fresh one.
+    }
+
+    document.documentElement.classList.remove('pwax-ready');
+
+    resetModuleCache();
+
+    return boot().catch(fail);
 }
 
 function start() {

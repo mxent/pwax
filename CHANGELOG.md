@@ -451,6 +451,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Documentation
 
+- The JavaScript API table now lists `pwax.start()` (the reboot API added above) and
+  `pwax.import(url)`, and adds `pwax.sw.controller` and `pwax.sw.registration()` which
+  were already on the runtime object but missing from the table.
+- The push config example in the README now includes `private_key`, matching the config
+  key added above. The AI skill file (`resources/ai/pwax-skill.md`) mentions
+  `pwax.push.private_key` and explains why Pwax validates a key it does not use.
+- The README's note on `pwax.import` / `@pwaxImport` / `pwax.importModule` now clarifies
+  that `importModule` is the internal function name and `pwax.import` is the public API,
+  so a developer looking for `pwax.importModule` on `window.pwax` is not confused.
 - **How to use push, end to end**, which was previously one line in a code block: generating
   keys, the config, the exact JSON your endpoint receives, a worked controller, what the
   worker does with a payload, and why sending is left to

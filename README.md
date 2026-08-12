@@ -655,9 +655,10 @@ export default {
 > Blade directive `@pwaxImport('foo.bar')` is the only way to write a component
 > reference in a config value — you cannot reach for an `import('foo')` expression
 > instead. At runtime it resolves to the client-side `pwax.component(url)` (sync)
-> or `pwax.load(url)` (async with options), and the service worker calls the same
-> function internally as `pwax.importModule`. One name on the page, three spellings
-> for three places you might meet it.
+> or `pwax.load(url)` (async with options). The public runtime exposes this as
+> `pwax.import(url)`; `importModule` is the internal function name in the bundle,
+> which the service worker also calls. One operation, three spellings for three
+> places you might meet it.
 
 ## Progressive web app
 
@@ -1117,11 +1118,12 @@ generate once and keep them.
 
 ```php
 'push' => [
-    'public_key' => env('VAPID_PUBLIC_KEY'),
-    'endpoint'   => '/push/subscriptions',
-    'title'      => config('app.name'),   // used when a message sends no title
-    'icon'       => '/images/icons/icon-192.png',
-    'badge'      => '/images/icons/badge-72.png',
+    'public_key'  => env('VAPID_PUBLIC_KEY'),
+    'private_key' => env('VAPID_PRIVATE_KEY'),
+    'endpoint'    => '/push/subscriptions',
+    'title'       => config('app.name'),   // used when a message sends no title
+    'icon'        => '/images/icons/icon-192.png',
+    'badge'       => '/images/icons/badge-72.png',
 ],
 ```
 
@@ -1698,8 +1700,12 @@ The runtime publishes `window.pwax`:
 | --- | --- |
 | `pwax.component(url, export?)` | Vue async component for a component URL |
 | `pwax.load(url, export?)` | Promise of the component's options |
+| `pwax.import(url)` | Import a component module by URL (the runtime-side `@pwaxImport`) |
+| `pwax.start()` | Reboot the runtime — unmount and re-initialise; returns a Promise |
 | `pwax.http.json(url, options?)` | Fetch JSON with Pwax's headers and CSRF token |
 | `pwax.styles` | The reference-counted style manager |
+| `pwax.sw.controller` | The `ServiceWorker` controlling this page, or null |
+| `pwax.sw.registration()` | The `ServiceWorkerRegistration`, or null |
 | `pwax.sw.update()` | Check for a new build now |
 | `pwax.sw.applyUpdate()` | Let a waiting build take over now, and reload |
 | `pwax.sw.clearCaches()` | Delete every Pwax cache, framework included |

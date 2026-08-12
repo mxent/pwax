@@ -3,6 +3,8 @@
 namespace Mxent\Pwax\Tests\Feature;
 
 use Illuminate\Contracts\View\Factory as ViewFactory;
+use Illuminate\Support\Facades\Event;
+use Mxent\Pwax\Events\ManifestBuilt;
 use Mxent\Pwax\Pwa\AssetManifest;
 use Mxent\Pwax\Pwa\ComponentRegistry;
 use Mxent\Pwax\Tests\TestCase;
@@ -292,6 +294,48 @@ class OfflineManifestTest extends TestCase
         $manifest->flush();
 
         $this->assertNotSame($before, $manifest->get()['hash']);
+    }
+
+    /**
+     * The event fires on a real build, carrying the manifest hash and any warnings. It
+     * is a reasonable place to push the hash into a deploy log or fail a pipeline when
+     * `warnings` is not empty — the same list `pwax:precache` prints.
+     */
+    public function test_the_manifest_built_event_fires_on_a_real_build(): void
+    {
+        Event::fake([ManifestBuilt::class]);
+
+        /** @var AssetManifest $manifest */
+        $manifest = $this->app->make(AssetManifest::class);
+        $built = $manifest->build();
+
+        Event::assertDispatched(ManifestBuilt::class, function (ManifestBuilt $event) use ($built): bool {
+            return $event->hash() === $built['hash']
+                && $event->warnings() === ($built['warnings'] ?? []);
+        });
+    }
+
+    /**
+     * A memo hit must not re-fire the event — the manifest was already built, and
+     * counting it again would make a cache hit look like a build.
+     */
+    public function test_the_manifest_built_event_does_not_fire_on_a_memo_hit(): void
+    {
+        // A positive TTL so `get()` memoises rather than building every time.
+        config()->set('pwax.service_worker.asset_manifest.ttl', 600);
+
+        /** @var AssetManifest $manifest */
+        $manifest = $this->app->make(AssetManifest::class);
+
+        // First call builds and fires the event.
+        $manifest->get();
+
+        Event::fake([ManifestBuilt::class]);
+
+        // Second call is a memo hit.
+        $manifest->get();
+
+        Event::assertNotDispatched(ManifestBuilt::class);
     }
 
     /**

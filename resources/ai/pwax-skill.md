@@ -492,6 +492,11 @@ Push needs four things in place, in this order:
 2. `php artisan pwax:push-endpoint` — scaffolds the controller.
 3. The VAPID keys and the endpoint URL go into `.env`
    (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, the endpoint URL).
+   Both keys are mapped in `config/pwax.php` under `pwax.push.public_key`
+   and `pwax.push.private_key`. Pwax itself uses only the public key
+   (it is the browser half); the private key is the application's, but
+   `pwax:doctor` validates its shape so a typo is caught here rather
+   than as a 401 from the push service.
 4. The `push_subscriptions` table exists (the migration ships with
    the package).
 

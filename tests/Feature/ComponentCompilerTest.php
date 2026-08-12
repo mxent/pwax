@@ -2,7 +2,9 @@
 
 namespace Mxent\Pwax\Tests\Feature;
 
+use Illuminate\Support\Facades\Event;
 use Mxent\Pwax\Compiler\ComponentCompiler;
+use Mxent\Pwax\Events\ComponentCompiled;
 use Mxent\Pwax\Exceptions\InvalidComponentId;
 use Mxent\Pwax\Tests\TestCase;
 
@@ -117,5 +119,38 @@ class ComponentCompilerTest extends TestCase
         );
 
         $this->assertSame('<b>hi</b>', $component->template);
+    }
+
+    /**
+     * The event fires on a real compile only — never on a cache hit — so it is a
+     * reasonable place to measure how often the compile cache is working. Firing it on
+     * a cache hit would count every render as a compile, which is the opposite of useful.
+     */
+    public function test_the_compiled_event_fires_on_a_real_compile(): void
+    {
+        Event::fake([ComponentCompiled::class]);
+
+        $component = $this->compiler()->compile('pages.home');
+
+        Event::assertDispatched(ComponentCompiled::class, function (ComponentCompiled $event) use ($component): bool {
+            return $event->view === 'pages.home' && $event->component->hash() === $component->hash();
+        });
+    }
+
+    /**
+     * A cache hit must not re-fire the event — the component was already parsed, and
+     * counting it again would make a cache-hit look like a cache-miss.
+     */
+    public function test_the_compiled_event_does_not_fire_on_a_cache_hit(): void
+    {
+        // First compile populates the cache.
+        $this->compiler()->compile('pages.home');
+
+        Event::fake([ComponentCompiled::class]);
+
+        // Second compile is a cache hit (same view, no data, same rendered output).
+        $this->compiler()->compile('pages.home');
+
+        Event::assertNotDispatched(ComponentCompiled::class);
     }
 }

@@ -82,4 +82,27 @@ class VapidTest extends TestCase
             ->expectsOutputToContain('VAPID_PRIVATE_KEY=')
             ->assertSuccessful();
     }
+
+    /**
+     * The guidance must name all three config keys a developer needs to set, so a
+     * follow-the-instructions run does not miss one.
+     *
+     * `bulletList` renders through Termwind, which does not always emit through `doWrite`
+     * in a way `expectsOutputToContain` can intercept. So the command also prints the
+     * key names on their own lines, which the test can reliably match.
+     */
+    public function test_the_guidance_names_every_push_config_key(): void
+    {
+        $this->withoutMockingConsoleOutput();
+
+        $exit = Artisan::call('pwax:vapid');
+
+        $this->assertSame(0, $exit);
+
+        $output = Artisan::output();
+
+        $this->assertStringContainsString('pwax.push.public_key', $output);
+        $this->assertStringContainsString('pwax.push.private_key', $output);
+        $this->assertStringContainsString('pwax.push.endpoint', $output);
+    }
 }

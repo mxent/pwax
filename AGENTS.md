@@ -266,7 +266,8 @@ reachable from this object is part of the contract:
 - `window.pwax.app` — the Vue application instance.
 - `window.pwax.router` — the Vue Router instance; the runtime reads this
   for `push`, `replace`, and back/forward navigation.
-- `window.pwax.start()` — reboot the runtime (rarely needed).
+- `window.pwax.start()` — reboot the runtime (rarely needed). Unmounts the
+  current app and re-initialises; returns a Promise.
 - `window.pwax.http.{json,request,headers}` — the runtime HTTP helper.
 - `window.pwax.styles.{acquire,release,link,script}` — the style manager.
 - `window.pwax.component.{resolve,render,hash}` — component helpers.
@@ -492,9 +493,8 @@ half of the issues that arrive on the maintainer queue:
   `@stack('pwax-head')` is wired up. The shell renders foot content via
   the `pwax.blade.foot` override.
 - **A `pwax_component()` global helper** — it does not exist (was
-  removed). The function is `pwaxImport()` (lowercase 'p' in `Render`),
-  and it is called via `@pwaxImport(...)` inside Blade, not as a free
-  helper.
+  removed). The function is `pwaxImport()` (camelCase), and it is called
+  via `@pwaxImport(...)` inside Blade, not as a free helper.
 
 When a contributor reaches for one of these, the answer is **not**
 "make it work" — it is "stop and use the existing surface". Most of these

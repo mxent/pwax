@@ -310,6 +310,50 @@ class CommandsTest extends TestCase
             ->assertSuccessful();
     }
 
+    /**
+     * The private key is the application's — Pwax does not use it — but `pwax:doctor`
+     * validates its shape, because a malformed private key is a 401 from the push service
+     * that is indistinguishable from "the service is having a bad day". Now that the
+     * config key exists, the check actually has something to read.
+     */
+    public function test_the_doctor_command_flags_a_malformed_private_key(): void
+    {
+        $this->manifest_clean();
+        $this->withPushSubscriptionsTable();
+
+        // A valid public key so the check enters the push branch at all.
+        $goodPublic = rtrim(strtr(base64_encode("\x04" . str_repeat("\0", 64)), '+/', '-_'), '=');
+        config()->set('pwax.push.public_key', $goodPublic);
+        config()->set('pwax.push.endpoint', '/push/subscribe');
+
+        // 31 bytes — one short of the 32 the Push API requires.
+        $badPrivate = rtrim(strtr(base64_encode(str_repeat("\0", 31)), '+/', '-_'), '=');
+        config()->set('pwax.push.private_key', $badPrivate);
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('private_key')
+            ->assertFailed();
+    }
+
+    /**
+     * A well-formed private key passes the doctor. Both keys set, an endpoint set, and
+     * the table present — the complete, valid push configuration.
+     */
+    public function test_the_doctor_command_accepts_a_well_formed_private_key(): void
+    {
+        $this->manifest_clean();
+        $this->withPushSubscriptionsTable();
+
+        $goodPublic = rtrim(strtr(base64_encode("\x04" . str_repeat("\0", 64)), '+/', '-_'), '=');
+        $goodPrivate = rtrim(strtr(base64_encode(str_repeat("\0", 32)), '+/', '-_'), '=');
+
+        config()->set('pwax.push.public_key', $goodPublic);
+        config()->set('pwax.push.private_key', $goodPrivate);
+        config()->set('pwax.push.endpoint', '/push/subscribe');
+
+        $this->artisan('pwax:doctor')->assertSuccessful();
+    }
+
     public function test_the_precache_command_verify_covers_pages(): void
     {
         config()->set('pwax.service_worker.enabled', true);

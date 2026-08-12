@@ -59,6 +59,7 @@ class VapidCommand extends Command
             'The public key is sent to the browser and belongs in config; the private key never leaves the server.',
             'Rotating them invalidates every existing subscription, so generate once and keep them.',
             'Set pwax.push.public_key and pwax.push.endpoint, then call window.pwax.push.subscribe().',
+            'Set pwax.push.private_key too — the doctor validates its shape.',
         ]);
 
         return self::SUCCESS;

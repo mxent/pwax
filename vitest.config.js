@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vitest/config';
+
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 
 export default defineConfig({
     test: {
@@ -10,5 +13,11 @@ export default defineConfig({
         // rather than a stale copy from `dist/`.
         globalSetup: ['tests/js/helpers/buildWorker.js'],
         setupFiles: ['tests/js/helpers/setup.js'],
+    },
+    define: {
+        // Matches esbuild's define in build.js — the runtime reads this at the top of
+        // index.js, and without it any test that imports the runtime entry crashes with
+        // `__PWAX_VERSION__ is not defined`.
+        __PWAX_VERSION__: JSON.stringify(pkg.version),
     },
 });

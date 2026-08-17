@@ -53,14 +53,29 @@ final class Strategy
      * right for serving a page and wrong for telling someone their config is not doing what
      * they wrote. `pwax:doctor` asks this so a typo, or a spelling retired in 5.0, is named
      * rather than quietly ignored.
+     *
+     * Null and blank mean "not set", which is not a mistake — every strategy key has a
+     * default. Anything that is not a string is a mistake and is reported as one without
+     * being cast: `(string) []` is a PHP warning, and a doctor that emits one while
+     * explaining a config error has made the output harder to read, not easier.
      */
     public static function isUnknown(mixed $value): bool
     {
-        if ($value === null || $value === '') {
+        if ($value === null) {
             return false;
         }
 
-        return ! in_array(strtolower(trim((string) $value)), [
+        if (! is_string($value)) {
+            return true;
+        }
+
+        $name = strtolower(trim($value));
+
+        if ($name === '') {
+            return false;
+        }
+
+        return ! in_array($name, [
             self::NETWORK_ONLY,
             self::NETWORK_FIRST,
             self::CACHE_FIRST,

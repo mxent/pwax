@@ -90,8 +90,9 @@ Notes:
 - **`<slot />` works normally.** Pwax does not intercept it.
 - **The default export is the Vue component.** A plugin exports a
   `default` object with an `install` method; a directive exports
-  `bind`/`update`; a client middleware exports an async function — see
-  the comment block the scaffolder emits (§14).
+  `bind`/`update`; a client middleware exports an async function. Run
+  `pwax:component --plugin`, `--directive` or `--middleware` and read
+  the comment block it emits; that is the canonical shape for each.
 - **`<style scoped>` becomes a Vue scoped style.** Omit `scoped` for
   global styles; pass `--plain` to `pwax:component` to skip the block.
 

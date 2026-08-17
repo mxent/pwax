@@ -145,13 +145,18 @@ class DoctorCommand extends Command
 
         $names = 'network-only, network-first, cache-first or stale-while-revalidate';
 
+        // A value that is not a string is still wrong, and still has to be printable. Cast
+        // blindly and a `'strategy' => []` typo makes the doctor emit a PHP warning in the
+        // middle of the message explaining the mistake.
+        $shown = static fn (mixed $value): string => is_string($value) ? $value : get_debug_type($value);
+
         foreach ((array) $config->get('pwax.service_worker.data_groups', []) as $index => $group) {
             if (is_array($group) && Strategy::isUnknown($group['strategy'] ?? null)) {
                 $this->fail_(sprintf(
                     'Data group "%s" has an unknown strategy "%s". It is being ignored and the '
                         . 'group falls back to the default. Use one of: %s.',
                     is_string($group['name'] ?? null) ? $group['name'] : (string) $index,
-                    (string) $group['strategy'],
+                    $shown($group['strategy']),
                     $names,
                 ));
             }
@@ -165,7 +170,7 @@ class DoctorCommand extends Command
                     '%s has an unknown strategy "%s". It is being ignored and the default applies '
                         . 'instead. Use one of: %s.',
                     $key,
-                    (string) $value,
+                    $shown($value),
                     $names,
                 ));
             }

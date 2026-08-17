@@ -93,7 +93,7 @@ class StrategyNamesTest extends TestCase
         $json = json_encode($this->manifest());
 
         $this->assertStringNotContainsString('freshness', $json);
-        $this->assertStringNotContainsString('"performance"', $json);
+        $this->assertStringNotContainsString('performance', $json);
         $this->assertStringNotContainsString('app-shell', $json);
     }
 
@@ -137,6 +137,35 @@ class StrategyNamesTest extends TestCase
     {
         config()->set('pwax.service_worker.pages.strategy', 'cache-first');
         config()->set('pwax.service_worker.navigation_strategy', 'network-first');
+
+        $this->artisan('pwax:doctor')
+            ->doesntExpectOutputToContain('has an unknown strategy')
+            ->run();
+    }
+
+    /**
+     * A value that is not a string at all.
+     *
+     * `'strategy' => ['cache-first']` is an ordinary slip — a data group's other keys take
+     * arrays. It is still wrong, and reporting it must not itself emit a PHP warning from
+     * casting an array to a string in the middle of the message.
+     */
+    public function test_a_non_string_strategy_is_reported_without_a_php_warning(): void
+    {
+        config()->set('pwax.service_worker.pages.strategy', ['cache-first']);
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('pages.strategy has an unknown strategy "array"')
+            ->assertFailed()
+            ->run();
+    }
+
+    public function test_an_unset_strategy_is_not_reported(): void
+    {
+        // Every strategy key has a default, so "not set" is not a mistake and must not be
+        // dressed up as one — a doctor that fails a stock config is a doctor nobody runs.
+        config()->set('pwax.service_worker.pages.strategy', null);
+        config()->set('pwax.service_worker.navigation_strategy', '');
 
         $this->artisan('pwax:doctor')
             ->doesntExpectOutputToContain('has an unknown strategy')

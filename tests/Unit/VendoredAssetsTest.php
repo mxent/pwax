@@ -125,22 +125,23 @@ class VendoredAssetsTest extends TestCase
     /**
      * The published config, read as a plain array.
      *
-     * `env()` is defined here rather than booting an application: this file is one array
+     * `require`d rather than resolved through an application: this file is one array
      * literal, and standing up Testbench to read it would make a unit test a feature one.
+     *
+     * It does call `env()`, which Illuminate's helpers provide and Composer autoloads
+     * before PHPUnit runs — so it is always there in practice. Checked anyway, because
+     * "undefined function env()" from inside a `require` is a considerably worse way to
+     * learn that than being told.
      *
      * @return array<string, mixed>
      */
     private static function config(): array
     {
         if (! function_exists('env')) {
-            /**
-             * @param  mixed  $default
-             * @return mixed
-             */
-            function env(string $key, $default = null)
-            {
-                return $default;
-            }
+            throw new \RuntimeException(
+                'config/pwax.php calls env(), which is not defined. It comes from Illuminate\'s '
+                . 'helpers via Composer\'s autoloader — run `composer install`.'
+            );
         }
 
         /** @var array<string, mixed> $config */

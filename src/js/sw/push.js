@@ -92,19 +92,6 @@ export function registerPush(config) {
 }
 
 /**
- * Requests queued while offline, replayed when the connection returns.
- *
- * The queue is a cache rather than IndexedDB, deliberately: the worker already depends on
- * the Cache API and nothing else, a queued request *is* a Request, and Cache Storage
- * stores those natively with their method, headers and body intact. An IndexedDB layer
- * would mean serialising and rebuilding all three by hand for no gain.
- *
- * A replayed request that fails with a real answer — a 4xx — is dropped rather than
- * retried forever. The server said no; saying it again tomorrow will not change that.
- * `RETRYABLE` below is the list of 4xx statuses for which that reasoning does not hold.
- */
-
-/**
  * 4xx statuses that mean "not now", not "no".
  *
  * The one that matters is 419. Laravel returns it for an expired session or CSRF token,
@@ -121,6 +108,18 @@ export function registerPush(config) {
  */
 const RETRYABLE = new Set([408, 419, 425, 429]);
 
+/**
+ * Requests queued while offline, replayed when the connection returns.
+ *
+ * The queue is a cache rather than IndexedDB, deliberately: the worker already depends on
+ * the Cache API and nothing else, a queued request *is* a Request, and Cache Storage
+ * stores those natively with their method, headers and body intact. An IndexedDB layer
+ * would mean serialising and rebuilding all three by hand for no gain.
+ *
+ * A replayed request that fails with a real answer — a 4xx — is dropped rather than
+ * retried forever. The server said no; saying it again tomorrow will not change that.
+ * `RETRYABLE` above is the list of 4xx statuses for which that reasoning does not hold.
+ */
 export function registerSync(config, cacheName) {
     const TAG = 'pwax-sync';
 

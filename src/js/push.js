@@ -48,18 +48,72 @@ export function createPushApi(config, http) {
         return navigator.serviceWorker.ready;
     };
 
-    /** Tell the application's endpoint about a subscription, or its removal. */
+    /**
+     * Is the configured endpoint on this origin?
+     *
+     * It has to be, and the check is not a formality. `http.headers()` carries this
+     * session's CSRF token, and posting those headers to a URL somebody put in
+     * `pwax.push.endpoint` — a typo, a copied example, a compromised config — would hand
+     * that token to another origin. A subscription is not secret; the token is.
+     */
+    const isSameOrigin = (endpoint) => {
+        try {
+            return new URL(endpoint, window.location.origin).origin === window.location.origin;
+        } catch {
+            return false;
+        }
+    };
+
+    /**
+     * Tell the application's endpoint about a subscription, or its removal.
+     *
+     * A failure here is not cosmetic and is not swallowed. The browser is now subscribed
+     * and the server does not know it exists, so every push the application believes it
+     * sent goes nowhere — and the only symptom is notifications that never arrive, which
+     * is indistinguishable from a VAPID problem, a permission problem, or a bug in the
+     * sending code. Saying so at the point of failure is the difference between a
+     * five-minute fix and an afternoon.
+     */
     const report = async (subscription, method) => {
         if (!settings.endpoint) {
             return;
         }
 
-        await fetch(settings.endpoint, {
-            method,
-            credentials: 'same-origin',
-            headers: { ...http.headers(), 'Content-Type': 'application/json' },
-            body: JSON.stringify(subscription),
-        });
+        if (!isSameOrigin(settings.endpoint)) {
+            console.error(
+                `pwax: pwax.push.endpoint must be on this origin, got "${settings.endpoint}". ` +
+                    "The subscription was not reported — sending it would leak this session's " +
+                    'CSRF token to another origin.'
+            );
+
+            return;
+        }
+
+        let response;
+
+        try {
+            response = await fetch(settings.endpoint, {
+                method,
+                credentials: 'same-origin',
+                headers: { ...http.headers(), 'Content-Type': 'application/json' },
+                body: JSON.stringify(subscription),
+            });
+        } catch (error) {
+            console.error(
+                `pwax: could not reach ${settings.endpoint} to ${method} a push subscription.`,
+                error
+            );
+
+            return;
+        }
+
+        if (!response.ok) {
+            console.error(
+                `pwax: ${settings.endpoint} answered ${response.status} to a push subscription ` +
+                    `${method}. The subscription exists in the browser but not on the server, so ` +
+                    'no push sent to it will arrive.'
+            );
+        }
     };
 
     return {

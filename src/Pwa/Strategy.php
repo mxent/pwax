@@ -18,9 +18,11 @@ namespace Mxent\Pwax\Pwa;
  *   cache-first             serve what is stored, fetch only when there is nothing
  *   stale-while-revalidate  serve what is stored and refresh it in the background
  *
- * The old spellings still work, and will for this major cycle — `pwax:doctor` names them.
- * Normalising here rather than at each call site means the manifest only ever carries the
- * new vocabulary, so the service worker knows one set of words.
+ * These four are now the only spellings. `freshness`, `performance` and `app-shell` were
+ * accepted as aliases through the 4.x cycle and are gone: an unrecognised value falls back
+ * to the caller's default, and `pwax:doctor` reports it. Normalising here rather than at
+ * each call site means the manifest only ever carries this vocabulary, so the service
+ * worker knows one set of words.
  */
 final class Strategy
 {
@@ -33,18 +35,6 @@ final class Strategy
     public const STALE_WHILE_REVALIDATE = 'stale-while-revalidate';
 
     /**
-     * What each retired spelling meant.
-     *
-     * `app-shell` belonged to navigations and `freshness`/`performance` to pages and data
-     * groups, but all three described behaviour the four names above already cover.
-     */
-    public const ALIASES = [
-        'freshness' => self::NETWORK_FIRST,
-        'performance' => self::CACHE_FIRST,
-        'app-shell' => self::CACHE_FIRST,
-    ];
-
-    /**
      * Resolve a configured value, falling back when it is not one we recognise.
      *
      * @param  list<string>  $allowed
@@ -52,16 +42,29 @@ final class Strategy
     public static function resolve(mixed $value, array $allowed, string $fallback): string
     {
         $name = strtolower(trim((string) $value));
-        $name = self::ALIASES[$name] ?? $name;
 
         return in_array($name, $allowed, true) ? $name : $fallback;
     }
 
     /**
-     * Is this one of the spellings we still accept but no longer document?
+     * Is this a strategy name at all?
+     *
+     * A configured value that is not one falls back silently at the point of use — which is
+     * right for serving a page and wrong for telling someone their config is not doing what
+     * they wrote. `pwax:doctor` asks this so a typo, or a spelling retired in 5.0, is named
+     * rather than quietly ignored.
      */
-    public static function isDeprecated(mixed $value): bool
+    public static function isUnknown(mixed $value): bool
     {
-        return is_string($value) && isset(self::ALIASES[strtolower(trim($value))]);
+        if ($value === null || $value === '') {
+            return false;
+        }
+
+        return ! in_array(strtolower(trim((string) $value)), [
+            self::NETWORK_ONLY,
+            self::NETWORK_FIRST,
+            self::CACHE_FIRST,
+            self::STALE_WHILE_REVALIDATE,
+        ], true);
     }
 }

@@ -177,6 +177,13 @@ async function boot() {
 function fail(error) {
     console.error('pwax: failed to start', error);
 
+    // Re-armed here as well as at the end of `boot()`. A boot that threw — Vue not loaded,
+    // a plugin module that 404'd, a mount element that was not there yet — never reached
+    // the assignment at the end, so the one documented way to try again was missing from
+    // exactly the situation it exists for. `window.pwax` may itself be absent if the
+    // failure came before it was published, so this establishes it rather than assuming it.
+    window.pwax = { ...(window.pwax || {}), start: reboot };
+
     const mount = document.getElementById('pwax');
 
     if (!mount) {

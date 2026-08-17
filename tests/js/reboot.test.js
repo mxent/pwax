@@ -119,4 +119,25 @@ describe('window.pwax.start (reboot)', () => {
 
         expect(typeof window.pwax.start).toBe('function');
     });
+    it('arms start even when the boot failed', async () => {
+        // Vue missing is the boot failure people actually hit — a script tag in the wrong
+        // order — and it throws before `window.pwax.start` was ever assigned. Without this,
+        // the one documented way to try again was absent from exactly the situation it
+        // exists for, and the only route back was a full page reload.
+        vi.stubGlobal('Vue', undefined);
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        await importRuntime();
+
+        await vi.waitFor(() => {
+            expect(typeof window.pwax?.start).toBe('function');
+        });
+
+        // And it really does reboot: with Vue back, calling it mounts the app.
+        const { app } = stubVue();
+
+        await window.pwax.start();
+
+        expect(app.mount).toHaveBeenCalled();
+    });
 });

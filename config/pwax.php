@@ -132,7 +132,9 @@ return [
         // 'local' or 'cdn'. Named `source` because that is what it chooses — where the
         // framework is served from, not how anything is cached. It was `strategy`, which
         // put a fifth key by that name in a config where the other four choose a caching
-        // behaviour. The old key still works; `pwax:doctor` names it.
+        // behaviour. That key was removed in 5.0 and is no longer read: a published config
+        // that still sets it serves the framework locally regardless, so `pwax:doctor`
+        // fails on it rather than letting an application move CDN → local unnoticed.
         'source' => 'local',
 
         /*
@@ -520,6 +522,13 @@ return [
     |              push-sending code reads this; Pwax itself never does.
     | endpoint     A route of yours. It receives POST with the PushSubscription as JSON
     |              when someone subscribes, and DELETE with the same when they leave.
+    |              It must be on this origin — a path, not an absolute URL elsewhere.
+    |              The runtime posts to it with the session's CSRF token attached, so a
+    |              cross-origin value would hand that token to another origin; it is
+    |              refused and logged rather than sent. A non-2xx answer, or an endpoint
+    |              that cannot be reached, is logged too: the browser is then subscribed
+    |              and the server does not know it exists, which looks exactly like a bad
+    |              VAPID key and is not one.
     | title/icon   Fallbacks for a push whose payload omits them. Every browser that
     |              implements push requires a notification to be shown for every message,
     |              so a payload that says nothing must still produce something.
@@ -816,13 +825,13 @@ return [
         |                  and let the runtime fetch the page payload. Much faster, but
         |                  every navigation this worker claims becomes the SPA — check
         |                  `navigation_urls` first if Horizon, Telescope, Nova or a
-        |                  Filament panel share this domain. Spelled 'app-shell' before
-        |                  4.1; that still works.
+        |                  Filament panel share this domain.
         |
         | One vocabulary across every strategy key in this file — `runtime_strategy`,
-        | this one, `pages.strategy` and each data group's. 'freshness' is now
-        | 'network-first' and 'performance' is 'cache-first'; the old names still work
-        | and `pwax:doctor` names them.
+        | this one, `pages.strategy` and each data group's. The pre-4.1 spellings
+        | 'freshness', 'performance' and 'app-shell' were accepted as aliases through
+        | 4.x and were removed in 5.0: an unrecognised value now falls back to the
+        | default and `pwax:doctor` fails on it.
         */
         'navigation_strategy' => 'network-first',
 

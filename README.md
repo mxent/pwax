@@ -1619,7 +1619,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `components.allowed` | `[]` | Allowlist of servable view patterns |
 | `components.scoped_styles` | `true` | Honour `<style scoped>` |
 | `blade.*` | `null` | Override bundled partials |
-| `assets.source` | `'local'` | `local` or `cdn` (was `assets.strategy`) |
+| `assets.source` | `'local'` | `local` or `cdn` (replaced `assets.strategy`, removed in 5.0) |
 | `assets.local_path` | `'/vendor/pwax'` | Where published assets live |
 | `assets.versions` | see config | Pinned Vue / Router / Pinia versions |
 | `assets.pinia` | `true` | Load Pinia at all |

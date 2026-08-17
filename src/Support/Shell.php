@@ -384,15 +384,15 @@ class Shell
     /**
      * Where the framework scripts come from: `local` or `cdn`.
      *
-     * `assets.source` since 4.1. It was `assets.strategy`, which put a fifth key called
-     * "strategy" in a config where the other four choose a caching behaviour and this one
-     * chooses a hostname. The old key still works and `pwax:doctor` names it.
+     * `assets.source` since 4.1, and the only key read since 5.0. It was `assets.strategy`,
+     * which put a fifth key called "strategy" in a config where the other four choose a
+     * caching behaviour and this one chooses a hostname. The fallback that kept the old
+     * name working through 4.x is gone; `pwax:doctor` fails on a config that still sets it,
+     * because an application would otherwise silently move from CDN to local on upgrade.
      */
     public function assetSource(): string
     {
-        $source = $this->config->get('pwax.assets.source')
-            ?? $this->config->get('pwax.assets.strategy')
-            ?? 'local';
+        $source = $this->config->get('pwax.assets.source') ?? 'local';
 
         return strtolower(trim((string) $source)) === 'cdn' ? 'cdn' : 'local';
     }

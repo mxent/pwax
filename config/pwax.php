@@ -422,23 +422,6 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Page transition
-    |--------------------------------------------------------------------------
-    |
-    | How long the cross-fade between pages runs for. The bundled `pwax-page` fades with
-    | opacity alone — anything that changes an element's size or position is a second
-    | kind of movement to follow, and the reason this exists is that navigation felt
-    | unsettled.
-    |
-    | `duration` must agree with whatever the CSS does; it is what the default stylesheet
-    | is written with. `0` is an instant swap; the browser still calls
-    | `document.startViewTransition`, but the cross-fade collapses to nothing. Ignored
-    | under `prefers-reduced-motion`.
-    |
-    */
-
-    /*
-    |--------------------------------------------------------------------------
     | Prefetching
     |--------------------------------------------------------------------------
     |
@@ -464,6 +447,23 @@ return [
         'mode' => 'hover',
         'delay' => 65,
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Page transition
+    |--------------------------------------------------------------------------
+    |
+    | How long the cross-fade between pages runs for. The bundled `pwax-page` fades with
+    | opacity alone — anything that changes an element's size or position is a second
+    | kind of movement to follow, and the reason this exists is that navigation felt
+    | unsettled.
+    |
+    | `duration` must agree with whatever the CSS does; it is what the default stylesheet
+    | is written with. `0` is an instant swap; the browser still calls
+    | `document.startViewTransition`, but the cross-fade collapses to nothing. Ignored
+    | under `prefers-reduced-motion`.
+    |
+    */
 
     'transition' => [
         'duration' => 150,

@@ -153,7 +153,7 @@ self.addEventListener('fetch', (event) => {
     if (new URL(request.url).origin !== self.location.origin) {
         // Third-party requests are none of our business — with one exception. An asset the
         // manifest deliberately precached from another origin, a CDN copy of Vue under
-        // `assets.strategy = 'cdn'` or anything in `pwax.scripts` pointing off-site, was
+        // `assets.source = 'cdn'` or anything in `pwax.scripts` pointing off-site, was
         // being fetched at install and then never served from that cache: the handler
         // returned here before looking. A CDN-hosted framework could not start offline at
         // all, however completely it had been precached.

@@ -22,6 +22,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `assets.source => 'local'` serves the files and ignores the hashes — so a stale hash
   surfaced as a browser refusing to run Vue in an application running in CDN mode, a
   release after the mistake.
+- **`pwax:error` in `types/pwax.d.ts`.** It is dispatched by the runtime and listed in the
+  README's event table, but was missing from the typed `EventMap` — so the one event that
+  carries the failure payload was the one a TypeScript listener got no types for.
 - **The skill documents `window.pwax.sync`.** The offline write queue was a headline
   capability with no entry in `resources/ai/pwax-skill.md` at all, so an assistant asked to
   make a form work offline had nothing to go on. The new section covers the API, the
@@ -313,6 +316,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   See [UPGRADE.md](UPGRADE.md) for the copy-pasteable diffs.
 
 ### Fixed
+
+- **Stale documentation for two removed keys.** The README documented
+  `transition.name` as "kept for back-compat" — it was removed along with its plumbing when
+  page transitions moved to the View Transitions API, and nothing reads it, so anyone
+  setting it got silence. The `transition` block's own doc comment in `config/pwax.php` had
+  also drifted away from the array it describes and sat above `prefetch` instead.
+
+- **A page that declared no metadata inherited the previous page's.** `title` and `head`
+  were sent in the payload only when the route had declared something of its own, so
+  navigating to an ordinary page left the tab showing the title of the page before it,
+  along with that page's canonical URL and Open Graph tags — for the rest of the session. A
+  reload of the same page showed the resolved fallback instead, so the SPA and the document
+  disagreed about what the page was, which is the exact drift `Head` exists to prevent.
+
+  The title is the visible half: `document.title` is a browser tab, a bookmark and a
+  history entry, and it is also the string the runtime reads into its live region after
+  every navigation — so a screen-reader user was being told the name of the page they had
+  just left. Both fields are now sent on every page.
+
+  The omission was deliberate, on the reasoning that an empty head would wipe the
+  application-wide description. It does not: `applyHead()` returns early on an empty
+  description rather than clearing it, so the only thing the omission achieved was the
+  drift. Two runtime tests now pin that down, and a page that declares no canonical URL
+  correctly has the previous one removed.
 
 - **Offline writes were silently deleted when the session expired.** An entry in
   `window.pwax.sync`'s queue carries the CSRF token that was current when it was queued,

@@ -289,6 +289,14 @@ The `title_template` is only applied when a page supplied its own
 title — `':title · Acme'` against a fallback of `'Acme'` would render
 `'Acme · Acme'`, which is not what the template is for.
 
+4. The payload carries `title` and `head` on **every** page, including
+   one that declared neither, so the runtime overwrites what the
+   previous page set instead of inheriting it. This is why you do not
+   need to set a title on every route to stop the wrong one sticking:
+   a page with none resolves to the fallback and the runtime applies
+   that. A page that wants no canonical URL simply omits it and the
+   previous page's is removed.
+
 ### JSON-LD and other <head> extensions
 
 Use `@stack('pwax-head')` to inject extra head content from a partial:

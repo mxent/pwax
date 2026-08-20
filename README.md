@@ -1636,7 +1636,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `progress.enabled` | `true` | Navigation progress bar |
 | `progress.color`, `.height` | `null`, `3` | Colour falls back to the spinner's; height in px |
 | `progress.delay`, `.trickle` | `250`, `true` | Silence before it appears, and whether it eases while waiting |
-| `transition.name`, `.duration` | `pwax-page`, `150` | Page transition name (kept for back-compat) and cross-fade length in ms |
+| `transition.duration` | `150` | Cross-fade length in ms; `0` swaps instantly |
 | `manifest_path`, `manifest` | see config | Web App Manifest (all spec members) |
 | `head.title`, `.title_template` | `null` | Document title and its wrapper |
 | `head.description`, `.icon` | `null` | Fall back to the manifest's |

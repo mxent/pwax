@@ -200,4 +200,57 @@ describe('replaying queued writes', () => {
         // forever is how a queue stops draining.
         await expect((await caches.open('pwax-sync')).keys()).resolves.toHaveLength(0);
     });
+
+    // 419 is the status this queue is most likely to meet and the one it must never treat
+    // as an answer. An entry carries the CSRF token that was current when it was queued,
+    // so a write that sat offline longer than the session lifetime comes back 419 on its
+    // first replay — every time, by construction. Dropping it there deleted exactly the
+    // writes the feature exists to protect, silently.
+    it.each([
+        [419, 'an expired session or CSRF token'],
+        [408, 'a request timeout'],
+        [425, 'too early'],
+        [429, 'a rate limit'],
+    ])('keeps a write refused with %i (%s)', async (status) => {
+        const caches = new FakeCaches();
+        await queued(caches, '{"text":"one"}');
+
+        const w = createWorker({
+            manifest: manifest(),
+            caches,
+            backgroundSync: false,
+            routes: () => new Response('nope', { status }),
+        });
+
+        await w.dispatch('message', { data: { type: 'PWAX_SYNC_REGISTER' } });
+
+        await expect((await caches.open('pwax-sync')).keys()).resolves.toHaveLength(1);
+    });
+
+    it('drops an entry it cannot read rather than blocking the queue behind it', async () => {
+        const caches = new FakeCaches();
+        const cache = await caches.open('pwax-sync');
+
+        await cache.put('/__pwax__/sync/corrupt', new Response('not json at all'));
+        await queued(caches, '{"text":"one"}');
+
+        const sent = [];
+        const w = createWorker({
+            manifest: manifest(),
+            caches,
+            backgroundSync: false,
+            routes: (path) => {
+                sent.push(path);
+
+                return new Response('{}');
+            },
+        });
+
+        await w.dispatch('message', { data: { type: 'PWAX_SYNC_REGISTER' } });
+
+        // The readable entry behind it still went. Left in place, the unreadable one would
+        // throw out of `replay()` on every sync and nothing after it would ever send.
+        expect(sent).toEqual(['/notes']);
+        await expect(cache.keys()).resolves.toHaveLength(0);
+    });
 });

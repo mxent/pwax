@@ -108,4 +108,31 @@ describe('applying a page head', () => {
         expect(document.head.querySelectorAll('meta[data-pwax-head]')).toHaveLength(1);
         expect(tag('meta[property="og:title"]').getAttribute('content')).toBe('Kept');
     });
+    /**
+     * The server now sends a head for every page, including one that declares nothing.
+     * These are the two halves of why that is safe — and the reason the omission it
+     * replaced was not.
+     */
+    it('keeps the application-wide description when a page names none', () => {
+        document.head.innerHTML = '<meta name="description" content="The Acme application.">';
+
+        applyHead({ title: 'Acme' });
+
+        // The omission this replaced was justified on the belief that an empty head would
+        // wipe this. It does not: an empty description is left alone, deliberately, because
+        // the shell emits one for the application as a whole.
+        expect(tag('meta[name="description"]').getAttribute('content')).toBe(
+            'The Acme application.'
+        );
+    });
+
+    it("drops the previous page's canonical when the next page has none", () => {
+        document.head.innerHTML = '<link rel="canonical" href="https://example.test/post">';
+
+        applyHead({ title: 'Acme' });
+
+        // A canonical URL that outlives its page points every crawler that follows a
+        // client-side navigation at the wrong document.
+        expect(tag('link[rel="canonical"]')).toBeNull();
+    });
 });

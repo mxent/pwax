@@ -243,8 +243,9 @@ fine; removing from them is a major version.
   head in the payload so client-side navigations update `<title>` and the
   meta tags too.
 - The `Mxent\Pwax\Pwa\Strategy` constants: `NETWORK_ONLY`,
-  `NETWORK_FIRST`, `CACHE_FIRST`, `STALE_WHILE_REVALIDATE`. Their old
-  aliases (`freshness`, `performance`, `app-shell`) are still accepted.
+  `NETWORK_FIRST`, `CACHE_FIRST`, `STALE_WHILE_REVALIDATE`. These are the
+  only accepted spellings; the 3.x aliases (`freshness`, `performance`,
+  `app-shell`) were removed in 5.0 and `pwax:doctor` fails on them.
 - The configuration keys in `config/pwax.php`. A rename is a breaking
   change unless the old key continues to work; if it doesn't, document the
   migration in `CHANGELOG.md` under `### Changed` with a copy-pasteable

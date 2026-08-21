@@ -342,9 +342,17 @@ class PwaxController extends Controller
         }
 
         // A conditional request may list several tags, and a cache is allowed to have
-        // weakened ours by prefixing `W/`.
+        // weakened ours by prefixing `W/`. Stripped as a prefix, not with `ltrim()`: that
+        // takes a *character list*, and the only reason it was ever correct here is that
+        // every tag this controller emits is quoted, so the `"` stopped it before it could
+        // reach a `W` in the value. That is a property of today's tags, not of the parsing,
+        // and it is not one the next person changing the tag format should have to know.
         $candidates = array_map(
-            static fn (string $tag): string => ltrim(trim($tag), 'W/'),
+            static function (string $tag): string {
+                $tag = trim($tag);
+
+                return str_starts_with($tag, 'W/') ? substr($tag, 2) : $tag;
+            },
             explode(',', $ifNoneMatch)
         );
 

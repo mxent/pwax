@@ -123,11 +123,61 @@ class HeadMetaTest extends TestCase
         }
     }
 
-    public function test_a_page_that_declares_nothing_sends_no_head_in_its_payload(): void
+    /**
+     * The page that declares nothing is the one that has to carry metadata.
+     *
+     * A router leaves the head as the previous page left it, so a page sending nothing
+     * inherits whatever the last one said and keeps it for the rest of the session. This
+     * used to be deliberate, on the reasoning that an empty head would wipe the
+     * application-wide description — but the runtime returns early on an empty
+     * description rather than clearing it, so the only thing the omission achieved was
+     * the drift it was meant to prevent.
+     */
+    public function test_a_page_that_declares_nothing_still_sends_a_head(): void
     {
-        // The runtime clears what the previous page set. Sending an empty head for every
-        // page would wipe the application-wide description on the first navigation.
-        $this->assertArrayNotHasKey('head', $this->payload('/plain'));
+        config()->set('pwax.manifest.name', 'Acme');
+        config()->set('pwax.manifest.description', 'The Acme application.');
+
+        $payload = $this->payload('/plain');
+
+        $this->assertArrayHasKey('head', $payload);
+
+        // The resolved fallbacks, not the previous page's values.
+        $this->assertSame('Acme', $payload['head']['title']);
+        $this->assertSame('The Acme application.', $payload['head']['description']);
+
+        // No canonical, so the runtime removes whatever the last page set. A canonical URL
+        // that outlives its page is the specific mistake worth being loud about.
+        $this->assertArrayNotHasKey('canonical', $payload['head']);
+    }
+
+    /**
+     * The title a navigation applies and the title a reload renders must be the same
+     * string. They were not: a page with no title of its own sent none, so the tab kept
+     * the previous page's — and so did the live region the runtime announces after every
+     * navigation, which reads `document.title` out to a screen reader.
+     */
+    public function test_an_untitled_page_carries_the_same_title_a_reload_would_render(): void
+    {
+        config()->set('pwax.manifest.name', 'Acme');
+
+        $this->assertSame('Acme', $this->payload('/plain')['title']);
+
+        $this->get('/plain')->assertSee('<title>Acme</title>', false);
+    }
+
+    /**
+     * The template must not be applied to the fallback — ':title · Acme' against a
+     * fallback of 'Acme' renders 'Acme · Acme' — and that has to hold in the payload as
+     * well as in the document, now that the payload always carries a title.
+     */
+    public function test_the_fallback_title_in_the_payload_is_not_run_through_the_template(): void
+    {
+        config()->set('pwax.manifest.name', 'Acme');
+        config()->set('pwax.head.title_template', ':title · Acme');
+
+        $this->assertSame('Acme', $this->payload('/plain')['title']);
+        $this->assertSame('Hello world · Acme', $this->payload('/post')['title']);
     }
 
     public function test_managed_tags_are_marked_so_the_runtime_can_replace_them(): void

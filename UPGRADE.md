@@ -1,5 +1,63 @@
 # Upgrading
 
+## 4.x → 5.0
+
+5.0 removes the compatibility shims 4.x carried. There is nothing new to learn; there is a
+short list of config values to rename, and `pwax:doctor` is the checklist.
+
+```bash
+composer require mxent/pwax:^5.0
+php artisan pwax:doctor
+```
+
+### Retired strategy spellings are no longer accepted
+
+`freshness`, `performance` and `app-shell` were 3.x names kept working as aliases through
+4.x. They are gone. A config that still uses one is not resolving to the behaviour it
+names — it is an unrecognised value, and the key falls back to its default:
+
+```diff
+ 'service_worker' => [
+-    'navigation_strategy' => 'app-shell',
++    'navigation_strategy' => 'cache-first',
+-    'pages' => ['strategy' => 'freshness'],
++    'pages' => ['strategy' => 'network-first'],
+     'data_groups' => [
+-        ['name' => 'posts', 'urls' => ['/api/posts'], 'strategy' => 'performance'],
++        ['name' => 'posts', 'urls' => ['/api/posts'], 'strategy' => 'cache-first'],
+     ],
+ ],
+```
+
+The four names are `network-only`, `network-first`, `cache-first` and
+`stale-while-revalidate`. `pwax:doctor` now **fails** — rather than warning — on any value
+outside them, including a plain typo, because a key that silently does nothing reads
+exactly like a key that works.
+
+### `assets.strategy` is no longer read
+
+It became `assets.source` in 4.1 and the fallback is now removed.
+
+```diff
+ 'assets' => [
+-    'strategy' => 'cdn',
++    'source' => 'cdn',
+ ],
+```
+
+**Check this one even if you never set it deliberately.** An application that published
+its config before 4.1 has `strategy` and no `source` at all, and the effect of upgrading
+without renaming is that the framework quietly moves from your CDN to your own origin —
+which works, and is not what you configured. `pwax:doctor` fails on a leftover key for
+exactly that reason.
+
+### Nothing else changes
+
+No API, helper, directive or response shape moves in 5.0. If `pwax:doctor` is clean after
+the renames above, the upgrade is done.
+
+---
+
 ## 3.x → 4.0
 
 4.0 is a consolidation. Nothing about how you write a component or a route changes; what

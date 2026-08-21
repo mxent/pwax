@@ -123,12 +123,17 @@ class DoctorCommand extends Command
     }
 
     /**
-     * Strategy names from before the vocabularies were merged.
+     * Strategy names the package does not recognise.
      *
-     * These still work and are meant to keep working for this major cycle, so each is a
-     * warning rather than a problem. Naming them is the point: a config that says
-     * `freshness` in one place and `network-first` in another describes the same behaviour
-     * twice and reads like it describes two.
+     * `freshness`, `performance` and `app-shell` were accepted as aliases through 4.x and
+     * were removed in 5.0; so was `assets.strategy`, the key that chose a hostname in a
+     * config where every other "strategy" chooses a caching behaviour. An unrecognised
+     * value now falls back to the default at the point of use, silently — which is right
+     * for serving a page and useless for finding out why the page is served that way.
+     *
+     * A problem rather than a warning: a config key that is not doing what it says is not
+     * a matter of taste, and the whole reason to remove an alias is to stop it being
+     * ambiguous.
      */
     private function checkStrategyNames(Config $config): void
     {
@@ -138,14 +143,21 @@ class DoctorCommand extends Command
             'pwax.service_worker.pages.strategy',
         ];
 
+        $names = 'network-only, network-first, cache-first or stale-while-revalidate';
+
+        // A value that is not a string is still wrong, and still has to be printable. Cast
+        // blindly and a `'strategy' => []` typo makes the doctor emit a PHP warning in the
+        // middle of the message explaining the mistake.
+        $shown = static fn (mixed $value): string => is_string($value) ? $value : get_debug_type($value);
+
         foreach ((array) $config->get('pwax.service_worker.data_groups', []) as $index => $group) {
-            if (is_array($group) && Strategy::isDeprecated($group['strategy'] ?? null)) {
-                $this->warn_(sprintf(
-                    'Data group "%s" uses the old strategy name "%s". It still works; the current '
-                        . 'name is "%s".',
+            if (is_array($group) && Strategy::isUnknown($group['strategy'] ?? null)) {
+                $this->fail_(sprintf(
+                    'Data group "%s" has an unknown strategy "%s". It is being ignored and the '
+                        . 'group falls back to the default. Use one of: %s.',
                     is_string($group['name'] ?? null) ? $group['name'] : (string) $index,
-                    $group['strategy'],
-                    Strategy::ALIASES[strtolower(trim((string) $group['strategy']))],
+                    $shown($group['strategy']),
+                    $names,
                 ));
             }
         }
@@ -153,21 +165,23 @@ class DoctorCommand extends Command
         foreach ($keys as $key) {
             $value = $config->get($key);
 
-            if (Strategy::isDeprecated($value)) {
-                $this->warn_(sprintf(
-                    '%s uses the old strategy name "%s". It still works; the current name is "%s".',
+            if (Strategy::isUnknown($value)) {
+                $this->fail_(sprintf(
+                    '%s has an unknown strategy "%s". It is being ignored and the default applies '
+                        . 'instead. Use one of: %s.',
                     $key,
-                    $value,
-                    Strategy::ALIASES[strtolower(trim((string) $value))],
+                    $shown($value),
+                    $names,
                 ));
             }
         }
 
-        if ($config->get('pwax.assets.source') === null && $config->get('pwax.assets.strategy') !== null) {
-            $this->warn_(
-                'pwax.assets.strategy is now pwax.assets.source. It chooses where the framework '
-                . 'is served from, not how anything is cached, and the old name put a fifth '
-                . '"strategy" key in a config where the others choose a caching behaviour.'
+        if ($config->get('pwax.assets.strategy') !== null) {
+            $this->fail_(
+                'pwax.assets.strategy was removed in 5.0 and is no longer read — rename it to '
+                . 'pwax.assets.source. It chooses where the framework is served from, not how '
+                . 'anything is cached, and until it is renamed the framework is being served '
+                . 'from wherever pwax.assets.source says, which defaults to local.'
             );
         }
     }

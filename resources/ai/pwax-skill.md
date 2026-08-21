@@ -1,6 +1,6 @@
 ---
 name: pwax
-description: Working with `mxent/pwax` — the Laravel package that ships Vue components written as Blade views as a progressive web app. Use this skill whenever the project uses `pwaxRender`, `@pwaxImport`, `@{{ }}`, `pwax:doctor`, or `pwax:component`. TRIGGER when the user asks to add a page, change a manifest setting, configure the service worker, scaffold a component/plugin/directive/middleware, debug a doctor warning, change SEO meta tags, set up Web Push, integrate Vite or Tailwind with Pwax, customise the shell or the offline document, or understand why a runtime setting lives where it does.
+description: Working with `mxent/pwax` — the Laravel package that ships Vue components written as Blade views as a progressive web app. Use this skill whenever the project uses `pwaxRender`, `@pwaxImport`, `@{{ }}`, `pwax:doctor`, or `pwax:component`. TRIGGER when the user asks to add a page, change a manifest setting, configure the service worker, scaffold a component/plugin/directive/middleware, debug a doctor warning, change SEO meta tags, set up Web Push, queue a form submission or any other write for when the connection returns, integrate Vite or Tailwind with Pwax, customise the shell or the offline document, or understand why a runtime setting lives where it does.
 ---
 
 # Pwax — what every change in this project needs to know
@@ -90,8 +90,9 @@ Notes:
 - **`<slot />` works normally.** Pwax does not intercept it.
 - **The default export is the Vue component.** A plugin exports a
   `default` object with an `install` method; a directive exports
-  `bind`/`update`; a client middleware exports an async function — see
-  the comment block the scaffolder emits (§14).
+  `bind`/`update`; a client middleware exports an async function. Run
+  `pwax:component --plugin`, `--directive` or `--middleware` and read
+  the comment block it emits; that is the canonical shape for each.
 - **`<style scoped>` becomes a Vue scoped style.** Omit `scoped` for
   global styles; pass `--plain` to `pwax:component` to skip the block.
 
@@ -288,6 +289,14 @@ The `title_template` is only applied when a page supplied its own
 title — `':title · Acme'` against a fallback of `'Acme'` would render
 `'Acme · Acme'`, which is not what the template is for.
 
+4. The payload carries `title` and `head` on **every** page, including
+   one that declared neither, so the runtime overwrites what the
+   previous page set instead of inheriting it. This is why you do not
+   need to set a title on every route to stop the wrong one sticking:
+   a page with none resolves to the fallback and the runtime applies
+   that. A page that wants no canonical URL simply omits it and the
+   previous page's is removed.
+
 ### JSON-LD and other <head> extensions
 
 Use `@stack('pwax-head')` to inject extra head content from a partial:
@@ -419,9 +428,12 @@ every data group:
 | `cache-first` | serve what is stored, fetch only when there is nothing |
 | `stale-while-revalidate` | serve what is stored and refresh it in the background |
 
-The aliases `freshness` (= `network-first`), `performance` (=
-`cache-first`), and `app-shell` (= `cache-first`) still work; the
-doctor names them.
+Those four are the only spellings. The pre-4.1 aliases `freshness`,
+`performance` and `app-shell` were removed in 5.0 — a config still
+using one is not resolving to anything, it is silently falling back to
+the default, and `pwax:doctor` **fails** on it rather than warning. So
+does a leftover `assets.strategy`, which is now `assets.source`. Fix
+the config; do not add the alias back.
 
 ### Navigation URLs
 
@@ -508,9 +520,85 @@ silent nothing-happens.
 reject permission requests that are not. A page that asks on load is
 the reason they do.
 
+**`pwax.push.endpoint` must be on your own origin.** The runtime posts
+the subscription there with the session's CSRF token attached, so a
+cross-origin URL is refused outright and logged rather than sent — a
+subscription is not secret, but the token is. Use a path (`/push`),
+not an absolute URL to somewhere else.
+
+If the endpoint answers non-2xx, or cannot be reached, the runtime
+logs an error naming the status. Do not ignore it: the browser is
+subscribed and the server does not know the subscription exists, so
+every push the application believes it sent goes nowhere, and the
+symptom is indistinguishable from a bad VAPID key.
+
 ---
 
-## 15. Security & CSP
+## 15. Offline writes — `window.pwax.sync`
+
+Reading offline is half an app. The other half is letting someone
+submit a form with no connection and have it send later.
+
+Nothing is queued for you. That is deliberate: intercepting every
+failed write would replay a payment as readily as a draft, and only
+the application knows which of its requests are safe to repeat. So
+the application decides, per request:
+
+```js
+try {
+    await fetch('/notes', { method: 'POST', body });
+} catch {
+    // No network. Store it; the worker sends it when one returns.
+    const queued = await window.pwax.sync.enqueue('/notes', {
+        method: 'POST',
+        body: { text: 'draft' },   // object or string
+    });
+
+    if (!queued) {
+        // Nothing to store it in. Fail loudly rather than pretend.
+    }
+}
+```
+
+- `enqueue(url, {method, headers, body})` → `Promise<boolean>`.
+  Resolves false when there is no Cache Storage to write to.
+- `pending()` → `Promise<number>`, readable before a worker controls
+  the page. This is what a "3 changes will send when you are back
+  online" indicator reads.
+- `flush()` asks the worker to try the queue now.
+- `supported` is false where Service Workers or Cache Storage are not.
+- A successful `enqueue` fires `pwax:queued` on `document`.
+
+**Only queue requests that are safe to repeat.** A replay can happen
+after the original eventually succeeded — the device came back online
+between the two — so the endpoint should be idempotent, or the payload
+should carry a key the server can deduplicate on.
+
+What the worker does with a queued entry when it replays it:
+
+| Outcome | Queue entry |
+| --- | --- |
+| 2xx | deleted — it sent |
+| 4xx, except those below | deleted — the server gave a real answer |
+| 419, 408, 425, 429 | **kept** and retried |
+| 5xx | kept and retried |
+| network failure | kept, retried on the next sync |
+
+419 is the one to understand. An entry carries the CSRF token that was
+current when it was queued, so anything that sat offline longer than
+`session.lifetime` comes back 419 on its first replay, every time. It
+is kept, and the next replay — from a page that has since refreshed the
+session — is the one that succeeds. If your endpoint is stateless and
+you would rather skip this entirely, exempt it in
+`VerifyCsrfToken::$except` and queue it without the token.
+
+A consequence worth knowing: **a queued entry holds that CSRF token in
+Cache Storage until it sends.** Do not put anything else secret in a
+queued body that you would not want at rest on the device.
+
+---
+
+## 16. Security & CSP
 
 `pwax.security.*` sets the response headers Pwax emits on its own
 endpoints:
@@ -538,7 +626,7 @@ runtime needs `script-src 'unsafe-eval'`. Switching to `runtime` (via
 
 ---
 
-## 16. The precompiled-templates workflow
+## 17. The precompiled-templates workflow
 
 `pwax:compile` reads every configured component and stores the
 `{template, script, style}` triple by content hash. **Production must
@@ -572,7 +660,7 @@ and out of `<template>`, which is the idiomatic split anyway.
 
 ---
 
-## 17. Bundling your own JS / CSS alongside Pwax
+## 18. Bundling your own JS / CSS alongside Pwax
 
 Pwax owns the runtime, but you can still ship your own JS / CSS:
 
@@ -596,7 +684,7 @@ its own application JS / CSS, Pwax for the runtime and pages, and
 
 ---
 
-## 18. Debugging a `pwax:doctor` warning
+## 19. Debugging a `pwax:doctor` warning
 
 The doctor names the problem and the fix. Read the warning in full:
 
@@ -628,7 +716,7 @@ checks whether precached entries are reachable.
 
 ---
 
-## 19. Pitfalls worth their own section
+## 20. Pitfalls worth their own section
 
 ### The `@{{ }}` escape
 
@@ -677,7 +765,7 @@ view of the same name. There is no upstream merge; `pwax:install
 
 ---
 
-## 20. When you are stuck
+## 21. When you are stuck
 
 1. `php artisan pwax:doctor` — most warnings name the fix.
 2. `php artisan pwax:routes` — every endpoint Pwax owns.

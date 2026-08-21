@@ -207,6 +207,13 @@ declare namespace Pwax {
         'pwax:ready': CustomEvent<{ app: unknown; router: unknown }>;
         'pwax:navigating': CustomEvent<{ to: unknown; from: unknown }>;
         'pwax:navigated': CustomEvent<{ component: unknown; path: string }>;
+        /**
+         * A page failed to load. `status` is the HTTP status, or `null` when the request
+         * never got an answer — a dropped connection, or a component that would not
+         * compile. The runtime has already rendered its error screen by this point; the
+         * event is for reporting, not for handling the failure.
+         */
+        'pwax:error': CustomEvent<{ error: unknown; status: number | null }>;
         'pwax:update-available': CustomEvent<{ activate: () => void }>;
         'pwax:online': CustomEvent<void>;
         'pwax:offline': CustomEvent<void>;

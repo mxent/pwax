@@ -92,6 +92,23 @@ export function registerPush(config) {
 }
 
 /**
+ * 4xx statuses that mean "not now", not "no".
+ *
+ * The one that matters is 419. Laravel returns it for an expired session or CSRF token,
+ * and an entry in this queue carries the token that was current when it was queued — so
+ * a write that sat offline longer than `session.lifetime` is *guaranteed* to come back
+ * 419 on its first replay. Treating that as a real answer deleted exactly the writes this
+ * feature exists to protect: the ones queued for a long time, silently, with no way for
+ * the application to find out. The next replay happens from a page that has since
+ * refreshed the session, which is the one that succeeds.
+ *
+ * 408 and 425 are the server asking for the request again in as many words. 429 is a rate
+ * limit, which is temporary by definition — and dropping a queued write because the
+ * device came back online into a burst of them would be the worst possible reading of it.
+ */
+const RETRYABLE = new Set([408, 419, 425, 429]);
+
+/**
  * Requests queued while offline, replayed when the connection returns.
  *
  * The queue is a cache rather than IndexedDB, deliberately: the worker already depends on
@@ -101,6 +118,7 @@ export function registerPush(config) {
  *
  * A replayed request that fails with a real answer — a 4xx — is dropped rather than
  * retried forever. The server said no; saying it again tomorrow will not change that.
+ * `RETRYABLE` above is the list of 4xx statuses for which that reasoning does not hold.
  */
 export function registerSync(config, cacheName) {
     const TAG = 'pwax-sync';
@@ -148,7 +166,22 @@ export function registerSync(config, cacheName) {
                 continue;
             }
 
-            const { url, method, headers, body } = await stored.json();
+            let queued;
+
+            try {
+                queued = await stored.json();
+            } catch {
+                // Not a queue entry this version of the worker can read — a truncated
+                // write, or one left by a build whose format has since changed. Dropped
+                // rather than skipped: left in place it would be re-read, and re-fail, on
+                // every sync forever, and `replay()` walks the queue in order, so one
+                // unreadable entry would outlive every application it blocked.
+                await cache.delete(key);
+
+                continue;
+            }
+
+            const { url, method, headers, body } = queued;
 
             try {
                 const response = await fetch(url, {
@@ -158,8 +191,14 @@ export function registerSync(config, cacheName) {
                     credentials: 'same-origin',
                 });
 
-                // Kept only while the origin cannot answer. A 4xx is an answer.
-                if (response.ok || (response.status >= 400 && response.status < 500)) {
+                // Kept only while the origin cannot answer. A 4xx is an answer — except
+                // for the handful that explicitly are not; see `RETRYABLE` above.
+                const answered =
+                    response.status >= 400 &&
+                    response.status < 500 &&
+                    !RETRYABLE.has(response.status);
+
+                if (response.ok || answered) {
                     await cache.delete(key);
                 }
             } catch {

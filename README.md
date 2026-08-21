@@ -1619,7 +1619,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `components.allowed` | `[]` | Allowlist of servable view patterns |
 | `components.scoped_styles` | `true` | Honour `<style scoped>` |
 | `blade.*` | `null` | Override bundled partials |
-| `assets.source` | `'local'` | `local` or `cdn` (was `assets.strategy`) |
+| `assets.source` | `'local'` | `local` or `cdn` (replaced `assets.strategy`, removed in 5.0) |
 | `assets.local_path` | `'/vendor/pwax'` | Where published assets live |
 | `assets.versions` | see config | Pinned Vue / Router / Pinia versions |
 | `assets.pinia` | `true` | Load Pinia at all |
@@ -1636,7 +1636,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `progress.enabled` | `true` | Navigation progress bar |
 | `progress.color`, `.height` | `null`, `3` | Colour falls back to the spinner's; height in px |
 | `progress.delay`, `.trickle` | `250`, `true` | Silence before it appears, and whether it eases while waiting |
-| `transition.name`, `.duration` | `pwax-page`, `150` | Page transition name (kept for back-compat) and cross-fade length in ms |
+| `transition.duration` | `150` | Cross-fade length in ms; `0` swaps instantly |
 | `manifest_path`, `manifest` | see config | Web App Manifest (all spec members) |
 | `head.title`, `.title_template` | `null` | Document title and its wrapper |
 | `head.description`, `.icon` | `null` | Fall back to the manifest's |

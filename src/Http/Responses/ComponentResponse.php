@@ -277,17 +277,26 @@ class ComponentResponse implements Responsable
         $payload = $this->pwax->payload($component, addressable: false);
         $head = $this->head();
 
-        if ($this->title !== null) {
-            $payload['title'] = $head->title;
-        }
-
-        // Sent whenever this page declared anything of its own. A client-side navigation
-        // replaces the document's contents without replacing its head, so whatever the
-        // previous page said about itself stays in the DOM until something says otherwise
-        // — the description, the canonical URL and every Open Graph tag included.
-        if ($this->description !== null || $this->canonical !== null || $this->meta !== []) {
-            $payload['head'] = $head->toArray();
-        }
+        // Both sent on every page, including one that declares nothing of its own.
+        //
+        // A client-side navigation replaces the document's contents and leaves its head
+        // exactly as the previous page left it, so anything not overwritten here survives
+        // the navigation. Sending these only for a page that declared something meant the
+        // *undeclared* page — the common one — inherited the last page's title, canonical
+        // URL and Open Graph tags and kept them for the rest of the session. A reload of
+        // that same page showed the resolved fallback, so the SPA and the document
+        // disagreed about what the page was: exactly the drift `Head` exists to prevent.
+        //
+        // The title is the visible half. `document.title` is a browser tab, a bookmark, a
+        // history entry — and the string the runtime reads into its live region after every
+        // navigation, so a screen-reader user was being told the name of the page they had
+        // just left.
+        //
+        // An empty head is safe to send: the runtime keeps the application-wide description
+        // when a page names none, and clearing the canonical and the managed tags is the
+        // correct answer for a page that has neither.
+        $payload['title'] = $head->title;
+        $payload['head'] = $head->toArray();
 
         $response = new JsonResponse($payload, $this->status, $this->headers);
 

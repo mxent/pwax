@@ -28,27 +28,36 @@ src/
   Compiler/        Blade output → Component: block extraction, style scoping, stamping
   Console/         Artisan commands
   Contracts/       Minifier interface
-  Data/            Component value object
+  Data/            Component and Head value objects
+  Events/          ComponentCompiled, ManifestBuilt
   Exceptions/
   Facades/
   Http/            Controller, middleware, ComponentResponse
   Minification/    matthiasmullie, null and caching decorators
+  Pwa/             Manifests, registries, service worker, glob matching
   Support/         ComponentId (signing), Shell (asset and config assembly)
   js/              Client runtime source → dist/pwax.js
+  js/sw/           Service worker source → dist/pwax-sw.js
   Pwax.php         Public API
   helpers.php      pwax(), pwax_component(), pwax_route()
+bin/               compile-templates.mjs, driven by `pwax:compile`
 config/            Published configuration
+types/             Hand-written pwax.d.ts for the runtime's public surface
 resources/
-  views/           Shell, partials, service worker
+  ai/              pwax-skill.md — published by `pwax:skill`
+  views/           Shell, partials, offline document, push example
   vendor/          Vendored Vue, Vue Router, Pinia (see its README)
 routes/
-dist/              Built client runtime — COMMITTED, see below
+dist/              Built client runtime and worker — COMMITTED, see below
 tests/
   Unit/            No framework boot
   Feature/         Orchestra Testbench
   fixtures/views/  Component fixtures
   js/              Vitest
 ```
+
+Maintainers: see [MAINTAINING.md](MAINTAINING.md) for releasing, updating the vendored
+frontend builds, widening the Laravel support window and handling security reports.
 
 ## The `dist/` directory is committed
 
@@ -66,7 +75,8 @@ bundle does not match the source.
 ## Standards
 
 - **PHP:** PSR-12 via Laravel Pint. Run `composer lint:fix`.
-- **Static analysis:** PHPStan at level 6, must pass clean.
+- **Static analysis:** PHPStan (with Larastan) at level 8, must pass clean. Run
+  `composer analyse`.
 - **JavaScript:** ESLint and Prettier. Run `npm run lint:fix && npm run format`.
 - **Tests:** `snake_case` method names in PHP, `it('does something')` in Vitest.
 

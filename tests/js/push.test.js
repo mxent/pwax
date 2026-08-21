@@ -169,3 +169,62 @@ describe('unsubscribing', () => {
         expect(global.fetch).not.toHaveBeenCalled();
     });
 });
+
+describe('reporting a subscription to the application', () => {
+    beforeEach(() => {
+        global.fetch = vi.fn(async () => new Response('{}'));
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        delete navigator.serviceWorker;
+        delete window.PushManager;
+        delete window.Notification;
+        delete global.Notification;
+    });
+
+    it('refuses an endpoint on another origin', async () => {
+        install();
+
+        const subscription = await createPushApi(
+            { publicKey: KEY, endpoint: 'https://elsewhere.test/push' },
+            http
+        ).subscribe();
+
+        // `http.headers()` carries this session's CSRF token. A typo or a copied example
+        // in `pwax.push.endpoint` must not be able to post it to another origin.
+        expect(subscription).not.toBeNull();
+        expect(global.fetch).not.toHaveBeenCalled();
+        expect(console.error).toHaveBeenCalledWith(
+            expect.stringContaining('must be on this origin')
+        );
+    });
+
+    it('says so when the endpoint rejects the subscription', async () => {
+        install();
+        global.fetch = vi.fn(async () => new Response('nope', { status: 500 }));
+
+        await createPushApi({ publicKey: KEY, endpoint: '/push' }, http).subscribe();
+
+        // The browser is subscribed and the server does not know it exists, so every push
+        // the application believes it sent goes nowhere. Silence here is an afternoon of
+        // debugging VAPID keys for a problem that is not in them.
+        expect(console.error).toHaveBeenCalledWith(expect.stringContaining('answered 500'));
+    });
+
+    it('says so when the endpoint cannot be reached at all', async () => {
+        install();
+        global.fetch = vi.fn(async () => {
+            throw new TypeError('Failed to fetch');
+        });
+
+        await expect(
+            createPushApi({ publicKey: KEY, endpoint: '/push' }, http).subscribe()
+        ).resolves.not.toBeNull();
+
+        expect(console.error).toHaveBeenCalledWith(
+            expect.stringContaining('could not reach /push'),
+            expect.any(TypeError)
+        );
+    });
+});

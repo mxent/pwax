@@ -9,6 +9,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`MAINTAINING.md`.** The maintainer's counterpart to `CONTRIBUTING.md`: the release
+  procedure and why `dist/` has to be rebuilt *before* the tag, how to update the vendored
+  Vue/Vue Router/Pinia builds so their versions and SRI hashes stay in step, how to widen
+  the Laravel support window without the CI matrix silently testing the wrong Testbench,
+  when the skill file has gone stale, how to audit the published config surface for dead
+  keys, and which parts of the package a security report is most likely to concern.
+- **`tests/Unit/VendoredAssetsTest.php`.** Asserts that the `sha384` hashes in
+  `assets.cdn.integrity` match the builds in `resources/vendor/`, that every vendored file
+  is pinned in `assets.versions`, and that `resources/vendor/README.md` documents the same
+  versions. Nothing checked this at runtime — the two halves are never used together, since
+  `assets.source => 'local'` serves the files and ignores the hashes — so a stale hash
+  surfaced as a browser refusing to run Vue in an application running in CDN mode, a
+  release after the mistake.
+- **`pwax:error` in `types/pwax.d.ts`.** It is dispatched by the runtime and listed in the
+  README's event table, but was missing from the typed `EventMap` — so the one event that
+  carries the failure payload was the one a TypeScript listener got no types for.
+- **The skill documents `window.pwax.sync`.** The offline write queue was a headline
+  capability with no entry in `resources/ai/pwax-skill.md` at all, so an assistant asked to
+  make a form work offline had nothing to go on. The new section covers the API, the
+  requirement that queued requests be safe to repeat, the replay outcome table, and the 419
+  behaviour above.
+
 - **`window.pwax.start()` — reboot the runtime.** Unmounts the current Vue app and
   re-initialises; returns a Promise. Rarely needed, but it is the supported way to recover
   from a hot-reload in development or to apply a configuration change without a full page
@@ -275,7 +297,84 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   safe — the opt-in itself, anonymous install-time fetches, and identity-partitioned caches
   — are described in the published config.
 
+### Removed
+
+- **The retired strategy spellings `freshness`, `performance` and `app-shell`.** They were
+  3.x names kept working as aliases through 4.x so that merging four vocabularies into one
+  was a readability change rather than a breaking one. That cycle is over. A config that
+  still uses one is now an unrecognised value that falls back to the key's default, and
+  `pwax:doctor` **fails** on it — as it does on any value outside `network-only`,
+  `network-first`, `cache-first` and `stale-while-revalidate`, a plain typo included.
+  `Strategy::ALIASES` and `Strategy::isDeprecated()` are gone; `Strategy::isUnknown()`
+  replaces the latter.
+- **The `pwax.assets.strategy` fallback.** `assets.source` replaced it in 4.1 and is now
+  the only key read. Worth checking even if you never set it deliberately: an application
+  that published its config before 4.1 has `strategy` and no `source` at all, so upgrading
+  without renaming moves the framework from a CDN to the local origin — which works, and is
+  not what was configured. `pwax:doctor` fails on a leftover key for that reason.
+
+  See [UPGRADE.md](UPGRADE.md) for the copy-pasteable diffs.
+
 ### Fixed
+
+- **Stale documentation for two removed keys.** The README documented
+  `transition.name` as "kept for back-compat" — it was removed along with its plumbing when
+  page transitions moved to the View Transitions API, and nothing reads it, so anyone
+  setting it got silence. The `transition` block's own doc comment in `config/pwax.php` had
+  also drifted away from the array it describes and sat above `prefetch` instead.
+
+- **A page that declared no metadata inherited the previous page's.** `title` and `head`
+  were sent in the payload only when the route had declared something of its own, so
+  navigating to an ordinary page left the tab showing the title of the page before it,
+  along with that page's canonical URL and Open Graph tags — for the rest of the session. A
+  reload of the same page showed the resolved fallback instead, so the SPA and the document
+  disagreed about what the page was, which is the exact drift `Head` exists to prevent.
+
+  The title is the visible half: `document.title` is a browser tab, a bookmark and a
+  history entry, and it is also the string the runtime reads into its live region after
+  every navigation — so a screen-reader user was being told the name of the page they had
+  just left. Both fields are now sent on every page.
+
+  The omission was deliberate, on the reasoning that an empty head would wipe the
+  application-wide description. It does not: `applyHead()` returns early on an empty
+  description rather than clearing it, so the only thing the omission achieved was the
+  drift. Two runtime tests now pin that down, and a page that declares no canonical URL
+  correctly has the previous one removed.
+
+- **Offline writes were silently deleted when the session expired.** An entry in
+  `window.pwax.sync`'s queue carries the CSRF token that was current when it was queued,
+  so anything that sat offline longer than `session.lifetime` came back `419` on its first
+  replay — every time, by construction. The worker read any 4xx as a real answer from the
+  server and dropped the entry, which meant the queue reliably destroyed exactly the writes
+  it exists to protect: the ones queued for a long time. Silently, with no way for the
+  application to find out.
+
+  `419`, `408`, `425` and `429` are now kept and retried; every other 4xx is still treated
+  as an answer and dropped. The retry succeeds on the next replay from a page that has
+  since refreshed the session.
+
+- **One unreadable queue entry blocked every write behind it, forever.** `replay()` walks
+  the queue in order and parsed each entry without a guard, so a truncated write — or one
+  left by an older build — threw out of the replay on every sync and nothing after it ever
+  sent. Unreadable entries are now dropped and the walk continues.
+
+- **A failed push subscription report said nothing.** The runtime posted the subscription
+  to `pwax.push.endpoint` and ignored the result, so an endpoint that 500'd, or that could
+  not be reached, left the browser subscribed and the server unaware it existed. Every push
+  the application believed it sent went nowhere, and the symptom — notifications that never
+  arrive — is indistinguishable from a bad VAPID key. Both cases now log an error naming
+  the status and what it means.
+
+- **`window.pwax.start()` was missing from the one situation it exists for.** It was
+  assigned at the end of `boot()`, so a boot that *threw* — Vue loaded after `pwax.js`, a
+  plugin module that 404'd, no mount element — never reached the assignment, and the
+  documented way to retry was absent precisely when the application had failed to start.
+  It is now armed on the failure path too.
+
+- **`pwax.push.endpoint` is now required to be same-origin.** The subscription is posted
+  with `http.headers()`, which carries the session's CSRF token, so a cross-origin value —
+  a typo, a copied example — would have handed that token to another origin. A cross-origin
+  endpoint is refused and logged rather than sent.
 
 - **A page's HTML was only ever cached by visiting it.** A page answers two ways — a JSON
   payload to the client runtime, an HTML document to a browser navigation — and the install

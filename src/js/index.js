@@ -231,9 +231,31 @@ async function boot() {
     // rather than briefly showing the shell and then swapping.
     await router.isReady();
 
+    // Kept so the mount can be checked against it. Vue's recovery from a mismatch on the
+    // container's first node is to build the application afresh *before* that node and
+    // leave it where it is, which puts the whole page on screen twice.
+    const served = initialComponent ? mount.firstElementChild : null;
+
     // The second argument is Vue's `isHydrate` flag: walk the existing nodes and attach
     // reactivity to them, rather than emptying the element and rendering into it.
     app.mount(mount, !!initialComponent);
+
+    if (served && mount.firstElementChild !== served && served.parentNode === mount) {
+        // Hydration did not adopt the markup the server sent: Vue built its own copy and
+        // this is the original, still in the document and no longer referenced by anything.
+        // Removing it is the difference between a page that looks broken and one that is
+        // merely not hydrated, but the cause is worth fixing and is not visible from the
+        // result — so it is named here rather than left to be discovered.
+        served.remove();
+
+        console.error(
+            'pwax: the prerendered markup could not be hydrated, so the page was rendered ' +
+                "again on the client and the server's copy was discarded. The usual cause is " +
+                'something other than the prerendered markup inside the mount element — a ' +
+                'published shell view that indents it, or adds a comment or a @yield around ' +
+                'it. `<div id="pwax">` must contain the prerendered markup and nothing else.'
+        );
+    }
 
     mount.classList.remove('pwax-preloader');
 

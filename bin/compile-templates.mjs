@@ -106,6 +106,11 @@ for (const [hash, template] of Object.entries(input.templates || {})) {
             // The runtime build exposes its helpers on the global `Vue`, which is exactly
             // how they are reachable from a component module served by Pwax.
             runtimeGlobalName: 'Vue',
+            // Pinned rather than left to default, which follows whether the compiler is a
+            // development build. A render function that keeps a template's HTML comments
+            // does not match one that drops them, and both this and `bin/ssr.mjs` have to
+            // agree with the production runtime the browser is served.
+            comments: false,
         });
 
         functions[hash] = code;

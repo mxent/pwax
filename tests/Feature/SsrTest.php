@@ -8,6 +8,7 @@ use Mxent\Pwax\Pwax;
 use Mxent\Pwax\Support\RenderFunctionStore;
 use Mxent\Pwax\Support\Shell;
 use Mxent\Pwax\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\Process\Process;
 
 /**
@@ -124,6 +125,13 @@ class SsrTest extends TestCase
             $router->get('/ssr-varying', fn () => pwaxRender('pages.ssr-varying'))
                 ->name('ssr.varying');
 
+            // Page shapes an application actually writes, each of which the prerenderer
+            // and the browser have to agree on.
+            foreach (['multiroot', 'comment', 'scoped', 'conditional'] as $shape) {
+                $router->get("/ssr-shape-{$shape}", fn () => pwaxRender("pages.shapes.{$shape}"))
+                    ->name("ssr.shape.{$shape}");
+            }
+
             // A page that opts out of SSR explicitly.
             $router->get('/ssr-spa-only', fn () => pwaxRender('pages.home')->spaOnly())
                 ->name('ssr.spa-only');
@@ -143,9 +151,21 @@ class SsrTest extends TestCase
      */
     private function requireNode(): void
     {
-        if (! self::$nodeAvailable) {
-            $this->markTestSkipped('The Node SSR bridge is not available here: ' . self::$nodeUnavailableReason);
+        if (self::$nodeAvailable) {
+            return;
         }
+
+        $reason = 'The Node SSR bridge is not available here: ' . self::$nodeUnavailableReason;
+
+        // A skipped SSR test proves nothing, and a suite that skips every one of them
+        // reports the same green tick as one that runs them. CI sets this so the day the
+        // bridge's dependencies stop being installed is the day the build goes red, rather
+        // than the day someone notices the feature has been unverified for a while.
+        if (getenv('PWAX_REQUIRE_SSR')) {
+            $this->fail('PWAX_REQUIRE_SSR is set, so this may not be skipped. ' . $reason);
+        }
+
+        $this->markTestSkipped($reason);
     }
 
     public function test_a_data_free_page_is_prerendered(): void
@@ -415,6 +435,77 @@ class SsrTest extends TestCase
 
         $this->assertStringContainsString('>second<', $html);
         $this->assertStringNotContainsString('>first<', $html);
+    }
+
+    /**
+     * @return list<array{0: string, 1: string}>
+     */
+    public static function pageShapes(): array
+    {
+        return [
+            'multiple root nodes' => ['multiroot', '<h1>Title</h1><p>Body</p>'],
+            'an html comment' => ['comment', '<p>After the comment</p>'],
+            'a scoped style' => ['scoped', '<p class="inner" data-pwax-'],
+            'v-if and v-for' => ['conditional', '<li>1</li><li>2</li><li>3</li>'],
+        ];
+    }
+
+    #[DataProvider('pageShapes')]
+    public function test_a_page_shape_is_prerendered_into_a_single_root(string $shape, string $expected): void
+    {
+        $this->requireNode();
+
+        $response = $this->get("/ssr-shape-{$shape}");
+
+        $response->assertOk();
+        $response->assertHeader('X-Pwax-SSR', '1');
+
+        $html = (string) $response->getContent();
+
+        $this->assertStringContainsString($expected, $html);
+
+        // One root inside the mount element. Two is what a hydration bail-out leaves behind,
+        // and the server must never be the one to produce it.
+        preg_match_all('#<main\b#', $html, $mains);
+        $this->assertCount(1, $mains[0]);
+    }
+
+    public function test_a_comment_in_a_template_is_dropped_as_the_browser_drops_it(): void
+    {
+        $this->requireNode();
+
+        $html = (string) $this->get('/ssr-shape-comment')->getContent();
+
+        preg_match('#<div id="pwax"[^>]*>(.*?)</div>\s*<noscript#s', $html, $m);
+
+        $this->assertNotEmpty($m, 'the mount element was found');
+
+        // The browser compiles templates with the production runtime, which strips comments.
+        // A server that keeps them disagrees with it on every component containing one. The
+        // comment is still in the payload below, which is the template's source and correct.
+        $this->assertStringContainsString('After the comment', $m[1]);
+        $this->assertStringNotContainsString('an html comment', $m[1]);
+    }
+
+    public function test_a_changed_content_template_is_not_served_from_the_prerender_cache(): void
+    {
+        $this->requireNode();
+
+        $this->assertStringNotContainsString(
+            'site-header',
+            (string) $this->get('/ssr-home')->getContent()
+        );
+
+        // The bridge wraps the page in the content template, so what it renders depends on
+        // it — and an application changing `pwax.blade.content` is the ordinary reason to
+        // publish that view at all: a header and footer around `<router-view>`. Keyed
+        // without it, the prerender kept being built from the previous layout.
+        config()->set('pwax.blade.content', 'content-custom');
+
+        $html = (string) $this->get('/ssr-home')->getContent();
+
+        $this->assertStringContainsString('site-header', $html);
+        $this->assertStringContainsString('<h1>Home</h1>', $html);
     }
 
     public function test_an_imported_component_s_stylesheet_reaches_the_document(): void

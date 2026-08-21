@@ -253,6 +253,81 @@ class Pwax
     }
 
     /**
+     * The component module URLs a compiled script imports.
+     *
+     * Read back out of the emitted JavaScript rather than tracked while compiling: the
+     * import is resolved at render time, by a Blade directive that can appear anywhere in
+     * the view, so the script is the only place the full list actually exists.
+     *
+     * The call this matches is the one {@see import()} writes, with a JSON-encoded URL —
+     * so the quoting is known and there is no need to guess at the route prefix. A hand-
+     * written call in someone's own `<script>` matches too, which is correct: it is still
+     * a module the page is about to import.
+     *
+     * Same-origin paths only. Two callers rely on this and want the same answer: the head
+     * emits a `modulepreload` for each, and the SSR bridge is handed each one's source
+     * because Node cannot fetch them.
+     *
+     * @return list<string>
+     */
+    public function importedUrls(string $script): array
+    {
+        if (! str_contains($script, 'window.pwax.component')) {
+            return [];
+        }
+
+        $found = preg_match_all(
+            '#window\.pwax\.component\(\s*"((?:[^"\\\\]|\\\\.)*)"#',
+            $script,
+            $matches
+        );
+
+        if ($found === false || $found === 0) {
+            return [];
+        }
+
+        $urls = [];
+
+        foreach ($matches[1] as $encoded) {
+            $url = json_decode('"' . $encoded . '"');
+
+            // A preload for an absolute off-site URL needs a `crossorigin` that cannot be
+            // known here, and one that disagrees with the eventual fetch makes the browser
+            // download the file twice instead of none.
+            if (is_string($url) && str_starts_with($url, '/') && ! str_starts_with($url, '//')) {
+                $urls[] = $url;
+            }
+        }
+
+        return array_values(array_unique($urls));
+    }
+
+    /**
+     * The view a component module URL addresses, or null when it is not one of ours.
+     *
+     * The inverse of {@see url()}: the path carries the signed identifier, and
+     * {@see resolve()} is what turns that back into a view name — signature check and
+     * allowlist included, so a forged URL in a script cannot reach a view the application
+     * has not exposed.
+     */
+    public function viewForUrl(string $url): ?string
+    {
+        $path = (string) parse_url($url, PHP_URL_PATH);
+
+        if (preg_match('#/c/([A-Za-z0-9_-]+)\.js$#', $path, $m) !== 1) {
+            return null;
+        }
+
+        try {
+            return $this->resolve($m[1]);
+        } catch (Throwable) {
+            // An identifier that will not verify, or a view the allowlist refuses. The
+            // browser would get a 404 for the same URL; there is nothing to prerender.
+            return null;
+        }
+    }
+
+    /**
      * Does this request want a JSON component payload rather than the SPA shell?
      */
     public function wantsComponent(Request $request): bool

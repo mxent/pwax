@@ -736,7 +736,12 @@ or `setup()` via `window.pwax.ssrState` (null when not prerendered):
 <script>
     export default {
         data() {
-            return { title: window.pwax?.ssrState?.title ?? 'Home' };
+            // `typeof window`, not `window.pwax?.…` — this runs in Node during the
+            // prerender, and optional chaining does not protect the identifier on the
+            // left of the first dot.
+            const ssr = typeof window === 'undefined' ? null : window.pwax?.ssrState;
+
+            return { title: ssr?.title ?? 'Home' };
         },
     };
 </script>
@@ -784,6 +789,31 @@ The bridge receives the same payload the browser does, so `pwax:compile`
 and SSR compose: both sides render through the shipped `__pwaxRender`.
 A component script may reference the global `Vue`, as it can in the
 browser — the bridge publishes it before evaluating any module.
+
+### What can and cannot be prerendered
+
+Works: `@pwaxImport` (named exports and mutual imports included), `data()`,
+`computed`, `setup()` and `async setup()`, `<style scoped>`, and
+`pwax:compile`'s precompiled render functions.
+
+Also fine: `<Transition>`, `<KeepAlive>`, `<Suspense>`, `v-html` and slots.
+
+Does not: application-wide plugins and directives from `pwax.vue.*` (browser
+modules, not loadable in Node), browser APIs during render (`document`,
+`window`, `localStorage`, `navigator`), `mounted()` — which does not run on the
+server, as in any SSR — and `<Teleport>` when it actually renders something,
+since its content belongs outside the mount element and the target is a selector
+the shell cannot know in advance. A closed modal teleports nothing and is fine.
+
+`typeof window === 'undefined'` answers truthfully: the bridge does not declare
+a `window`. Code needing a browser goes in `mounted()`; a page that cannot avoid
+it goes behind `->spaOnly()`.
+
+Nothing fails quietly. A browser API reached during render, a component or
+directive that will not resolve, and an import that will not load each fail the
+prerender with a message naming the cause and the remedy, and the route serves
+the ordinary SPA shell — because markup that merely *differs* from what the
+browser builds gets indexed wrong and thrown away on hydration.
 
 ### Metadata still flows through the fluent API
 

@@ -437,6 +437,7 @@ class ComponentResponse implements Responsable
         // be worse than none.
         $prerendered = null;
         $state = null;
+        $importStyles = [];
         $ssr = false;
 
         $prerenderer = app(Prerenderer::class);
@@ -450,6 +451,11 @@ class ComponentResponse implements Responsable
             if ($result !== null) {
                 $prerendered = $result['html'];
                 $state = $result['state'];
+                // The stylesheets of the components this page pulls in through
+                // `@pwaxImport`. The runtime attaches them as each module loads, which is
+                // too late for markup that is already on screen and never for a visitor
+                // without JavaScript.
+                $importStyles = $result['styles'];
                 $ssr = true;
 
                 // The per-response hydration signal travels in the initial payload, not
@@ -479,6 +485,7 @@ class ComponentResponse implements Responsable
             'pwaxPrerendered' => $prerendered,
             'pwaxState' => $state,
             'pwaxSsr' => $ssr,
+            'pwaxImportStyles' => $importStyles,
         ])->render();
 
         $response = new Response($html, $this->status, $this->headers);

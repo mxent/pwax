@@ -164,6 +164,214 @@ describe('bin/ssr.mjs renders a component to HTML', () => {
         expect(result.html).toContain('<h2>Welcome</h2>');
     });
 
+    it('resolves a sub-component imported with @pwaxImport', () => {
+        const url = '/__pwax__/c/modal.js';
+
+        const result = render({
+            component: {
+                template: '<div class="home"><Modal /></div>',
+                script: `export default { components: { Modal: window.pwax.component(${JSON.stringify(url)}, "") } };`,
+                style: '',
+                scope: null,
+            },
+            data: {},
+            imports: {
+                [url]: {
+                    template: '<aside class="modal">Body</aside>',
+                    script: 'export default { name: "Modal" };',
+                },
+            },
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toBe(
+            wrapped('<div class="home"><aside class="modal">Body</aside></div>')
+        );
+    });
+
+    it('resolves a named export, as `X from view` imports one', () => {
+        const url = '/__pwax__/c/badge.js';
+
+        const result = render({
+            component: {
+                template: '<div><Pill /></div>',
+                script: `export default { components: { Pill: window.pwax.component(${JSON.stringify(url)}, "Pill") } };`,
+                style: '',
+                scope: null,
+            },
+            data: {},
+            imports: {
+                [url]: {
+                    template: '<span class="badge"></span>',
+                    script:
+                        'export default { name: "Badge" };\n' +
+                        'export const Pill = { name: "Pill", template: "<em>Pill</em>" };',
+                },
+            },
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toBe(wrapped('<div><em>Pill</em></div>'));
+    });
+
+    it('resolves components that import each other', () => {
+        // Two components referencing each other is the arrangement `Pwax::import()` was
+        // designed around, and the reason the emitted call returns an async component
+        // rather than resolving on the spot. Evaluating eagerly here would recurse until
+        // the stack ran out.
+        const a = '/__pwax__/c/a.js';
+        const b = '/__pwax__/c/b.js';
+
+        const result = render({
+            component: {
+                template: '<div><A /></div>',
+                script: `export default { components: { A: window.pwax.component(${JSON.stringify(a)}, "") } };`,
+                style: '',
+                scope: null,
+            },
+            data: {},
+            imports: {
+                [a]: {
+                    template: '<p class="a"><B v-if="depth" :depth="0" /></p>',
+                    script: `export default { props: { depth: { default: 1 } }, components: { B: window.pwax.component(${JSON.stringify(b)}, "") } };`,
+                },
+                [b]: {
+                    template: '<span class="b"><A v-if="depth" :depth="0" /></span>',
+                    script: `export default { props: { depth: { default: 1 } }, components: { A: window.pwax.component(${JSON.stringify(a)}, "") } };`,
+                },
+            },
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('<p class="a"><span class="b">');
+    });
+
+    it('fails rather than emitting markup the browser will not agree with', () => {
+        // An unresolved component renders as a literal element of that name and an
+        // unresolved directive is silently dropped — markup that looks plausible, ships,
+        // gets indexed, and is thrown away the moment the browser hydrates it. Failing
+        // means the SPA shell is served instead, which is merely slower.
+        const unresolved = render({
+            component: {
+                template: '<div><MysteryThing /></div>',
+                script: '',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(unresolved.ok).toBe(false);
+        expect(unresolved.message).toContain('MysteryThing');
+        expect(unresolved.message).toContain('spaOnly()');
+
+        const directive = render({
+            component: {
+                template: '<div v-tooltip="1">x</div>',
+                script: '',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(directive.ok).toBe(false);
+        expect(directive.message).toContain('tooltip');
+    });
+
+    it('leaves a native custom element alone', () => {
+        // A hyphenated tag Vue cannot resolve is rendered as a literal element of that
+        // name — here and in the browser alike, since Pwax does not set `isCustomElement`.
+        // The markup agrees, so there is nothing to refuse, and refusing would have blocked
+        // every application that uses a web component from prerendering at all.
+        const result = render({
+            component: {
+                template: '<div><my-widget>x</my-widget></div>',
+                script: '',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toBe(wrapped('<div><my-widget>x</my-widget></div>'));
+    });
+
+    it('refuses a page whose content is teleported out of the mount element', () => {
+        // `<Teleport>` renders its children somewhere else in the document, and the server
+        // renderer collects them separately rather than putting them in the returned
+        // string. Placing them would mean knowing every target in advance, which is not
+        // possible — `to` is a selector and it can be computed. So the markup would ship
+        // without the modal, dropdown or dialog that was the point of prerendering it.
+        const result = render({
+            component: {
+                template: '<div><Teleport to="body"><p>Modal</p></Teleport></div>',
+                script: '',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.message).toContain('Teleport');
+        expect(result.message).toContain('spaOnly()');
+    });
+
+    it('is unbothered by a teleport that renders nothing', () => {
+        // The common shape: a modal that is closed. Nothing is teleported, so nothing is
+        // missing from the markup, so there is nothing to refuse.
+        const result = render({
+            component: {
+                template:
+                    '<div class="a"><Teleport v-if="open" to="body"><p>Modal</p></Teleport></div>',
+                script: 'export default { data() { return { open: false }; } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('<div class="a">');
+    });
+
+    it('names the browser API a component reached for, and what to do instead', () => {
+        const result = render({
+            component: {
+                template: '<p>{{ t }}</p>',
+                script: 'export default { data() { return { t: document.title }; } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.message).toContain('`document` is not available while prerendering');
+        expect(result.message).toContain('mounted()');
+        expect(result.message).toContain('spaOnly()');
+    });
+
+    it('leaves `typeof window === "undefined"` telling the truth', () => {
+        // The obvious repair for the above — declaring a `window` global — would make this
+        // check take the browser branch and read `window.innerWidth` as `undefined`: no
+        // error, a plausible value, and markup that disagrees with the browser's.
+        const result = render({
+            component: {
+                template: '<p>{{ server }}</p>',
+                script: 'export default { data() { return { server: typeof window === "undefined" }; } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toBe(wrapped('<p>true</p>'));
+    });
+
     it('reports a failure rather than throwing when the template is invalid', () => {
         const result = render({
             component: { template: '<div><if-broken', script: '', style: '', scope: null },

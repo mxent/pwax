@@ -6,7 +6,7 @@
     When it does, this page's own stylesheet has to be in the document before the markup
     is painted — see the block near the bottom.
 --}}
-@props(['shell', 'component' => null, 'head' => null, 'title' => null, 'prerendered' => false])
+@props(['shell', 'component' => null, 'head' => null, 'title' => null, 'prerendered' => false, 'importStyles' => []])
 @php
     /** @var \Mxent\Pwax\Pwa\WebManifest $pwaxManifest */
     $pwaxManifest = app(\Mxent\Pwax\Pwa\WebManifest::class);
@@ -216,6 +216,17 @@
 @if ($prerendered && $component?->style)
     <style data-pwax-style="pwax:page:{{ $component->hash() }}"{!! $nonceAttr !!}>{!! $pwaxCss($component->style) !!}</style>
 @endif
+
+{{--
+    The stylesheets of the components this page pulls in with `@pwaxImport`.
+
+    Same reasoning as the page's own block above, and the same key: the runtime's style
+    manager identifies an imported component's stylesheet by its module URL, so it adopts
+    these rather than appending a second copy of each as the modules load.
+--}}
+@foreach ($importStyles as $pwaxImportUrl => $pwaxImportCss)
+    <style data-pwax-style="{{ $pwaxImportUrl }}"{!! $nonceAttr !!}>{!! $pwaxCss($pwaxImportCss) !!}</style>
+@endforeach
 
 <style{!! $nonceAttr !!}>
     .pwax-preloader {

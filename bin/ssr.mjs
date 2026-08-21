@@ -41,6 +41,25 @@ import { pageTemplate } from '../src/js/pageTemplate.mjs';
 
 const require = createRequire(import.meta.url);
 
+/*
+ * Vue's development build, deliberately, whatever the environment says.
+ *
+ * Vue strips `warn()` from its production build, and two of the things this bridge must not
+ * do quietly are reported only as warnings: an unresolved component renders as a literal
+ * `<MysteryThing></MysteryThing>` element, and an unresolved directive is silently dropped.
+ * Both produce markup that is merely *different* from what the browser will build, which is
+ * worse than failing — a crawler indexes it and the visitor's browser throws it away.
+ *
+ * The rendered HTML is byte-identical between the two builds; only the diagnostics differ.
+ * So a server with NODE_ENV=production still gets production markup, and keeps the checks
+ * that decide whether that markup can be trusted.
+ *
+ * Set here rather than beside the `import('vue')` below: `@vue/server-renderer` pulls the
+ * runtime in as it loads, and the dev/prod branch is resolved the first time either is
+ * required. A few lines later is already too late.
+ */
+process.env.NODE_ENV = 'development';
+
 const write = (payload) => process.stdout.write(JSON.stringify(payload));
 
 const fail = (message, extra = {}) => {
@@ -174,7 +193,7 @@ async function evaluateModule(source) {
         return {};
     }
 
-    const url = 'data:text/javascript;charset=utf-8,' + encodeURIComponent(source);
+    const url = 'data:text/javascript;charset=utf-8,' + encodeURIComponent(withSsrImports(source));
 
     return import(url);
 }
@@ -201,6 +220,182 @@ function compileTemplate(template) {
 }
 
 /**
+ * Browser globals a component might reach for while rendering, in the order a message
+ * should prefer to name them.
+ */
+const BROWSER_GLOBALS = ['window', 'document', 'navigator', 'localStorage', 'sessionStorage'];
+
+/**
+ * Say what went wrong in terms of the thing the developer can change.
+ *
+ * The raw failures here are not self-explanatory. `document is not defined` names a Node
+ * fact rather than a Vue one, and arrives with a stack trace through a `data:` URL that
+ * points at no file anybody wrote. `Failed to resolve component: Chart` does not mention
+ * that prerendering is the reason. Each of these has exactly one cause and two or three
+ * remedies, so the message says them.
+ *
+ * @param {string} message
+ */
+function explain(message) {
+    const missing = /^(\w+) is not defined$/.exec(message);
+
+    if (missing && BROWSER_GLOBALS.includes(missing[1])) {
+        return (
+            `pwax: \`${missing[1]}\` is not available while prerendering. A component that ` +
+            'reads browser APIs as it renders cannot be server-rendered: move the code into ' +
+            '`mounted()`, guard it with `typeof ' +
+            `${missing[1]} !== 'undefined'\`, or mark the route \`->spaOnly()\`.`
+        );
+    }
+
+    const unresolved = /Failed to resolve (component|directive): (\S+)/.exec(message);
+
+    if (unresolved) {
+        return (
+            `pwax: the ${unresolved[1]} \`${unresolved[2]}\` could not be resolved while ` +
+            'prerendering, so the HTML would not have matched what the browser builds. The ' +
+            "bridge registers the page's own components and nothing else — application-wide " +
+            'plugins and directives from `pwax.vue.*` are browser modules and cannot be ' +
+            'loaded in Node. Import it on the page with `@pwaxImport`, or mark the route ' +
+            '`->spaOnly()`.'
+        );
+    }
+
+    return message;
+}
+
+/**
+ * Turn a component payload into Vue component options.
+ *
+ * Mirrors `toComponentOptions` in the client runtime, in the same order, because a
+ * difference here is a difference between the markup the server sends and the virtual DOM
+ * the browser builds from the identical payload.
+ *
+ * The author's own `render` or `template` wins outright. Then the precompiled render
+ * function, when `pwax:compile` produced one — using it rather than recompiling the
+ * template is both faithful and one compile cheaper per prerender. Then the module's own
+ * template, and finally the Blade template from the payload.
+ *
+ * @param {{template?: string, script?: string}} payload
+ * @param {string} exportName selects a named export, as `@pwaxImport('X from view')` does
+ */
+async function toComponentOptions(payload, exportName = '') {
+    const module = await evaluateModule(payload.script || '');
+
+    if (exportName) {
+        const named = module[exportName];
+
+        if (!named) {
+            throw new Error(`pwax: module has no export named "${exportName}"`);
+        }
+
+        return named;
+    }
+
+    // A function default export is the value itself, not options to merge — a functional
+    // component. Spreading one yields `{}`.
+    if (typeof module.default === 'function') {
+        return module.default;
+    }
+
+    const options = { ...(module.default || {}) };
+
+    if (!options.render && !options.template) {
+        if (module.__pwaxRender) {
+            options.render = module.__pwaxRender;
+        } else if (module.__pwaxTemplate) {
+            options.template = module.__pwaxTemplate;
+        } else if (payload.template) {
+            options.render = compileTemplate(payload.template);
+        }
+    }
+
+    return options;
+}
+
+/**
+ * The global the rewritten `@pwaxImport` call reaches for. See `withSsrImports()`.
+ */
+const SSR_IMPORT = '__pwaxSsrImport';
+
+/**
+ * Rewrite `@pwaxImport`'s emitted call so it does not need a `window`.
+ *
+ * `@pwaxImport('components.modal')` compiles to `window.pwax.component("/__pwax__/c/….js")`
+ * — a property access on `window`, evaluated as the module loads. Node has no `window`, so
+ * the import used to throw `ReferenceError: window is not defined` before a single element
+ * was rendered, and every page with a sub-component fell back to the SPA shell.
+ *
+ * The obvious repair — declaring `globalThis.window` — is a trap. `typeof window ===
+ * 'undefined'` is *the* idiom for "am I on the server", and a component that uses it
+ * correctly would start taking the browser branch and reading `window.innerWidth` as
+ * `undefined`: no error, a plausible-looking value, and markup that disagrees with the
+ * browser's. Better to leave `window` genuinely absent, so that check keeps telling the
+ * truth, and rewrite the one expression Pwax itself emits.
+ *
+ * The pattern is machine-generated by `Pwax::import()`, so matching it textually is safe;
+ * a hand-written `window.pwax.component(…)` in someone's own `<script>` matches too, and
+ * means exactly the same thing.
+ *
+ * @param {string} source
+ */
+function withSsrImports(source) {
+    return source.replace(/window\s*\.\s*pwax\s*\.\s*component\s*\(/g, `${SSR_IMPORT}(`);
+}
+
+/**
+ * Publish the import resolver the rewritten call above reaches for.
+ *
+ * The browser resolves a component URL over HTTP. Node cannot: it is a route on the
+ * application currently serving this request, and a prerender that called back into its own
+ * web server would be a request loop with a connection pool between it and a deadlock. So
+ * the PHP side sends each imported component's source in `imports`, keyed by the same URL,
+ * and this resolves against that map.
+ *
+ * `defineAsyncComponent`, exactly as the client does, and for the same reason: two
+ * components that import each other are a supported arrangement, and resolving eagerly here
+ * would recurse until the stack ran out. Deferring to render time breaks the cycle, and
+ * `renderToString` awaits async components as it walks the tree.
+ *
+ * @param {Record<string, {template?: string, script?: string}>} imports
+ */
+function publishImports(imports) {
+    /** @type {Map<string, any>} */
+    const memo = new Map();
+
+    const component = (url, exportName = '') => {
+        const key = `${url}|${exportName}`;
+        const cached = memo.get(key);
+
+        if (cached) {
+            return cached;
+        }
+
+        const async = Vue.defineAsyncComponent(async () => {
+            const payload = imports[url];
+
+            if (!payload) {
+                // The map is built from the same call sites this resolves, so a miss means
+                // the URL did not survive `Pwax::viewForUrl()` — a stale signature, or a
+                // view the component allowlist refuses. Both 404 for the browser too.
+                throw new Error(
+                    `pwax: no source was provided for the imported component ${url}. ` +
+                        'Check that the view is reachable and allowed by pwax.components.allowed.'
+                );
+            }
+
+            return toComponentOptions(payload, exportName);
+        });
+
+        memo.set(key, async);
+
+        return async;
+    };
+
+    globalThis[SSR_IMPORT] = component;
+}
+
+/**
  * Render one component to an HTML string.
  *
  * @returns {Promise<{ok: boolean, html?: string, serializedState?: any, errors?: Record<string,string>}>}
@@ -218,27 +413,10 @@ async function renderOne() {
     const templates = input.templates || {};
     const contentTemplate = templates.content || '<main><router-view></router-view></main>';
 
-    const module = await evaluateModule(script);
-    const options =
-        typeof module.default === 'function' ? module.default() : { ...(module.default || {}) };
+    // Before the page's module is evaluated, because `@pwaxImport` runs as it evaluates.
+    publishImports(input.imports || {});
 
-    // Mirrors `toComponentOptions` in the client runtime, in the same order, because a
-    // difference here is a difference between the markup the server sends and the virtual
-    // DOM the browser builds from the identical payload.
-    //
-    // The author's own `render` or `template` wins outright. Then the precompiled render
-    // function, when `pwax:compile` produced one — using it rather than recompiling the
-    // template is both faithful and one compile cheaper per prerender. Then the module's
-    // own template, and finally the Blade template from the payload.
-    if (!options.render && !options.template) {
-        if (module.__pwaxRender) {
-            options.render = module.__pwaxRender;
-        } else if (module.__pwaxTemplate) {
-            options.template = module.__pwaxTemplate;
-        } else if (template) {
-            options.render = compileTemplate(template);
-        }
-    }
+    const options = await toComponentOptions({ template, script });
 
     // Controller data is *not* passed as props. A Pwax component is a Blade view, so
     // `pwaxRender('pages.home', $data)` has already interpolated the data into the template
@@ -277,6 +455,49 @@ async function renderOne() {
     }
 
     const app = Vue.createSSRApp({ template: contentTemplate });
+
+    /*
+     * A component that throws must fail the prerender, not shrink it.
+     *
+     * Vue's default is to warn and carry on, and an async component that cannot load
+     * renders as an empty comment — so a page whose `@pwaxImport` did not resolve came back
+     * `ok: true` with the sub-component simply missing from the HTML. That is the worst
+     * available outcome: the markup ships, the crawler indexes a page with a hole in it, and
+     * the browser then finds a comment where it expected an element and re-renders the
+     * subtree. Falling back to the SPA shell is strictly better than half a page.
+     */
+    const failures = [];
+
+    app.config.errorHandler = (error) => {
+        failures.push(explain(error && error.message ? error.message : String(error)));
+    };
+
+    /*
+     * A warning about something Vue could not resolve is a failure here.
+     *
+     * In the browser it is recoverable — the component or directive is usually registered
+     * by an application plugin that has since loaded. In a prerender nothing arrives later:
+     * an unresolved component is emitted as a literal element of that name and an
+     * unresolved directive is silently dropped, so the markup ships looking plausible and
+     * disagrees with the browser's the moment it hydrates. Every other warning is a
+     * diagnostic and goes to stderr, where it cannot corrupt the result on stdout.
+     */
+    app.config.warnHandler = (message) => {
+        const unresolved = /Failed to resolve (component|directive): (\S+)/.exec(message);
+
+        // A hyphen means it may well be a native custom element, which Vue renders as a
+        // literal element of that name — on the client exactly as here, so the markup
+        // agrees and there is nothing to refuse. Pwax does not set `isCustomElement`, so
+        // the browser's console carries the same warning; a name without a hyphen is a Vue
+        // component that was meant to resolve and did not.
+        if (unresolved && !(unresolved[1] === 'component' && unresolved[2].includes('-'))) {
+            failures.push(explain(message));
+
+            return;
+        }
+
+        process.stderr.write(`[Vue warn]: ${message}\n`);
+    };
 
     /*
      * `router-view` renders the *page component wrapper*, not the page component.
@@ -344,7 +565,33 @@ async function renderOne() {
         },
     });
 
-    const html = await renderToString(app);
+    /*
+     * `<Teleport>` renders its children somewhere else in the document — `body`, usually —
+     * and the server renderer collects them here instead of putting them in the returned
+     * string. Placing them would mean the shell knowing every teleport target in advance,
+     * which it cannot: `to` is a selector, and it can be computed.
+     *
+     * So the markup would ship without the teleported content in it, which for the thing
+     * people teleport — a modal, a dropdown, a dialog — is often the content worth
+     * prerendering, and the browser would then find nothing to hydrate at the target. A page
+     * that actually teleports something during the prerender fails; one whose modal is
+     * closed teleports nothing and is unaffected.
+     */
+    const context = {};
+    const html = await renderToString(app, context);
+
+    if (Object.keys(context.teleports || {}).length > 0) {
+        failures.push(
+            'pwax: this page renders a `<Teleport>`, whose content belongs outside the mount ' +
+                'element and cannot be placed by the prerenderer — the markup would ship without ' +
+                'it and the browser would find nothing to hydrate at the target. Render the ' +
+                'content in place, or mark the route `->spaOnly()`.'
+        );
+    }
+
+    if (failures.length) {
+        return { ok: false, message: failures[0], errors: { render: failures.join('\n') } };
+    }
 
     let serializedState = data;
 
@@ -365,7 +612,7 @@ try {
 } catch (error) {
     write({
         ok: false,
-        message: error && error.message ? error.message : String(error),
+        message: explain(error && error.message ? error.message : String(error)),
         errors: { _: error && error.stack ? String(error.stack) : String(error) },
     });
 }

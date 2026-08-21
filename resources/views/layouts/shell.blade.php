@@ -72,15 +72,27 @@
         "Loading". This element is a container; nothing about it is a status.
     --}}
     @php($pwaxIsPrerendered = isset($pwaxPrerendered) && $pwaxPrerendered)
-    <div id="pwax" @class(['pwax-preloader' => ! $pwaxIsPrerendered]) tabindex="-1"@if ($pwaxIsPrerendered) data-pwax-prerendered @endif>
-        @if ($pwaxIsPrerendered)
-            {{-- The prerendered page content. Trusted server output from the Node SSR bridge, so raw echo is correct — same trust level as the JSON islands below. The runtime hydrates this DOM rather than replacing it. --}}
-            {!! $pwaxPrerendered !!}
-        @else
+    @if ($pwaxIsPrerendered)
+        {{--
+            The prerendered page, and nothing else inside this element — not even a newline.
+
+            Vue hydrates from `container.firstChild`. Indent the markup and that first child
+            is a whitespace text node where the virtual DOM expects an element, which is a
+            mismatch on the very first node it looks at: Vue drops the text node, renders the
+            page from scratch *before* the next sibling, and leaves the server's markup where
+            it was. The visitor sees the page twice. So the tag, the echo and the closing tag
+            share one line, and the `@if` lives outside the element rather than inside it.
+
+            Trusted server output from the Node SSR bridge, so raw echo is correct — the same
+            trust level as the JSON islands below.
+        --}}
+        <div id="pwax" tabindex="-1" data-pwax-prerendered>{!! $pwaxPrerendered !!}</div>
+    @else
+        <div id="pwax" class="pwax-preloader" tabindex="-1">
             <span class="pwax-sr-only" role="status">Loading</span>
             @yield('content')
-        @endif
-    </div>
+        </div>
+    @endif
 
     @if ($pwaxIsPrerendered)
         {{--

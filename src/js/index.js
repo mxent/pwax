@@ -25,6 +25,37 @@ import { createSyncApi } from './sync.js';
 
 const DEFAULT_CONTENT = '<main><router-view></router-view></main>';
 
+/**
+ * Drop whitespace-only text nodes from the edges of a prerendered mount element.
+ *
+ * Vue hydrates from `container.firstChild`, and a mismatch there is not a small one: it
+ * discards the text node, renders the application from scratch *before* the next sibling,
+ * and leaves the server's markup in place — so the visitor sees the whole page twice.
+ * Indented markup inside `<div id="pwax">` is enough to cause it, which is exactly what a
+ * Blade view looks like when someone formats it.
+ *
+ * The shipped shell emits the prerendered markup as this element's only child, so normally
+ * there is nothing here to do. This is for the shell an application published with
+ * `vendor:publish --tag=pwax-views` and has since reformatted, and for one published before
+ * SSR existed. Silent, catastrophic and entirely avoidable is a bad combination to leave to
+ * whoever edits that file next.
+ *
+ * Only whitespace text is removed. A leading comment is left alone: an application that
+ * overrides `pwax.blade.content` with a multi-root template makes the application's own
+ * root a fragment, and `<!--[-->` is then a node hydration genuinely expects.
+ */
+function trimHydrationWhitespace(el) {
+    const blank = (node) => node && node.nodeType === 3 && node.data.trim() === '';
+
+    while (blank(el.firstChild)) {
+        el.removeChild(el.firstChild);
+    }
+
+    while (blank(el.lastChild)) {
+        el.removeChild(el.lastChild);
+    }
+}
+
 async function boot() {
     const config = loadConfig();
     const initial = loadInitialPayload();
@@ -119,6 +150,10 @@ async function boot() {
 
     const prerendered =
         !!initial && initial.hydrate === true && mount.hasAttribute('data-pwax-prerendered');
+
+    if (prerendered) {
+        trimHydrationWhitespace(mount);
+    }
 
     // Published before the page component is built, so a component script evaluated during
     // `resolveInitialPage` can already read it.

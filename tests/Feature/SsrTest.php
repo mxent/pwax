@@ -2,7 +2,11 @@
 
 namespace Mxent\Pwax\Tests\Feature;
 
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\View;
+use Mxent\Pwax\Pwax;
+use Mxent\Pwax\Support\RenderFunctionStore;
+use Mxent\Pwax\Support\Shell;
 use Mxent\Pwax\Tests\TestCase;
 use Symfony\Component\Process\Process;
 
@@ -335,8 +339,15 @@ class SsrTest extends TestCase
 
         // Otherwise the markup is painted unstyled and restyled once JavaScript runs — and
         // never styled at all without it. `data-pwax-style` is the key the runtime's style
-        // manager uses, so it adopts this block rather than appending a second copy.
-        $this->assertStringContainsString('data-pwax-style="pwax:page"', $html);
+        // manager uses, so it adopts this block rather than appending a second copy. The
+        // key carries the component's digest, which is what gives each page's stylesheet
+        // its own identity in the manager.
+        $component = pwaxRender('pages.home')->component();
+
+        $this->assertStringContainsString(
+            sprintf('data-pwax-style="pwax:page:%s"', $component->hash()),
+            $html
+        );
     }
 
     public function test_an_spa_page_does_not_inline_its_stylesheet(): void
@@ -346,7 +357,7 @@ class SsrTest extends TestCase
         // document.
         $html = (string) $this->get('/ssr-spa-only')->getContent();
 
-        $this->assertStringNotContainsString('data-pwax-style="pwax:page"', $html);
+        $this->assertStringNotContainsString('data-pwax-style="pwax:page', $html);
     }
 
     public function test_the_state_is_not_shipped_twice(): void
@@ -380,7 +391,52 @@ class SsrTest extends TestCase
 
         // And the real closing tag is still where it belongs: the markup after it parses
         // as markup, not as leftover CSS.
-        $this->assertStringContainsString('data-pwax-style="pwax:page"', $html);
+        $this->assertStringContainsString('data-pwax-style="pwax:page:', $html);
+    }
+
+    public function test_a_precompiled_application_is_still_prerendered(): void
+    {
+        $this->requireNode();
+
+        // `pwax:compile` prepends a precompiled render function to a page's inline script,
+        // and the body `@vue/compiler-dom` generates dereferences the global `Vue` as the
+        // module is imported. Node's module scope has no such global, so every prerender of
+        // a precompiled application failed with `Vue is not defined` and quietly served the
+        // SPA shell — and precompiling is the recommended setup for the smaller Vue build,
+        // so this was the configuration most likely to have SSR turned on.
+        $store = sys_get_temp_dir() . '/pwax-ssr-render-functions-' . getmypid() . '.php';
+
+        config()->set('pwax.assets.render_functions', $store);
+        // `active()` is `wanted() && isComplete()`: the store only takes effect when the
+        // application has actually asked for the smaller Vue build.
+        config()->set('pwax.assets.vue_build', 'runtime');
+
+        try {
+            // Not `assertSuccessful()`: two fixture views take controller data and cannot
+            // be rendered standalone, so the command exits non-zero after compiling the
+            // rest. `pages.home` is among the rest, which is what this test needs.
+            $this->withoutMockingConsoleOutput()->artisan('pwax:compile');
+
+            // The store and everything holding it were resolved before the file existed.
+            $this->app->forgetInstance(RenderFunctionStore::class);
+            $this->app->forgetInstance(Shell::class);
+            $this->app->forgetInstance(Pwax::class);
+
+            $this->assertTrue(
+                $this->app->make(RenderFunctionStore::class)->active(),
+                'the render-function store is active, so the payload carries __pwaxRender'
+            );
+
+            $response = $this->get('/ssr-home');
+
+            $response->assertOk();
+            $response->assertHeader('X-Pwax-SSR', '1');
+            $this->assertStringContainsString('<h1>Home</h1>', (string) $response->getContent());
+        } finally {
+            if (is_file($store)) {
+                @unlink($store);
+            }
+        }
     }
 
     public function test_the_configured_cache_ttl_is_applied(): void
@@ -422,6 +478,59 @@ class SsrTest extends TestCase
         $entries = $property->getValue($store);
 
         return $entries;
+    }
+
+    public function test_the_doctor_reports_a_working_bridge(): void
+    {
+        $this->requireNode();
+
+        config()->set('pwax.manifest.icons', [
+            ['src' => '/i-192.png', 'sizes' => '192x192', 'type' => 'image/png'],
+            ['src' => '/i-512.png', 'sizes' => '512x512', 'type' => 'image/png'],
+        ]);
+        config()->set('pwax.assets.source', 'cdn');
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('SSR bridge renders')
+            ->assertSuccessful();
+    }
+
+    public function test_the_doctor_names_the_node_error_when_the_bridge_cannot_start(): void
+    {
+        $this->requireNode();
+
+        // A script that is not the bridge: Node starts, then dies on stderr with nothing on
+        // stdout. The doctor used to report the (empty) stdout and say nothing else, which
+        // is exactly what a missing `vue` looked like.
+        $broken = sys_get_temp_dir() . '/pwax-broken-bridge-' . getmypid() . '.mjs';
+        file_put_contents($broken, "throw new Error('deliberately broken bridge');\n");
+
+        config()->set('pwax.ssr.script', $broken);
+
+        try {
+            $this->withoutMockingConsoleOutput()->artisan('pwax:doctor');
+
+            $output = Artisan::output();
+
+            $this->assertStringContainsString('SSR bridge did not return JSON', $output);
+            // Node's own words, and the line that carries them — not the file-and-line
+            // header an uncaught throw puts first.
+            $this->assertStringContainsString('Error: deliberately broken bridge', $output);
+        } finally {
+            @unlink($broken);
+        }
+    }
+
+    public function test_the_doctor_checks_the_script_the_prerenderer_will_actually_run(): void
+    {
+        // `ssr.script` is an application's escape hatch for a custom render pipeline. The
+        // doctor used to check the package's own `bin/ssr.mjs` regardless, so it reported a
+        // healthy bridge for a file that was never going to be executed.
+        config()->set('pwax.ssr.script', '/nonexistent/bridge.mjs');
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('bridge script was not found at /nonexistent/bridge.mjs')
+            ->assertFailed();
     }
 
     public function test_ssr_is_off_by_default(): void

@@ -200,9 +200,10 @@
     unstyled and restyling it a moment later — and for a visitor without JavaScript, which
     is who the prerender is for, it would never be styled at all.
 
-    `data-pwax-style` is the key the runtime's reference-counted style manager uses. Marked
-    with it, the inline block below is *adopted* on boot rather than duplicated, and is
-    released like any other page stylesheet on the first navigation away.
+    `data-pwax-style` is the key the runtime's reference-counted style manager uses, and it
+    carries the component's digest so that each page's stylesheet has its own identity.
+    Marked with it, the inline block below is *adopted* on boot rather than duplicated, and
+    is released like any other page stylesheet on the first navigation away.
 --}}
 @foreach ($component?->externalStyles ?? [] as $pwaxExternalStyle)
     @if ($prerendered)
@@ -213,7 +214,7 @@
 @endforeach
 
 @if ($prerendered && $component?->style)
-    <style data-pwax-style="pwax:page"{!! $nonceAttr !!}>{!! $pwaxCss($component->style) !!}</style>
+    <style data-pwax-style="pwax:page:{{ $component->hash() }}"{!! $nonceAttr !!}>{!! $pwaxCss($component->style) !!}</style>
 @endif
 
 <style{!! $nonceAttr !!}>

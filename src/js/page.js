@@ -16,7 +16,24 @@ import {
     toComponentOptions,
 } from './modules.js';
 
-const PAGE_STYLE_KEY = 'pwax:page';
+/**
+ * The style manager key for a page's own stylesheet.
+ *
+ * Keyed on the component, not on the slot. This was the constant `pwax:page`, which reads
+ * like an identity and is not one: the manager counts references per key, so acquiring the
+ * next page's stylesheet under the same key as the current one merely incremented a counter
+ * and left the *previous* page's CSS in the document — and `mount()` acquires before it
+ * releases, deliberately, so that the swap never flashes unstyled content. The net effect
+ * was that from the second page onward every visitor saw the first page's rules and none of
+ * their own. Distinct keys make the acquire/release pair do what it says, and keep the
+ * overlap that avoids the flash.
+ *
+ * `hash` is the component digest the payload always carries; the style's length is the
+ * fallback, matching how `toOptions()` keys the inline module cache.
+ */
+function pageStyleKey(payload) {
+    return 'pwax:page:' + (payload?.hash || (payload?.style || '').length);
+}
 
 /**
  * Run a DOM mutation inside `document.startViewTransition` when the browser supports it.
@@ -172,13 +189,16 @@ export async function resolveInitialPage({ payload, styles, config, ssrState = n
                 : () => ({ ...ssrState });
     }
 
-    styles.acquire(PAGE_STYLE_KEY, payload.style || '', { nonce: config.nonce });
-
     if (payload.title) {
         document.title = payload.title;
     }
 
     applyHead(payload.head);
+
+    // Last, so that a throw anywhere above leaves nothing acquired. The caller falls back
+    // to a client-side mount on failure, and that path acquires this same key itself —
+    // a reference taken here and never recorded on the instance would never be given back.
+    styles.acquire(pageStyleKey(payload), payload.style || '', { nonce: config.nonce });
 
     // `markRaw` for the same reason `mount()` uses it: these options are about to sit in
     // `data()`, and Vue would otherwise walk them and make the whole definition reactive.
@@ -275,9 +295,9 @@ export function createPageComponent({
             // server's HTML away.
             if (this.component) {
                 // That call also acquired this page's stylesheet. Recording it here is
-                // what makes the first navigation *release* it instead of taking a second
-                // reference the page would never give back.
-                this.mountedStyleKey = PAGE_STYLE_KEY;
+                // what makes the first navigation release it rather than leaving it
+                // applying to every page after this one.
+                this.mountedStyleKey = pageStyleKey(initial?.component);
 
                 return;
             }
@@ -287,7 +307,12 @@ export function createPageComponent({
 
         beforeUnmount() {
             this.abort();
-            styles.release(PAGE_STYLE_KEY);
+
+            // Whatever this page acquired, which is not a constant: the key carries the
+            // component's digest so each page's stylesheet has its own identity.
+            if (this.mountedStyleKey) {
+                styles.release(this.mountedStyleKey);
+            }
         },
 
         async beforeRouteUpdate(to, from) {
@@ -422,8 +447,10 @@ export function createPageComponent({
 
                     const options = await toOptions(payload);
 
-                    styles.acquire(PAGE_STYLE_KEY, payload.style || '', { nonce: config.nonce });
-                    this.mountedStyleKey = PAGE_STYLE_KEY;
+                    const key = pageStyleKey(payload);
+
+                    styles.acquire(key, payload.style || '', { nonce: config.nonce });
+                    this.mountedStyleKey = key;
 
                     if (previous) {
                         styles.release(previous);

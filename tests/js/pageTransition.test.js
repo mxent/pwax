@@ -13,6 +13,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPageComponent } from '../../src/js/page.js';
+import { createStyleManager } from '../../src/js/styles.js';
 
 /** A payload the runtime can mount with no network and no module fetch. */
 const payloadFor = (name) => ({ template: `<p>${name}</p>` });
@@ -329,5 +330,69 @@ describe('what stays on screen during a navigation', () => {
         // used to replace the page you were reading.
         expect(page.template).toContain('v-if="!component"');
         expect(page.template).not.toContain('v-else-if="loading"');
+    });
+});
+
+describe('the page stylesheet follows the page', () => {
+    beforeEach(() => {
+        document.head.innerHTML = '';
+        vi.stubGlobal('Vue', { markRaw: (v) => v, compile: (t) => () => t });
+    });
+
+    /** A server whose pages each carry their own stylesheet. */
+    const styledServer = {
+        json: async (path) => ({
+            template: `<p>${path}</p>`,
+            style: `.p${path.replace('/', '')}{color:red}`,
+            hash: `hash${path.replace('/', '')}`,
+        }),
+    };
+
+    it('replaces the previous page stylesheet rather than keeping it', async () => {
+        const styles = createStyleManager(document);
+        const page = createPageComponent({
+            http: styledServer,
+            styles,
+            config: {},
+            initial: null,
+            templates: {},
+        });
+
+        const state = bind(page);
+
+        await state.visit('/one');
+
+        expect(document.head.textContent).toContain('.pone{color:red}');
+
+        await state.visit('/two');
+
+        // The key used to be the constant `pwax:page`, so the second acquire found the
+        // first page's entry, incremented its count and returned. Every page after the
+        // first was rendered with the first page's rules and none of its own.
+        expect(document.head.textContent).toContain('.ptwo{color:red}');
+        expect(document.head.textContent).not.toContain('.pone{color:red}');
+
+        // And exactly one page stylesheet is in the document, not one per page visited.
+        expect(document.querySelectorAll('style[data-pwax-style^="pwax:page:"]')).toHaveLength(1);
+    });
+
+    it('leaves an imported component stylesheet alone across that swap', async () => {
+        const styles = createStyleManager(document);
+        styles.acquire('/c/modal.js', '.modal{}');
+
+        const page = createPageComponent({
+            http: styledServer,
+            styles,
+            config: {},
+            initial: null,
+            templates: {},
+        });
+
+        const state = bind(page);
+
+        await state.visit('/one');
+        await state.visit('/two');
+
+        expect(document.querySelector('style[data-pwax-style="/c/modal.js"]')).not.toBeNull();
     });
 });

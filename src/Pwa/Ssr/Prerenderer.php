@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Mxent\Pwax\Data\Component;
 use Mxent\Pwax\Http\Responses\ComponentResponse;
+use Mxent\Pwax\Pwax;
 use Mxent\Pwax\Support\Shell;
 use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Symfony\Component\Process\Process;
@@ -194,7 +195,15 @@ class Prerenderer
         return [
             'version' => (string) $this->config->get('pwax.assets.versions.vue', ''),
             'url' => $request->getRequestUri(),
-            'component' => $component->toArray(),
+            // The payload the *browser* receives for this page, not the bare component.
+            // The difference is the precompiled render function: `Pwax::payload()` prepends
+            // it to the inline script for a non-addressable page, so the client renders
+            // through `__pwaxRender` while the bridge, handed `toArray()`, compiled the
+            // template itself. Two routes to the same markup that agree only as long as the
+            // store is in step with the templates — and if it ever is not, they disagree
+            // precisely where a mismatch is hardest to read. Sending the same bytes to both
+            // removes the question.
+            'component' => app(Pwax::class)->payload($component, addressable: false),
             'data' => $data,
             // Every markup fragment the client runtime renders: the root content template,
             // and the loader and error branches of the page component. The bridge builds
@@ -341,7 +350,14 @@ class Prerenderer
         return null;
     }
 
-    private function scriptPath(): string
+    /**
+     * The bridge script this application will actually run.
+     *
+     * Public because `pwax:doctor` has to check the same file. It used to hardcode the
+     * package's own `bin/ssr.mjs`, so an application that pointed `ssr.script` elsewhere
+     * got a clean bill of health for a script it does not use.
+     */
+    public function scriptPath(): string
     {
         $configured = $this->config->get('pwax.ssr.script');
 

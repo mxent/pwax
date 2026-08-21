@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Mxent\Pwax\Pwa\AssetManifest;
 use Mxent\Pwax\Pwa\ComponentRegistry;
+use Mxent\Pwax\Pwa\Ssr\Prerenderer;
 use Mxent\Pwax\Pwa\Strategy;
 use Mxent\Pwax\Pwa\WebManifest;
 use Mxent\Pwax\Pwax;
@@ -1353,8 +1354,17 @@ class DoctorCommand extends Command
             return;
         }
 
-        $script = dirname(__DIR__, 3) . '/bin/ssr.mjs';
+        // The same file the `Prerenderer` will run, `ssr.script` included — checking the
+        // package's own bridge while the application runs another one is a clean bill of
+        // health for something that was never going to be executed.
+        $script = app(Prerenderer::class)->scriptPath();
         $node = (string) ($config->get('pwax.ssr.node') ?: 'node');
+
+        if (! is_file($script)) {
+            $this->fail_(sprintf('SSR is enabled but the bridge script was not found at %s.', $script));
+
+            return;
+        }
 
         // Run the bridge with an empty payload and ask it to report its dependencies.
         // The bridge writes `{ok: false, message: …}` to stdout when a peer dep is
@@ -1420,21 +1430,28 @@ class DoctorCommand extends Command
     }
 
     /**
-     * The first non-empty line of a process's stderr.
+     * The one line of a Node stack trace that says what went wrong.
      *
-     * A Node stack trace is thirty lines of internals under one line that says what went
-     * wrong. The doctor prints the line that says it.
+     * Not the first non-empty line: an uncaught throw puts the offending file and line
+     * number there, then the source, then a caret, and only then the message. For a missing
+     * package that meant reporting `node:internal/modules/package_json_reader:314` — a true
+     * statement about Node's internals and no help at all — instead of
+     * `Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'vue' …`. So the error line is
+     * sought first, and the first non-empty line is the fallback.
      */
     private function firstLine(string $output): string
     {
-        foreach (preg_split('/\R/', $output) ?: [] as $line) {
-            $line = trim($line);
+        $lines = array_values(array_filter(
+            array_map(trim(...), preg_split('/\R/', $output) ?: []),
+            static fn (string $line): bool => $line !== '',
+        ));
 
-            if ($line !== '') {
+        foreach ($lines as $line) {
+            if (preg_match('/^[A-Za-z]*(Error|Exception)\b/', $line) === 1) {
                 return $line;
             }
         }
 
-        return $output;
+        return $lines[0] ?? $output;
     }
 }

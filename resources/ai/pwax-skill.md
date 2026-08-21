@@ -769,7 +769,7 @@ markup is usable before (and without) JavaScript:
   `pwax-preloader` class — that class draws an opaque `::before`
   overlay, which would cover the very content being prerendered.
 - The page's compiled `<style>` is inlined in the head as
-  `<style data-pwax-style="pwax:page">`, and its external stylesheets
+  `<style data-pwax-style="pwax:page:<hash>">`, and its external stylesheets
   are `rel="stylesheet"` rather than `rel="preload"`. The runtime's
   style manager *adopts* that block rather than appending a second copy.
 - The `<noscript>` block is a one-line hint rather than the "this app
@@ -779,6 +779,11 @@ Node is started once per uncached page (~100ms before your component
 renders). The prerender cache — component hash + data digest, honouring
 `ssr.cache.ttl` — keeps that off the critical path after the first
 visitor.
+
+The bridge receives the same payload the browser does, so `pwax:compile`
+and SSR compose: both sides render through the shipped `__pwaxRender`.
+A component script may reference the global `Vue`, as it can in the
+browser — the bridge publishes it before evaluating any module.
 
 ### Metadata still flows through the fluent API
 

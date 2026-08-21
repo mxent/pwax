@@ -14,10 +14,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
+
+const require = createRequire(import.meta.url);
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -108,6 +111,42 @@ describe('bin/ssr.mjs renders a component to HTML', () => {
         expect(result.ok).toBe(true);
         expect(result.html).toContain('<a href="/"');
         expect(result.html).toContain('router-link-active router-link-exact-active');
+    });
+
+    it('renders a precompiled component, the way pwax:compile ships one', () => {
+        // `Pwax::payload()` prepends `RenderFunctionStore::bindings()` to a page's inline
+        // script when `php artisan pwax:compile` has run. The body `@vue/compiler-dom`
+        // generates opens with `const { … } = Vue` and is immediately invoked, so the global
+        // is dereferenced as the module is imported — not when the component renders.
+        //
+        // Node's module scope has no such global. Every prerender of a precompiled
+        // application therefore failed with `Vue is not defined` and fell back to the SPA
+        // shell, and precompiling is the recommended setup for the smaller Vue build.
+        const template = '<div class="home"><h1>{{ title }}</h1></div>';
+        const { code } = require('@vue/compiler-dom').compile(template, {
+            mode: 'function',
+            hoistStatic: true,
+            prefixIdentifiers: true,
+            runtimeGlobalName: 'Vue',
+        });
+
+        const result = render({
+            component: {
+                template,
+                script:
+                    `const __pwaxRender = (() => {\n${code}\n})();\nexport { __pwaxRender };\n` +
+                    'export default { data() { return { title: "Home" }; } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+
+        // Byte for byte what the same component produces without a precompiled render — the
+        // bridge prefers the shipped function, and it has to agree with the template.
+        expect(result.html).toBe(wrapped('<div class="home"><h1>Home</h1></div>'));
     });
 
     it('compiles the Blade template when the script declares no render or template', () => {

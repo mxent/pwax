@@ -114,6 +114,11 @@ class SsrTest extends TestCase
             $router->get('/ssr-style-escape', fn () => pwaxRender('pages.style-escape'))
                 ->name('ssr.style-escape');
 
+            // A page that pulls in sub-components with `@pwaxImport`, by default export
+            // and by named export.
+            $router->get('/ssr-imports', fn () => pwaxRender('pages.ssr-imports'))
+                ->name('ssr.imports');
+
             // A page that opts out of SSR explicitly.
             $router->get('/ssr-spa-only', fn () => pwaxRender('pages.home')->spaOnly())
                 ->name('ssr.spa-only');
@@ -361,6 +366,62 @@ class SsrTest extends TestCase
         // `@class(['pwax-preloader' => false])` rendered `class=""`. Harmless, and still
         // noise in the one element every visitor's devtools opens on first.
         $this->assertStringNotContainsString('<div id="pwax" class=""', $html);
+    }
+
+    public function test_a_page_that_imports_components_is_prerendered(): void
+    {
+        $this->requireNode();
+
+        $response = $this->get('/ssr-imports');
+
+        $response->assertOk();
+        $response->assertHeader('X-Pwax-SSR', '1');
+
+        $html = (string) $response->getContent();
+
+        // `@pwaxImport` compiles to `window.pwax.component("/__pwax__/c/….js")`, evaluated
+        // as the page's module loads. Node has no `window`, so the bridge died with
+        // `ReferenceError: window is not defined` before rendering anything — and since the
+        // fallback is the SPA shell, a page with any sub-component silently opted itself out
+        // of SSR while looking like it was configured for it.
+        $this->assertStringContainsString('<span class="badge">Badge</span>', $html);
+
+        // The named-export form resolves too.
+        $this->assertStringContainsString('<em class="pill">Pill</em>', $html);
+    }
+
+    public function test_an_imported_component_s_stylesheet_reaches_the_document(): void
+    {
+        $this->requireNode();
+
+        $html = (string) $this->get('/ssr-imports')->getContent();
+
+        // The runtime attaches an imported component's stylesheet as its module loads,
+        // which is too late for markup that is already on screen and never at all for a
+        // visitor without JavaScript. The key is the module URL, which is what the style
+        // manager uses, so the runtime adopts this block rather than adding a second copy.
+        $this->assertStringContainsString('rebeccapurple', $html);
+        $this->assertMatchesRegularExpression(
+            '#<style data-pwax-style="/__pwax__/c/[^"]+\.js"#',
+            $html
+        );
+    }
+
+    public function test_a_page_whose_import_cannot_be_resolved_falls_back_rather_than_dropping_it(): void
+    {
+        $this->requireNode();
+
+        // A component the allowlist refuses. The bridge is given no source for it, and the
+        // right answer is to fail the prerender — an async component that cannot load
+        // renders as an empty comment, so the alternative is HTML with a hole in it that a
+        // crawler indexes and a browser then has to re-render.
+        config()->set('pwax.components.allowed', ['pages.*']);
+
+        $response = $this->get('/ssr-imports');
+
+        $response->assertOk();
+        $response->assertHeader('X-Pwax-SSR', '0');
+        $this->assertStringNotContainsString('data-pwax-prerendered', (string) $response->getContent());
     }
 
     public function test_a_prerendered_page_carries_its_stylesheet_in_the_document(): void

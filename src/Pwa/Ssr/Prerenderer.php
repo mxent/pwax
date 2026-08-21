@@ -47,9 +47,18 @@ class Prerenderer
     private const CACHE_PREFIX = 'pwax:ssr:';
 
     /**
+     * A ceiling on how many components one prerender will gather.
+     *
+     * Not a limit anyone should meet: it is the backstop for a component graph that is
+     * larger than anybody intended, so a single request cannot compile the whole
+     * application while a visitor waits.
+     */
+    private const MAX_IMPORTS = 100;
+
+    /**
      * A per-request memo, so a response that reads its own prerender twice pays once.
      *
-     * @var array<string, array{html: string, state: string}>
+     * @var array<string, array{html: string, state: string, styles: array<string, string>}>
      */
     private array $memo = [];
 
@@ -131,7 +140,7 @@ class Prerenderer
      * Prerender the response's component, returning HTML + serialized state or null on
      * any failure (so the caller falls back to the SPA shell).
      *
-     * @return array{html: string, state: string}|null
+     * @return array{html: string, state: string, styles: array<string, string>}|null
      */
     public function render(ComponentResponse $response, Request $request, ?Component $component = null): ?array
     {
@@ -153,7 +162,7 @@ class Prerenderer
             try {
                 $cached = $this->cache->get($key);
 
-                if (is_array($cached) && isset($cached['html'], $cached['state'])) {
+                if (is_array($cached) && isset($cached['html'], $cached['state'], $cached['styles'])) {
                     return $this->remember($key, $cached);
                 }
             } catch (Throwable $e) {
@@ -188,10 +197,15 @@ class Prerenderer
      * The Node bridge's stdin payload, built from the component and controller data.
      *
      * @param  array<string, mixed>  $data
+     * @param  array<string, array<string, mixed>>|null  $imports  Already collected by the
+     *                                                             caller, which also needs
+     *                                                             them for the stylesheets.
      * @return array<string, mixed>
      */
-    public function payload(Component $component, array $data, Request $request): array
+    public function payload(Component $component, array $data, Request $request, ?array $imports = null): array
     {
+        $imports ??= $this->imports($component);
+
         return [
             'version' => (string) $this->config->get('pwax.assets.versions.vue', ''),
             'url' => $request->getRequestUri(),
@@ -211,7 +225,73 @@ class Prerenderer
             // the page component is a fragment — its branch placeholders and its `<!--[-->`
             // anchors have to be in the server's HTML or Vue discards the whole prerender.
             'templates' => app(Shell::class)->templates(),
+            // Every component this page reaches through `@pwaxImport`, keyed by the URL its
+            // script calls. The browser fetches those modules over HTTP; Node cannot — the
+            // URL is a route on the application that is currently serving this request — so
+            // the source travels with the payload instead. Without them the bridge cannot
+            // even *evaluate* the page: `@pwaxImport` compiles to `window.pwax.component(…)`
+            // inside the module, and dereferencing `window` in Node throws before anything
+            // renders.
+            'imports' => $imports,
         ];
+    }
+
+    /**
+     * Every component reachable from this one through `@pwaxImport`, keyed by its URL.
+     *
+     * Transitive, because an imported component may import others, and the bridge has to
+     * be able to evaluate the whole graph without reaching the network. Cycles are
+     * ordinary here — two components that reference each other is the case
+     * {@see Pwax::import()} was designed around — so the visited set is what
+     * terminates the walk rather than an assumption that the graph is a tree.
+     *
+     * A URL that does not resolve is skipped: a forged or stale identifier would 404 for
+     * the browser too, and the bridge reports the gap in terms of the component that
+     * asked for it.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private function imports(Component $component): array
+    {
+        $pwax = app(Pwax::class);
+
+        $collected = [];
+        $seen = [];
+        $queue = $pwax->importedUrls($component->script);
+
+        while ($queue !== []) {
+            $url = array_shift($queue);
+
+            if (isset($seen[$url]) || count($collected) >= self::MAX_IMPORTS) {
+                continue;
+            }
+
+            $seen[$url] = true;
+
+            $view = $pwax->viewForUrl($url);
+
+            if ($view === null) {
+                continue;
+            }
+
+            try {
+                // The same payload the browser is served for this URL, so the bridge
+                // evaluates what the browser evaluates — precompiled render function
+                // included.
+                $imported = $pwax->compile($view);
+                $collected[$url] = $pwax->payload($imported, addressable: false);
+            } catch (Throwable $e) {
+                $this->report($e);
+
+                continue;
+            }
+
+            foreach ($pwax->importedUrls($imported->script) as $nested) {
+                $queue[] = $nested;
+            }
+        }
+
+        return $collected;
     }
 
     /**
@@ -243,8 +323,8 @@ class Prerenderer
     }
 
     /**
-     * @param  array{html: string, state: string}  $result
-     * @return array{html: string, state: string}
+     * @param  array{html: string, state: string, styles: array<string, string>}  $result
+     * @return array{html: string, state: string, styles: array<string, string>}
      */
     private function remember(string $key, array $result): array
     {
@@ -255,12 +335,13 @@ class Prerenderer
      * Spawn the Node bridge and parse its response.
      *
      * @param  array<string, mixed>  $data
-     * @return array{html: string, state: string}|null
+     * @return array{html: string, state: string, styles: array<string, string>}|null
      */
     private function invoke(Component $component, array $data, Request $request): ?array
     {
         $script = $this->scriptPath();
         $node = (string) ($this->config->get('pwax.ssr.node') ?: 'node');
+        $imports = $this->imports($component);
 
         if (! is_file($script)) {
             $this->report(new \RuntimeException("The SSR bridge script was not found at {$script}."));
@@ -272,7 +353,7 @@ class Prerenderer
             [$node, $script],
             base_path(),
             null,
-            (string) json_encode($this->payload($component, $data, $request), JSON_THROW_ON_ERROR),
+            (string) json_encode($this->payload($component, $data, $request, $imports), JSON_THROW_ON_ERROR),
             // Seconds. `Process` has taken seconds since Symfony 2, and multiplying by a
             // thousand turned the documented five-second budget into eighty-three minutes:
             // a Node process that hung held the worker for as long as it cared to, which is
@@ -332,7 +413,22 @@ class Prerenderer
             JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT,
         );
 
-        return ['html' => $html, 'state' => $state];
+        // The imported components' stylesheets travel out with the HTML so the shell can
+        // put them in the document. The browser attaches them as each module loads, which is
+        // fine for a client-rendered page and not for a prerendered one: the sub-component's
+        // markup is on screen from the first byte, and for a visitor without JavaScript it
+        // is never styled at all. Keyed by URL, which is the key the runtime's style manager
+        // uses for an imported component, so it adopts these rather than adding a second
+        // copy of each.
+        $styles = [];
+
+        foreach ($imports as $url => $imported) {
+            if (($imported['style'] ?? '') !== '') {
+                $styles[$url] = (string) $imported['style'];
+            }
+        }
+
+        return ['html' => $html, 'state' => $state, 'styles' => $styles];
     }
 
     /**

@@ -548,6 +548,20 @@ before answering.
   right, fail to hydrate, and are silently re-rendered on the client —
   which is what shipped the first time. `tests/js/ssrHydration.test.js`
   asserts node identity across the mount, which is what catches it.
+- **Declaring browser globals in `bin/ssr.mjs` to make a component evaluate.**
+  `typeof window === 'undefined'` is how a component asks whether it is being
+  prerendered, and a `window` that exists makes that question return the wrong
+  answer — silently, with plausible values and markup the browser disagrees
+  with. The one expression Pwax itself emits (`window.pwax.component(…)`, from
+  `@pwaxImport`) is rewritten before evaluation instead; everything else is
+  left to fail, and `explain()` turns the failure into something actionable.
+- **Letting the bridge return `ok: true` for markup the browser will not
+  build.** An unresolved component renders as a literal element of that name,
+  an unresolved directive is dropped, and an async component that cannot load
+  becomes an empty comment. Serving the SPA shell is only slower; shipping any
+  of those is a page that gets indexed wrong and re-rendered on arrival. The
+  bridge pins Vue's dev build because `warn()` — which is how two of the three
+  surface — is stripped from the production one.
 - **Adding a bare `import` to `bin/*.mjs` for a package the application may
   not have.** `package.json` is `export-ignore`d from the Composer package,
   so these scripts run inside someone else's `node_modules`. Every optional

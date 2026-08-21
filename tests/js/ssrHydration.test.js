@@ -16,6 +16,7 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { setImporter } from '../../src/js/modules.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -42,6 +43,14 @@ vi.mock('../../src/js/modules.js', async (importOriginal) => {
         }),
     };
 });
+
+/**
+ * The component modules a test serves at `/__pwax__/c/…`, by URL.
+ *
+ * `setImporter` is the module cache's test seam, so imported components resolve through
+ * the real `importModule` — cache, `peekModule` and all — without a network.
+ */
+const served = new Map();
 
 const CONTENT = '<main><router-view></router-view></main>';
 const LOADER = '<div class="pwax-loading" role="status">Loading…</div>';
@@ -130,7 +139,16 @@ async function boot({ html, state, component, url = '/', indent = false }) {
     );
     island('pwax-state', JSON.stringify(state));
 
+    // Captured before the runtime touches anything. Hydration attaches to these exact
+    // nodes; a mismatch discards them and builds new ones, and an async component that has
+    // not resolved by the first render is a placeholder that gets replaced a moment later.
+    // Comparing against a snapshot taken *now* is what tells those apart — reading the DOM
+    // twice after everything has settled cannot.
+    const before = [...document.querySelectorAll('#pwax *')];
+
     await bootAndWait();
+
+    return before;
 }
 
 describe('a prerendered page hydrates rather than being re-rendered', () => {
@@ -164,6 +182,17 @@ describe('a prerendered page hydrates rather than being re-rendered', () => {
         // has no implementation, which would otherwise bury the output in stack traces.
         vi.stubGlobal('scrollTo', vi.fn());
         window.history.replaceState({}, '', '/');
+
+        served.clear();
+        setImporter(async (url) => {
+            const module = served.get(url);
+
+            if (!module) {
+                throw new Error(`no module served for ${url}`);
+            }
+
+            return module;
+        });
     });
 
     afterEach(() => {
@@ -181,16 +210,17 @@ describe('a prerendered page hydrates rather than being re-rendered', () => {
 
         expect(result.ok).toBe(true);
 
-        await boot({ html: result.html, state: result.serializedState, component });
+        const before = await boot({ html: result.html, state: result.serializedState, component });
 
         const heading = document.querySelector('#pwax h1');
 
         expect(heading).not.toBeNull();
         expect(heading.textContent).toBe('Home');
 
-        // The identity check. Had Vue mismatched, this node would have been discarded and
-        // a new one created in its place.
-        expect(document.querySelector('#pwax h1')).toBe(heading);
+        // The identity check: the heading on screen is the one the server sent. Had Vue
+        // mismatched, that node would have been discarded and a new one built in its place.
+        expect(before).toContain(heading);
+        expect(before).toContain(document.querySelector('#pwax p'));
         expect(document.querySelector('#pwax p').textContent).toBe('3');
         assertNoMismatch();
     });
@@ -220,6 +250,63 @@ describe('a prerendered page hydrates rather than being re-rendered', () => {
         assertNoMismatch();
     });
 
+    it('hydrates a page that pulls in a sub-component with @pwaxImport', async () => {
+        // `@pwaxImport('components.modal')` compiles to
+        // `window.pwax.component("/__pwax__/c/….js")`, evaluated as the page's module
+        // loads. Node has no `window`, so the bridge used to die with
+        // `ReferenceError: window is not defined` before rendering anything, and every page
+        // with a sub-component silently served the SPA shell instead.
+        const url = '/__pwax__/c/modal.js';
+
+        const modal = {
+            template: '<aside class="modal">Modal body</aside>',
+            script: 'export default { name: "Modal" };',
+            style: '',
+        };
+
+        const component = {
+            template: '<div class="home"><h1>Home</h1><Modal /></div>',
+            script: `export default { components: { Modal: window.pwax.component(${JSON.stringify(url)}, "") } };`,
+            style: '',
+        };
+
+        const result = prerender({
+            url: '/',
+            component,
+            data: {},
+            imports: { [url]: modal },
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('<aside class="modal">Modal body</aside>');
+
+        // What the browser would fetch from that URL.
+        served.set(url, {
+            default: { name: 'Modal' },
+            __pwaxTemplate: modal.template,
+            __pwaxStyle: '',
+        });
+
+        const before = await boot({
+            html: result.html,
+            state: result.serializedState,
+            component,
+        });
+
+        const aside = document.querySelector('#pwax .modal');
+
+        expect(aside).not.toBeNull();
+        expect(aside.textContent).toBe('Modal body');
+
+        // The node the server sent, not a replacement. Vue defers hydration of an async
+        // component's subtree until its loader settles rather than rendering a placeholder
+        // over it, so the sub-component the crawler saw is the one the visitor ends up
+        // interacting with.
+        expect(before).toContain(aside);
+        expect(document.querySelectorAll('#pwax .modal')).toHaveLength(1);
+        assertNoMismatch();
+    });
+
     it('does not fetch the page it is already displaying', async () => {
         const component = {
             template: '<div class="home"><h1>Home</h1></div>',
@@ -245,15 +332,13 @@ describe('a prerendered page hydrates rather than being re-rendered', () => {
 
         const result = prerender({ url: '/', component, data: {} });
 
-        await boot({ html: result.html, state: result.serializedState, component });
+        const before = await boot({ html: result.html, state: result.serializedState, component });
 
         const links = [...document.querySelectorAll('#pwax a')];
 
         expect(links).toHaveLength(2);
-
-        const before = links.slice();
-
-        expect([...document.querySelectorAll('#pwax a')]).toEqual(before);
+        expect(before).toContain(links[0]);
+        expect(before).toContain(links[1]);
         expect(links.map((a) => a.getAttribute('href'))).toEqual(['/', '/about']);
 
         // `RouterLink` renders `aria-current` and always binds `class`. The bridge stands
@@ -280,10 +365,11 @@ describe('a prerendered page hydrates rather than being re-rendered', () => {
 
         expect(typeof server).toBe('string');
 
-        await boot({ html: result.html, state: result.serializedState, component });
+        const before = await boot({ html: result.html, state: result.serializedState, component });
 
         const stamp = document.querySelector('#pwax .stamp');
 
+        expect(before).toContain(stamp);
         expect(stamp.textContent).toBe(server);
         expect(window.pwax.ssrState).toEqual(result.serializedState);
         assertNoMismatch();

@@ -333,53 +333,7 @@ class Shell
         }
 
         if ($component !== null) {
-            foreach ($this->importedModules($component) as $url) {
-                $urls[] = $url;
-            }
-        }
-
-        return array_values(array_unique($urls));
-    }
-
-    /**
-     * The component module URLs a compiled script imports.
-     *
-     * Read back out of the emitted JavaScript rather than tracked while compiling: the
-     * import is resolved at render time, by a Blade directive that can appear anywhere in
-     * the view, so the script is the only place the full list actually exists.
-     *
-     * The call this matches is the one `Pwax::import()` writes, with a JSON-encoded URL —
-     * so the quoting is known and there is no need to guess at the route prefix. A hand-
-     * written call in someone's own `<script>` matches too, which is correct: it is still
-     * a module the page is about to import.
-     *
-     * @return list<string>
-     */
-    private function importedModules(Component $component): array
-    {
-        if (! str_contains($component->script, 'window.pwax.component')) {
-            return [];
-        }
-
-        $found = preg_match_all(
-            '#window\.pwax\.component\(\s*"((?:[^"\\\\]|\\\\.)*)"#',
-            $component->script,
-            $matches
-        );
-
-        if ($found === false || $found === 0) {
-            return [];
-        }
-
-        $urls = [];
-
-        foreach ($matches[1] as $encoded) {
-            $url = json_decode('"' . $encoded . '"');
-
-            // Same-origin paths only. A preload for an absolute off-site URL needs a
-            // `crossorigin` that this cannot know, and one that disagrees with the eventual
-            // fetch makes the browser download the file twice instead of none.
-            if (is_string($url) && str_starts_with($url, '/') && ! str_starts_with($url, '//')) {
+            foreach ($this->pwax->importedUrls($component->script) as $url) {
                 $urls[] = $url;
             }
         }

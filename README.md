@@ -1545,8 +1545,12 @@ hydration:
 <script>
     export default {
         data() {
-            // window.pwax.ssrState is null when the page was not prerendered.
-            return { title: window.pwax?.ssrState?.title ?? 'Home' };
+            // `typeof window`, not `window.pwax?.…`: this same `data()` runs during the
+            // prerender, in Node, where there is no `window` at all — and optional chaining
+            // does not protect the identifier on the left of the first dot.
+            const ssr = typeof window === 'undefined' ? null : window.pwax?.ssrState;
+
+            return { title: ssr?.title ?? 'Home' };
         },
     };
 </script>
@@ -1559,6 +1563,29 @@ discards the prerender and draws the page again. Your `data()` still runs — a 
 rely on what it does as much as on what it returns — it just does not get to overrule what
 was already rendered. Every subsequent navigation is an ordinary client-side render, with
 `data()` in sole charge.
+
+### What can and cannot be prerendered
+
+The bridge renders your component in Node, so anything that needs a browser is not
+available while it runs. That boundary is worth knowing before you turn SSR on:
+
+| Works | Does not |
+| --- | --- |
+| `@pwaxImport`, including named exports and components that import each other | Application-wide plugins and directives from `pwax.vue.*` — they are browser modules |
+| `data()`, `computed`, `setup()` (including `async setup()`) | Browser APIs during render: `document`, `window`, `localStorage`, `navigator` |
+| `<style scoped>`, the page's own stylesheet and its imports' | `mounted()` and anything after it — as in any SSR, it does not run on the server |
+| `pwax:compile`'s precompiled render functions | Anything reading the DOM to decide what to render |
+
+`typeof window === 'undefined'` is how a component asks whether it is being prerendered,
+and it answers truthfully — the bridge does not declare a `window`. Code that needs a
+browser belongs in `mounted()`, which runs only in the browser; a page that cannot avoid it
+belongs behind `->spaOnly()`.
+
+Nothing here fails quietly. A component that reaches for a browser API, a component or
+directive that cannot be resolved, and an import that cannot be loaded each fail the
+prerender — naming what happened and what to do — and the route serves the ordinary SPA
+shell. The alternative is markup that looks right, gets indexed, and is discarded the
+moment the browser hydrates it.
 
 ### Observability
 

@@ -44,7 +44,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     over the component's own `data()` for the initial render, which is what makes the
     island able to reconcile a `data()` that is not a pure function of the document.
   - New `window.pwax.ssrState` — the server's prerendered state, for a page component to
-    read in `data()`/`setup()`.
+    read in `data()`/`setup()`. Documented behind a `typeof window` check, since the same
+    `data()` runs in Node during the prerender and optional chaining does not protect the
+    identifier on the left of the first dot.
   - A prerendered response inlines the page's compiled `<style>` in the head (keyed
     `data-pwax-style="pwax:page:<hash>"`, adopted rather than duplicated by the runtime's
     style manager) and links its external stylesheets rather than merely preloading them, so the
@@ -204,6 +206,37 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that previously failed silently or in a place the developer was not looking.
 
 ### Fixed
+
+- **A page that uses `@pwaxImport` can be prerendered.** The directive compiles to
+  `window.pwax.component("/__pwax__/c/….js")`, evaluated as the page's module loads — and
+  Node has no `window`, so the bridge died with `ReferenceError: window is not defined`
+  before rendering anything. Since the fallback is the SPA shell, every page with a
+  sub-component silently opted itself out of SSR while looking configured for it. The PHP
+  side now walks the component graph and sends each imported component's source with the
+  payload (transitively, cycles included — the browser fetches those URLs over HTTP and Node
+  cannot, since they are routes on the application serving the request), and the bridge
+  rewrites that one emitted expression rather than declaring a `window` global. Declaring
+  one would be worse than the bug: `typeof window === 'undefined'` is *the* server check,
+  and a component using it correctly would start taking the browser branch and reading
+  `window.innerWidth` as `undefined` — no error, a plausible value, and markup that
+  disagrees with the browser's. An imported component's stylesheet is inlined in the head
+  alongside the page's own, for the same reason the page's is.
+
+- **A prerender that cannot be trusted fails instead of shipping.** An unresolved component
+  rendered as a literal `<MysteryThing></MysteryThing>` element, an unresolved directive was
+  silently dropped, and an async component that could not load became an empty comment — in
+  every case `ok: true` and markup that merely *differs* from what the browser builds, which
+  a crawler then indexes and the visitor's browser throws away. All three now fail the
+  prerender, so the SPA shell is served instead, which is only slower. The bridge pins Vue's
+  development build to keep the checks working: `warn()` is stripped from the production
+  build, so on a server with `NODE_ENV=production` the two resolution failures had no
+  symptom at all. The rendered HTML is byte-identical between the builds.
+
+- **The bridge says what a developer can change.** `document is not defined` names a Node
+  fact rather than a Vue one and arrives with a stack trace through a `data:` URL pointing
+  at no file anybody wrote. Browser globals reached during render, and unresolved components
+  and directives, are now reported in terms of the cause and the remedies — `mounted()`, a
+  `typeof` guard, `@pwaxImport`, or `->spaOnly()`.
 
 - **A prerendered page is hydrated rather than rendered a second time underneath itself.**
   Vue hydrates from `container.firstChild`, and the shell indented the prerendered markup

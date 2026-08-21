@@ -1383,7 +1383,18 @@ class DoctorCommand extends Command
             /** @var array<string, mixed> $result */
             $result = json_decode($process->getOutput(), true, 512, JSON_THROW_ON_ERROR);
         } catch (Throwable) {
-            $this->fail_(sprintf('SSR bridge did not return JSON. Node output: %s', trim($process->getOutput())));
+            // The bridge reports its own problems as JSON on stdout, so reaching here means
+            // Node itself died — an unresolvable import, a syntax error, a missing script.
+            // That goes to stderr, and reporting only the (empty) stdout is how a missing
+            // `vue` package used to surface as "Node output:" followed by nothing at all.
+            $error = trim($process->getErrorOutput());
+
+            $this->fail_(sprintf(
+                'SSR bridge did not return JSON. %s',
+                $error !== ''
+                    ? 'Node said: ' . $this->firstLine($error)
+                    : 'Node wrote nothing to stdout or stderr.'
+            ));
 
             return;
         }
@@ -1394,6 +1405,11 @@ class DoctorCommand extends Command
             return;
         }
 
+        $this->ok(sprintf(
+            'SSR bridge renders (vue, @vue/server-renderer and @vue/compiler-dom at %s)',
+            (string) $config->get('pwax.assets.versions.vue', '?')
+        ));
+
         $fallback = (string) $config->get('pwax.ssr.fallback', 'spa');
 
         $this->assert(
@@ -1401,5 +1417,24 @@ class DoctorCommand extends Command
             'SSR fallback is "spa" (a Node failure serves the SPA shell)',
             sprintf('SSR fallback is "%s" — a Node failure will return a 500. Set ssr.fallback to "spa" for production.', $fallback),
         );
+    }
+
+    /**
+     * The first non-empty line of a process's stderr.
+     *
+     * A Node stack trace is thirty lines of internals under one line that says what went
+     * wrong. The doctor prints the line that says it.
+     */
+    private function firstLine(string $output): string
+    {
+        foreach (preg_split('/\R/', $output) ?: [] as $line) {
+            $line = trim($line);
+
+            if ($line !== '') {
+                return $line;
+            }
+        }
+
+        return $output;
     }
 }

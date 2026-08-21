@@ -18,19 +18,41 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - New `ssr.*` config block (`pwax.ssr.enabled`, `routes`, `exclude`, `node`, `script`,
     `cache.store`, `cache.ttl`, `timeout`, `fallback`). Off by default.
   - New `ComponentResponse::prerenderable()` and `ComponentResponse::spaOnly()` fluent
-    methods for per-route opt-in/opt-out.
-  - New `@vue/server-renderer` optional peer dependency (mirrors `@vue/compiler-dom`).
-  - New `bin/ssr.mjs` Node bridge, modelled on `bin/compile-templates.mjs`.
+    methods for per-route opt-in/opt-out. `prerenderable()` overrides the eligibility
+    inference: it is the same visitor-independence claim `cacheable()` makes, without the
+    payload caching, for a page that is the same for everyone but has no reason to be
+    HTTP-cacheable.
+  - New optional peer dependencies: `vue`, `@vue/server-renderer` and `@vue/compiler-dom`,
+    all pinned to `assets.versions.vue`. `vue` is among them because the bridge renders a
+    real Vue application in Node — Pwax vendors Vue for the browser, not for npm — and the
+    bridge reports any of the three missing or mismatched as a readable message rather than
+    dying with an unhandled module error.
+  - New `bin/ssr.mjs` Node bridge, modelled on `bin/compile-templates.mjs`. It renders the
+    page inside the same `PwaxPage` wrapper the client builds, from the shared
+    `src/js/pageTemplate.mjs`, so the fragment anchors and branch placeholders Vue's
+    hydration compares are present in the server's HTML.
   - New `X-Pwax-SSR` response header (`1` prerendered, `0` SPA fallback) — informational,
-    not part of `Vary`.
+    not part of `Vary`. With `APP_DEBUG` on, a `0` is accompanied by a log line naming the
+    rule that skipped the route.
   - New `pwax-state` JSON island carrying the prerendered page's resolved state for
-    hydration; new `stateIslandId` runtime config key.
+    hydration; new `stateIslandId` runtime config key. The server's values take precedence
+    over the component's own `data()` for the initial render, which is what makes the
+    island able to reconcile a `data()` that is not a pure function of the document.
   - New `window.pwax.ssrState` — the server's prerendered state, for a page component to
     read in `data()`/`setup()`.
-  - `pwax:doctor` checks the SSR bridge's dependencies and version alignment when enabled.
-  - `pwax:clear` flushes the prerender cache.
-  - Per-visitor pages (rendered with data, not declared `cacheable()`) are excluded by
-    default — same boundary as the compile cache and payload addressability.
+  - A prerendered response inlines the page's compiled `<style>` in the head (keyed
+    `data-pwax-style="pwax:page"`, adopted rather than duplicated by the runtime's style
+    manager) and links its external stylesheets rather than merely preloading them, so the
+    markup is styled before any JavaScript runs. The mount element carries no
+    `pwax-preloader` class, whose `::before` overlay would otherwise cover the content.
+  - `pwax:doctor` checks the SSR bridge's dependencies and version alignment when enabled,
+    reporting Node's own stderr when the bridge cannot start at all.
+  - `pwax:clear` flushes the prerender cache along with the other Pwax stores.
+  - Per-visitor pages (rendered with data, declared neither `cacheable()` nor
+    `prerenderable()`) are excluded by default — same boundary as the compile cache and
+    payload addressability.
+  - Requires `symfony/process`, now declared in `composer.json` rather than relied on
+    transitively through `laravel/framework`.
 - **`MAINTAINING.md`.** The maintainer's counterpart to `CONTRIBUTING.md`: the release
   procedure and why `dist/` has to be rebuilt *before* the tag, how to update the vendored
   Vue/Vue Router/Pinia builds so their versions and SRI hashes stay in step, how to widen

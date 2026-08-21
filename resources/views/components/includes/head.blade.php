@@ -1,9 +1,12 @@
 {{--
-    `$component` is the compiled Mxent\Pwax\Data\Component for this page. Nothing here
-    uses it, but it is passed through deliberately: if you publish this view, it is what
-    you would read to emit per-page <title> or Open Graph tags.
+    `$component` is the compiled Mxent\Pwax\Data\Component for this page. If you publish
+    this view, it is what you would read to emit per-page <title> or Open Graph tags.
+
+    `$prerendered` says whether the response carries server-rendered HTML for this page.
+    When it does, this page's own stylesheet has to be in the document before the markup
+    is painted — see the block near the bottom.
 --}}
-@props(['shell', 'component' => null, 'head' => null, 'title' => null])
+@props(['shell', 'component' => null, 'head' => null, 'title' => null, 'prerendered' => false])
 @php
     /** @var \Mxent\Pwax\Pwa\WebManifest $pwaxManifest */
     $pwaxManifest = app(\Mxent\Pwax\Pwa\WebManifest::class);
@@ -35,6 +38,18 @@
             ? $value
             : $fallback;
     };
+
+    /*
+     * A component's own stylesheet, safe to write into a <style> block.
+     *
+     * The runtime hands this same CSS to the DOM as `textContent`, which cannot terminate
+     * the element it is in. Writing it into the document as markup can: an HTML parser ends
+     * a <style> at the first `</style`, wherever it appears, and a component's CSS is Blade
+     * output — so it may carry an interpolated value that the author did not write. Nothing
+     * valid in CSS needs that sequence, so neutering it costs nothing and closes the one way
+     * out of the block.
+     */
+    $pwaxCss = static fn (string $css): string => (string) preg_replace('#</(style)#i', '<\\/$1', $css);
 
     $background = $pwaxColor('pwax.customization.init_background', '#ffffff');
     $spinnerBg = $pwaxColor('pwax.customization.init_spinner_bg', '#f3f3f3');
@@ -175,9 +190,31 @@
     <link rel="preload" as="script" href="{{ $pwaxExternalScript }}">
 @endforeach
 
+{{--
+    A prerendered page's stylesheets are loaded, not merely hinted at.
+
+    Ordinarily the runtime attaches them: `styles.link()` and `styles.acquire()` run as the
+    page component is mounted, and a preload hint is the right thing here because the sheet
+    is about to be requested by JavaScript anyway. A prerendered page has its markup in the
+    document from the first byte, so waiting for JavaScript would mean painting the page
+    unstyled and restyling it a moment later — and for a visitor without JavaScript, which
+    is who the prerender is for, it would never be styled at all.
+
+    `data-pwax-style` is the key the runtime's reference-counted style manager uses. Marked
+    with it, the inline block below is *adopted* on boot rather than duplicated, and is
+    released like any other page stylesheet on the first navigation away.
+--}}
 @foreach ($component?->externalStyles ?? [] as $pwaxExternalStyle)
-    <link rel="preload" as="style" href="{{ $pwaxExternalStyle }}">
+    @if ($prerendered)
+        <link rel="stylesheet" href="{{ $pwaxExternalStyle }}">
+    @else
+        <link rel="preload" as="style" href="{{ $pwaxExternalStyle }}">
+    @endif
 @endforeach
+
+@if ($prerendered && $component?->style)
+    <style data-pwax-style="pwax:page"{!! $nonceAttr !!}>{!! $pwaxCss($component->style) !!}</style>
+@endif
 
 <style{!! $nonceAttr !!}>
     .pwax-preloader {

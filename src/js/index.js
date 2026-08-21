@@ -15,7 +15,7 @@ import { createBadgeApi, createInstallApi, createStorageApi, watchInstall } from
 import { createLaunchApi, createShareApi, watchLaunch } from './launch.js';
 import { importModule } from './modules.js';
 import { createPushApi } from './push.js';
-import { createPageComponent } from './page.js';
+import { createPageComponent, resolveInitialPage } from './page.js';
 import { createPrefetcher } from './prefetch.js';
 import { createProgress } from './progress.js';
 import { createRouter } from './router.js';
@@ -105,6 +105,52 @@ async function boot() {
 
     const [plugins, directives] = await Promise.all([pluginsReady, directivesReady]);
 
+    // The mount element carries `data-pwax-prerendered` when the server embedded
+    // prerendered HTML for this page. That, plus the initial payload's `hydrate` flag, is
+    // the signal to hydrate the existing DOM rather than mount from scratch — Vue's
+    // `createSSRApp` walks the existing nodes and attaches reactivity to them instead of
+    // replacing them. A page that was not prerendered, or a shell published before this
+    // feature existed, falls through to `createApp` unchanged.
+    const mount = document.getElementById(config.mount || 'pwax');
+
+    if (!mount) {
+        throw new Error(`pwax: mount element #${config.mount || 'pwax'} was not found.`);
+    }
+
+    const prerendered =
+        !!initial && initial.hydrate === true && mount.hasAttribute('data-pwax-prerendered');
+
+    // Published before the page component is built, so a component script evaluated during
+    // `resolveInitialPage` can already read it.
+    window.pwax.ssrState = prerendered ? loadSsrState(config.stateIslandId) : null;
+
+    // Resolved *before* the application is created, not in a lifecycle hook. Vue builds the
+    // virtual DOM it compares against the server's markup on the first render, and no hook
+    // can hold that render back for a promise — so the page component has to be in hand by
+    // the time `mount()` is called, or hydration mismatches and the prerender is discarded.
+    let initialComponent = null;
+
+    if (prerendered && initial.component) {
+        try {
+            initialComponent = await resolveInitialPage({
+                payload: initial.component,
+                styles,
+                config,
+                ssrState: window.pwax.ssrState,
+            });
+        } catch (error) {
+            // Not fatal: without the resolved options the runtime simply mounts the page
+            // on the client, exactly as it does with SSR switched off. The prerendered
+            // markup is replaced rather than hydrated, which is slower and correct.
+            console.error(
+                'pwax: could not prepare the prerendered page for hydration, rendering it on the client instead',
+                error
+            );
+
+            initialComponent = null;
+        }
+    }
+
     const page = createPageComponent({
         http,
         styles,
@@ -114,27 +160,10 @@ async function boot() {
         prefetcher,
         templates: config.templates || {},
         progress: progressBar,
+        initialComponent,
     });
 
-    // The mount element carries `data-pwax-prerendered` when the server embedded
-    // prerendered HTML for this page. That, plus the initial payload's `hydrate` flag, is
-    // the signal to hydrate the existing DOM rather than mount from scratch — Vue's
-    // `createSSRApp` walks the existing nodes and attaches reactivity to them instead of
-    // replacing them. A page that was not prerendered, or a shell published before this
-    // feature existed, falls through to `createApp` unchanged.
-    const mountEl = document.getElementById(config.mount || 'pwax');
-    const hydrating =
-        !!initial &&
-        initial.hydrate === true &&
-        !!mountEl &&
-        mountEl.hasAttribute('data-pwax-prerendered');
-
-    const ssrState = hydrating ? loadSsrState(config.stateIslandId) : null;
-
-    page.setSsrState(ssrState);
-    window.pwax.ssrState = ssrState;
-
-    const createApp = hydrating ? Vue.createSSRApp : Vue.createApp;
+    const createApp = initialComponent ? Vue.createSSRApp : Vue.createApp;
 
     const app = createApp({
         name: 'PwaxApp',
@@ -163,40 +192,13 @@ async function boot() {
     window.pwax.app = app;
     window.pwax.router = router;
 
-    const mount = mountEl;
-
-    if (!mount) {
-        throw new Error(`pwax: mount element #${config.mount || 'pwax'} was not found.`);
-    }
-
     // Waiting for the router means the first paint already has the page component,
     // rather than briefly showing the shell and then swapping.
     await router.isReady();
 
-    // When hydrating a prerendered page, resolve the initial component options before
-    // mount so `createSSRApp` has a virtual DOM that matches the server-rendered HTML it
-    // is about to walk. If `prepareInitial` cannot (no inlined payload, or it failed),
-    // fall back to a normal client-side mount — the page still works, it just is not
-    // hydrated.
-    let didHydrate = false;
-
-    if (hydrating) {
-        try {
-            didHydrate = await page.prepareInitial();
-        } catch (error) {
-            // `prepareInitial` swallows its own errors via `fail()`, but guard the edge.
-            console.error(
-                'pwax: hydration preparation failed, falling back to client render',
-                error
-            );
-        }
-    }
-
-    if (!didHydrate) {
-        app.mount(mount);
-    } else {
-        app.mount(mount, true);
-    }
+    // The second argument is Vue's `isHydrate` flag: walk the existing nodes and attach
+    // reactivity to them, rather than emptying the element and rendering into it.
+    app.mount(mount, !!initialComponent);
 
     mount.classList.remove('pwax-preloader');
 

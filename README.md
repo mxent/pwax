@@ -1450,23 +1450,38 @@ SSR is off by default. Turn it on in `config/pwax.php`:
 ],
 ```
 
-Install the optional peer dependency (it mirrors `@vue/compiler-dom`):
+Install the optional peer dependencies, pinned to the Vue version Pwax vendors
+(`assets.versions.vue`):
 
 ```bash
-npm install --save-dev @vue/server-renderer @vue/compiler-dom
+npm install --save-dev vue@3.5.41 @vue/server-renderer@3.5.41 @vue/compiler-dom@3.5.41
 ```
 
-Run the doctor to confirm the bridge is ready:
+`vue` is in that list because the bridge renders a real Vue application in Node. Pwax
+serves Vue to the *browser* from its own vendored copy, which is why it is not otherwise
+an npm dependency of your application — but Node has no such copy to reach for.
+
+The versions must match. A newer `@vue/server-renderer` emits markup the vendored runtime
+cannot hydrate, so the bridge refuses to run rather than producing a page that looks right
+and then breaks.
+
+Run the doctor to confirm the bridge is ready — it renders a trivial component through the
+real script and reports anything missing or mismatched by name:
 
 ```bash
 php artisan pwax:doctor
 ```
 
+A prerender that cannot run falls back to the SPA shell, which looks exactly like SSR being
+switched off. The doctor is how you tell the two apart.
+
 ### Per-route opt-in and opt-out
 
 A page rendered with controller data is only prerendered when it has declared itself
-visitor-independent through `->cacheable()` — the same claim the compile cache and the
-service worker's offline cache already rely on. A page with no data is always eligible.
+visitor-independent — through `->cacheable()`, which the compile cache and the service
+worker's offline cache already rely on, or through `->prerenderable()`, which makes the
+same claim without asking for the payload to be cached. A page with no data is always
+eligible.
 
 ```php
 // Prerendered (data-free, always eligible):
@@ -1475,12 +1490,22 @@ Route::get('/', fn () => pwaxRender('pages.home'));
 // Prerendered (cacheable, visitor-independent):
 Route::get('/about', fn () => pwaxRender('pages.about', $content)->cacheable(3600));
 
-// Not prerendered (per-visitor data, not cacheable):
+// Prerendered (same claim, no payload caching):
+Route::get('/posts/{post}', fn (Post $post) => pwaxRender('pages.post', compact('post'))
+    ->prerenderable());
+
+// Not prerendered (per-visitor data, neither declared):
 Route::get('/dashboard', fn () => pwaxRender('pages.dashboard', ['user' => $user]));
 
 // Explicitly opt out, even when matched by ssr.routes:
 Route::get('/interactive-demo', fn () => pwaxRender('pages.demo')->spaOnly());
 ```
+
+Do not call `->prerenderable()` on a page whose output depends on who is asking: the
+prerendered HTML is cached and served to everyone.
+
+When a route you expected to be prerendered comes back with `X-Pwax-SSR: 0`, turn on
+`APP_DEBUG` and check the log — the prerenderer records which rule skipped it.
 
 ### How it works
 
@@ -1489,13 +1514,23 @@ Route::get('/interactive-demo', fn () => pwaxRender('pages.demo')->spaOnly());
    `pwax:compile`), feeds it the component + controller data as JSON on stdin, and reads
    `{html, serializedState}` on stdout. The result is cached on the component hash + data
    digest.
-3. The prerendered HTML is embedded inside `<div id="pwax" data-pwax-prerendered>`, and the
-   resolved state is carried in a `pwax-state` JSON island.
-4. The client runtime reads the `hydrate` flag from the initial payload, switches from
-   `Vue.createApp` to `Vue.createSSRApp`, and hydrates the existing DOM.
+3. The prerendered HTML is embedded inside `<div id="pwax" data-pwax-prerendered>`, the
+   resolved state is carried in a `pwax-state` JSON island, and the page's own `<style>`
+   block goes into the head — so the markup is styled before any JavaScript runs, and stays
+   styled for a visitor who has none. A prerendered page carries no loading spinner: the
+   content is already there.
+4. The client runtime reads the `hydrate` flag from the initial payload, resolves the page
+   component *before* the application is created, switches from `Vue.createApp` to
+   `Vue.createSSRApp`, and hydrates the existing DOM.
 5. On any failure — Node missing, peer dep not installed, component throws during render —
    the `Prerenderer` falls back to the normal SPA shell (`ssr.fallback => 'spa'`), so a
    Node outage never takes the page down.
+
+Node is started once per uncached page, which costs roughly a tenth of a second before your
+component renders at all. The prerender cache — keyed on the component hash plus a digest of
+the controller data — is what keeps that off the critical path for everyone after the first
+visitor. `ssr.timeout` bounds a prerender that hangs; the response falls back to the SPA
+shell rather than holding the worker.
 
 ### Seeding hydration state
 
@@ -1517,9 +1552,13 @@ hydration:
 </script>
 ```
 
-The runtime also merges `ssrState` into a component's `data()` return automatically for the
-initial render, so a component that does not read `ssrState` still hydrates with matching
-values — the author's own `data()` wins for any key it sets.
+You rarely need to. The runtime merges `ssrState` into the component's `data()` for the
+initial render automatically, and **the server's values win** where the two disagree: the
+markup the server sent is already in the document, so the client has to agree with it or Vue
+discards the prerender and draws the page again. Your `data()` still runs — a component may
+rely on what it does as much as on what it returns — it just does not get to overrule what
+was already rendered. Every subsequent navigation is an ordinary client-side render, with
+`data()` in sole charge.
 
 ### Observability
 
@@ -1527,6 +1566,14 @@ Prerendered responses carry `X-Pwax-SSR: 1`; SPA fallbacks carry `X-Pwax-SSR: 0`
 header is informational and not part of `Vary` — prerendered HTML is the "shell" branch of
 the existing content negotiation, so a runtime fetch (with `X-Pwax-Component`) still
 receives JSON, never prerendered HTML.
+
+A `0` means one of two things, and they are worth telling apart:
+
+- **The route was not eligible.** With `APP_DEBUG` on, the log names the rule that skipped
+  it — a view pattern, an exclusion, or per-visitor data with neither `cacheable()` nor
+  `prerenderable()`.
+- **The prerender failed and fell back.** A warning is logged once per process, and
+  `php artisan pwax:doctor` reproduces it with the underlying Node error.
 
 ## Security
 

@@ -55,6 +55,17 @@ return [
     |
     */
     'ssr' => [
+        /*
+        | Requires three Node packages, at the same version as `assets.versions.vue`:
+        |
+        |   npm install --save-dev vue@3.5.41 @vue/server-renderer@3.5.41 @vue/compiler-dom@3.5.41
+        |
+        | `vue` is in that list because the bridge renders a real Vue application in Node.
+        | Pwax serves Vue to the browser from its own vendored copy, which is why it is not
+        | otherwise an npm dependency of your application. Run `php artisan pwax:doctor`
+        | after enabling this: a missing or mismatched package makes every prerender fall
+        | back to the SPA shell, which looks exactly like SSR being switched off.
+        */
         'enabled' => false,
 
         /*
@@ -62,6 +73,11 @@ return [
         | view-name patterns (Str::is syntax) matches only those. A site that wants its
         | marketing pages prerendered but an admin SPA left alone lists the marketing
         | views here.
+        |
+        | "Eligible" means the page renders the same for every visitor: one with no
+        | controller data, or one whose route called `->cacheable()` or `->prerenderable()`.
+        | A page rendered with data and neither of those is left to the SPA. With
+        | APP_DEBUG on, the log says which rule skipped a given route.
         */
         'routes' => ['*'],
 
@@ -99,6 +115,10 @@ return [
         | Seconds to wait for the Node process. A prerender that exceeds this is
         | abandoned and the response falls back to the SPA shell, so a slow Node never
         | takes the page down.
+        |
+        | Node is started once per uncached page, which costs about a tenth of a second
+        | before your component renders at all. The prerender cache below is what keeps
+        | that off the critical path for everyone after the first visitor.
         */
         'timeout' => 5,
 

@@ -10,6 +10,7 @@ use Illuminate\Http\Response;
 use Mxent\Pwax\Data\Component;
 use Mxent\Pwax\Data\Head;
 use Mxent\Pwax\Pwa\HeadMeta;
+use Mxent\Pwax\Pwa\Ssr\Prerenderer;
 use Mxent\Pwax\Pwax;
 
 /**
@@ -44,6 +45,8 @@ class ComponentResponse implements Responsable
 
     private bool $storable = true;
 
+    private bool $prerenderable = true;
+
     /** @var array<string, string> */
     private array $headers = [];
 
@@ -62,6 +65,36 @@ class ComponentResponse implements Responsable
     public function asJson(bool $force = true): self
     {
         $this->forceJson = $force;
+
+        return $this;
+    }
+
+    /**
+     * Allow this page to be prerendered to HTML for SEO.
+     *
+     * On by default for eligible pages (those matching `pwax.ssr.routes`, not excluded,
+     * and either data-free or declared {@see cacheable()}). Call this to re-enable after
+     * a blanket `->spaOnly()`, or to make an explicit statement that the page should be
+     * prerendered when SSR is enabled.
+     */
+    public function prerenderable(bool $allow = true): self
+    {
+        $this->prerenderable = $allow;
+
+        return $this;
+    }
+
+    /**
+     * Keep this page as a client-rendered SPA, even when SSR is enabled.
+     *
+     * The per-route escape hatch for a page that should not be prerendered — one that
+     * reads browser-only APIs unavailable during SSR, or that is deliberately
+     * client-only. The page still works exactly as it did before SSR was enabled; it just
+     * receives the normal SPA shell.
+     */
+    public function spaOnly(): self
+    {
+        $this->prerenderable = false;
 
         return $this;
     }
@@ -239,6 +272,50 @@ class ComponentResponse implements Responsable
         return $this;
     }
 
+    /**
+     * The Blade view name this response renders.
+     *
+     * Read by the {@see Prerenderer} to match against `pwax.ssr.routes`.
+     */
+    public function view(): string
+    {
+        return $this->view;
+    }
+
+    /**
+     * The controller data the route passed to `pwaxRender()`.
+     *
+     * @return array<string, mixed>
+     */
+    public function data(): array
+    {
+        return $this->data;
+    }
+
+    /**
+     * Has this response declared itself cacheable through {@see cacheable()}?
+     */
+    public function isCacheable(): bool
+    {
+        return $this->payloadTtl !== null;
+    }
+
+    /**
+     * The payload TTL the response declared, or null when it did not call `cacheable()`.
+     */
+    public function payloadTtl(): ?int
+    {
+        return $this->payloadTtl;
+    }
+
+    /**
+     * Has this response opted out of prerendering through {@see spaOnly()}?
+     */
+    public function isSpaOnly(): bool
+    {
+        return ! $this->prerenderable;
+    }
+
     public function component(): Component
     {
         // `cacheable()` is a stronger claim than the compile cache needs. A page whose
@@ -332,6 +409,35 @@ class ComponentResponse implements Responsable
             'component' => $this->pwax->payload($component, addressable: false),
         ];
 
+        // The prerendered HTML and serialized state, or null when SSR is off, the route
+        // is excluded, or the Node pass failed and fell back to the SPA. Resolved here so
+        // the shell view receives both or neither — a half-populated state island would
+        // be worse than none.
+        $prerendered = null;
+        $state = null;
+        $ssr = false;
+
+        $prerenderer = app(Prerenderer::class);
+
+        if ($prerenderer->shouldRender($this, $request)) {
+            $result = $prerenderer->render($this, $request);
+
+            if ($result !== null) {
+                $prerendered = $result['html'];
+                $state = $result['state'];
+                $ssr = true;
+
+                // The per-response hydration signal travels in the initial payload, not
+                // in the application-wide runtime config — it varies by route, and the
+                // runtime config island is the same for every page. The state rides
+                // alongside it so the client can seed hydration without a second island
+                // read; the standalone `pwax-state` island below is the no-JS / SEO
+                // surface and the source the runtime reads when there is no inline state.
+                $payload['hydrate'] = true;
+                $payload['state'] = json_decode($state, true, 512, JSON_THROW_ON_ERROR);
+            }
+        }
+
         /** @var ViewFactory $views */
         $views = app(ViewFactory::class);
 
@@ -345,12 +451,19 @@ class ComponentResponse implements Responsable
             // Still passed, and still the resolved title. A shell published before `$pwaxHead`
             // existed reads this one, and there is no reason to break it.
             'pwaxTitle' => $head->title,
+            'pwaxPrerendered' => $prerendered,
+            'pwaxState' => $state,
+            'pwaxSsr' => $ssr,
         ])->render();
 
         $response = new Response($html, $this->status, $this->headers);
         $response->headers->set('Content-Type', 'text/html; charset=utf-8');
         $response->headers->set('Cache-Control', 'no-store, private');
         $response->headers->set('Vary', Pwax::VARY);
+        // Informational, not part of VARY: prerendered HTML is still the "shell" branch of
+        // the existing content negotiation. Lets the service worker, monitoring and the
+        // test suite tell the two apart without inspecting the body.
+        $response->headers->set('X-Pwax-SSR', $ssr ? '1' : '0');
 
         if (! $this->storable) {
             $response->headers->set('X-Pwax-Cache', 'none');

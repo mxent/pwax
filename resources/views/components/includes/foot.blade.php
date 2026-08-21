@@ -1,4 +1,4 @@
-@props(['shell', 'initial' => null])
+@props(['shell', 'initial' => null, 'state' => null])
 @php
     $nonce = $shell->nonce();
     $nonceAttr = $nonce ? ' nonce="' . e($nonce) . '"' : '';
@@ -21,6 +21,16 @@
 @if ($initial)
     {{-- The component for this URL, so the first render costs no request. --}}
     <script type="application/json" id="pwax-initial"{!! $nonceAttr !!}>{!! $initial !!}</script>
+@endif
+
+@if ($state)
+    {{--
+        The prerendered page's resolved state, so the client runtime can hydrate without
+        re-running `data()`/`setup()` and disagreeing with the server's HTML. Parsed as
+        data, not executed — the same `JSON_HEX_*` escaping as the other islands. Absent
+        on SPA-only responses, which hydrate from their own `data()` as before.
+    --}}
+    <script type="application/json" id="pwax-state" data-pwax-state{!! $nonceAttr !!}>{!! $state !!}</script>
 @endif
 
 {{--

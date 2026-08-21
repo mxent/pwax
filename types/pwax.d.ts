@@ -50,6 +50,8 @@ declare namespace Pwax {
         prefetch: { mode: string; delay: number } | false;
         progress: { delay: number; trickle: boolean } | false;
         templates: Record<string, string>;
+        /** The id of the JSON island carrying a prerendered page's resolved state. */
+        stateIslandId: string;
     }
 
     interface Http {
@@ -200,6 +202,12 @@ declare namespace Pwax {
          */
         share(data: ShareData): Promise<'shared' | 'dismissed' | 'unavailable'>;
         readonly progress: Progress | null;
+        /**
+         * The server's prerendered state for the initial page, or `null` when this page
+         * was not prerendered. Read in a page component's `data()`/`setup()` to seed
+         * hydration so the reactive values match the server-rendered DOM.
+         */
+        readonly ssrState: Record<string, unknown> | null;
     }
 
     /** Events dispatched on `document`. */

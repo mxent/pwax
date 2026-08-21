@@ -1,5 +1,17 @@
 # Upgrading
 
+## Server-side rendering (optional, no breaking change)
+
+SSR is a new opt-in feature, off by default. No existing application changes behaviour.
+To enable it, install the optional peer dependency and set `pwax.ssr.enabled` to `true`:
+
+```bash
+npm install --save-dev @vue/server-renderer @vue/compiler-dom
+```
+
+See the README's "Server-side rendering for SEO" section for the full configuration and
+per-route API. `php artisan pwax:doctor` checks the bridge when SSR is enabled.
+
 ## 4.x → 5.0
 
 5.0 removes the compatibility shims 4.x carried. There is nothing new to learn; there is a

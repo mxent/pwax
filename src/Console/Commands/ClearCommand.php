@@ -22,6 +22,7 @@ class ClearCommand extends Command
         $stores = array_values(array_unique(array_filter([
             (string) config('pwax.cache.store', '') ?: null,
             (string) config('pwax.minify.store', '') ?: null,
+            (string) config('pwax.ssr.cache.store', '') ?: null,
         ])));
 
         // `null` means "the application default store", which is the common case.

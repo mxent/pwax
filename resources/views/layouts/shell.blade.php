@@ -65,30 +65,50 @@
         anywhere in the app was announced, and the whole application was labelled
         "Loading". This element is a container; nothing about it is a status.
     --}}
-    <div id="pwax" class="pwax-preloader" tabindex="-1">
-        <span class="pwax-sr-only" role="status">Loading</span>
-        @yield('content')
+    <div id="pwax" class="pwax-preloader" tabindex="-1"@if (isset($pwaxPrerendered) && $pwaxPrerendered) data-pwax-prerendered @endif>
+        @if (isset($pwaxPrerendered) && $pwaxPrerendered)
+            {{-- The prerendered page content. Trusted server output from the Node SSR bridge, so raw echo is correct — same trust level as the JSON islands below. The runtime hydrates this DOM rather than replacing it. --}}
+            {!! $pwaxPrerendered !!}
+        @else
+            <span class="pwax-sr-only" role="status">Loading</span>
+            @yield('content')
+        @endif
     </div>
 
-    {{--
-        Said once, plainly, to whoever has JavaScript off or blocked.
-
-        This application is rendered in the browser: the page's markup is compiled from a
-        payload in this document by Vue, so there is nothing to progressively enhance and
-        nothing useful to put here instead. Saying so is better than the alternative, which
-        is a spinner that never stops.
-    --}}
-    <noscript>
-        {{-- The preloader is a spinner waiting for a runtime that will never boot. --}}
-        <style>.pwax-preloader{display:none}</style>
-        <div class="pwax-screen" role="alert">
-            <div class="pwax-screen__panel">
-                <p class="pwax-screen__code">JavaScript</p>
-                <h1 class="pwax-screen__title">This app needs JavaScript</h1>
-                <p class="pwax-screen__message">Enable it for this site, then reload the page.</p>
+    @if (isset($pwaxPrerendered) && $pwaxPrerendered)
+        {{--
+            The page's content is already in the document, prerendered by the Node SSR
+            bridge. JavaScript is only needed for interactivity and client-side
+            navigation, so the no-JS message is minimal rather than a wall — and the
+            preloader-hiding style is not emitted, because the prerendered content lives
+            inside `.pwax-preloader` and hiding it would hide the page.
+        --}}
+        <noscript>
+            <div class="pwax-screen pwax-noscript-hint" role="status">
+                <p>Enable JavaScript for full interactivity.</p>
             </div>
-        </div>
-    </noscript>
+        </noscript>
+    @else
+        {{--
+            Said once, plainly, to whoever has JavaScript off or blocked.
+
+            This application is rendered in the browser: the page's markup is compiled from a
+            payload in this document by Vue, so there is nothing to progressively enhance and
+            nothing useful to put here instead. Saying so is better than the alternative, which
+            is a spinner that never stops.
+        --}}
+        <noscript>
+            {{-- The preloader is a spinner waiting for a runtime that will never boot. --}}
+            <style>.pwax-preloader{display:none}</style>
+            <div class="pwax-screen" role="alert">
+                <div class="pwax-screen__panel">
+                    <p class="pwax-screen__code">JavaScript</p>
+                    <h1 class="pwax-screen__title">This app needs JavaScript</h1>
+                    <p class="pwax-screen__message">Enable it for this site, then reload the page.</p>
+                </div>
+            </div>
+        </noscript>
+    @endif
 
     {{--
         Where the runtime announces a client-side navigation.
@@ -99,7 +119,7 @@
     --}}
     <div id="pwax-announcer" class="pwax-sr-only" role="status" aria-live="polite"></div>
 
-    <x-pwax::includes.foot :shell="$pwaxShell" :initial="$pwaxInitial ?? null" />
+    <x-pwax::includes.foot :shell="$pwaxShell" :initial="$pwaxInitial ?? null" :state="$pwaxState ?? null" />
     @stack('pwax-foot')
 </body>
 

@@ -66,6 +66,12 @@ class Shell
             'directives' => $this->extensions('pwax.vue.directives'),
             'middleware' => $this->extensions('pwax.vue.middleware'),
             'templates' => $this->templates(),
+            // The id of the JSON island that carries a prerendered page's resolved state,
+            // so the client runtime can find it for hydration. A constant rather than a
+            // per-response value: the island id is the same for every page, and putting it
+            // here keeps the runtime bundle static. The per-response `hydrate` flag lives
+            // in the `pwax-initial` island instead, since it varies by route.
+            'stateIslandId' => 'pwax-state',
         ];
     }
 

@@ -1422,6 +1422,112 @@ browser. `assets.node` sets the Node binary if it is not on `PATH`;
 `assets.render_functions` moves the store, which is worth doing if you build the artifact
 in CI and ship it with the release.
 
+## Server-side rendering for SEO
+
+By default the first paint of a Pwax route is an SPA shell: the page's markup is compiled
+from a payload by Vue in the browser, so crawlers and visitors without JavaScript see an
+empty mount point. **Server-side rendering** prerenders that first response to real HTML
+through a Node bridge, using the same compiled component the browser would receive run
+through `@vue/server-renderer`. The client runtime then **hydrates** the existing DOM
+rather than replacing it.
+
+The developer's authoring model does not change: components stay Blade views with
+`<template>/<script>/<style>`, controllers still call
+`pwaxRender('pages.home', $data)`. SSR is a property of the response, not of the component.
+
+### Enabling SSR
+
+SSR is off by default. Turn it on in `config/pwax.php`:
+
+```php
+'ssr' => [
+    'enabled' => true,
+    'routes' => ['*'],          // or a list of view-name patterns: ['pages.*']
+    'exclude' => [],            // view-name patterns to skip, e.g. ['pages.admin.*']
+    'node' => 'node',           // the Node binary
+    'timeout' => 5,             // seconds before falling back to the SPA shell
+    'fallback' => 'spa',        // 'spa' (default) or 'error'
+],
+```
+
+Install the optional peer dependency (it mirrors `@vue/compiler-dom`):
+
+```bash
+npm install --save-dev @vue/server-renderer @vue/compiler-dom
+```
+
+Run the doctor to confirm the bridge is ready:
+
+```bash
+php artisan pwax:doctor
+```
+
+### Per-route opt-in and opt-out
+
+A page rendered with controller data is only prerendered when it has declared itself
+visitor-independent through `->cacheable()` — the same claim the compile cache and the
+service worker's offline cache already rely on. A page with no data is always eligible.
+
+```php
+// Prerendered (data-free, always eligible):
+Route::get('/', fn () => pwaxRender('pages.home'));
+
+// Prerendered (cacheable, visitor-independent):
+Route::get('/about', fn () => pwaxRender('pages.about', $content)->cacheable(3600));
+
+// Not prerendered (per-visitor data, not cacheable):
+Route::get('/dashboard', fn () => pwaxRender('pages.dashboard', ['user' => $user]));
+
+// Explicitly opt out, even when matched by ssr.routes:
+Route::get('/interactive-demo', fn () => pwaxRender('pages.demo')->spaOnly());
+```
+
+### How it works
+
+1. `ComponentResponse::shell()` asks the `Prerenderer` whether to render.
+2. The `Prerenderer` spawns `bin/ssr.mjs` (the same Node-bridge pattern as
+   `pwax:compile`), feeds it the component + controller data as JSON on stdin, and reads
+   `{html, serializedState}` on stdout. The result is cached on the component hash + data
+   digest.
+3. The prerendered HTML is embedded inside `<div id="pwax" data-pwax-prerendered>`, and the
+   resolved state is carried in a `pwax-state` JSON island.
+4. The client runtime reads the `hydrate` flag from the initial payload, switches from
+   `Vue.createApp` to `Vue.createSSRApp`, and hydrates the existing DOM.
+5. On any failure — Node missing, peer dep not installed, component throws during render —
+   the `Prerenderer` falls back to the normal SPA shell (`ssr.fallback => 'spa'`), so a
+   Node outage never takes the page down.
+
+### Seeding hydration state
+
+A page component can read the server's prerendered state in `data()`/`setup()` to seed
+hydration:
+
+```blade
+<template>
+    <div>{{ title }}</div>
+</template>
+
+<script>
+    export default {
+        data() {
+            // window.pwax.ssrState is null when the page was not prerendered.
+            return { title: window.pwax?.ssrState?.title ?? 'Home' };
+        },
+    };
+</script>
+```
+
+The runtime also merges `ssrState` into a component's `data()` return automatically for the
+initial render, so a component that does not read `ssrState` still hydrates with matching
+values — the author's own `data()` wins for any key it sets.
+
+### Observability
+
+Prerendered responses carry `X-Pwax-SSR: 1`; SPA fallbacks carry `X-Pwax-SSR: 0`. The
+header is informational and not part of `Vary` — prerendered HTML is the "shell" branch of
+the existing content negotiation, so a runtime fetch (with `X-Pwax-Component`) still
+receives JSON, never prerendered HTML.
+
 ## Security
 
 ### Component identifiers are signed
@@ -1642,6 +1748,20 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `head.description`, `.icon` | `null` | Fall back to the manifest's |
 | `head.base` | `null` | `<base href>`; off because it rewrites every relative URL |
 | `head.color_scheme`, `.theme_color_dark` | `null` | Dark-mode head hints |
+
+### Server-side rendering
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `ssr.enabled` | `false` | Prerender the first paint of eligible routes to HTML |
+| `ssr.routes` | `['*']` | View-name patterns (`Str::is`) to prerender; `['*']` matches all eligible |
+| `ssr.exclude` | `[]` | View-name patterns to skip even when matched by `routes` |
+| `ssr.node` | `'node'` | Node binary the SSR bridge runs through |
+| `ssr.script` | `null` | Path to the bridge script (defaults to the package's `bin/ssr.mjs`) |
+| `ssr.cache.store` | `null` | Cache store for prerendered HTML (`null` = default store) |
+| `ssr.cache.ttl` | `null` | Seconds to keep an entry (`null` = forever for data-free pages) |
+| `ssr.timeout` | `5` | Seconds before abandoning the Node pass and falling back |
+| `ssr.fallback` | `'spa'` | `'spa'` (serve the SPA shell on failure) or `'error'` (return 500) |
 
 ### Service worker
 

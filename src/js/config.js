@@ -12,6 +12,7 @@ const DEFAULTS = {
     hashRouting: false,
     serviceWorker: null,
     home: '/',
+    stateIslandId: 'pwax-state',
 };
 
 /**
@@ -57,4 +58,20 @@ export function loadConfig() {
  */
 export function loadInitialPayload() {
     return readJsonIsland('pwax-initial', null);
+}
+
+/**
+ * The resolved state the server prerendered this page with, if any.
+ *
+ * Read from the `pwax-state` JSON island (id configurable via `stateIslandId`) when the
+ * initial payload marks itself as `hydrate: true`. The client runtime uses it to seed
+ * hydration so the reactive state matches the server-rendered DOM — without it, the
+ * component's own `data()`/`setup()` would run again and could disagree with the HTML
+ * for one render.
+ *
+ * @param {string} id
+ * @returns {Record<string, unknown>|null}
+ */
+export function loadSsrState(id = 'pwax-state') {
+    return readJsonIsland(id, null);
 }

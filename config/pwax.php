@@ -25,6 +25,97 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Server-side rendering (prerendering for SEO)
+    |--------------------------------------------------------------------------
+    |
+    | Off by default. When enabled, the first-paint response of a matched route is
+    | prerendered to real HTML by a short-lived Node process — the same compiled
+    | `Component` the browser would receive, run through `@vue/server-renderer` — so
+    | crawlers, social scrapers and visitors without JavaScript see the page's content
+    | instead of an empty mount point. The client runtime then hydrates the existing
+    | DOM rather than replacing it.
+    |
+    | The developer's authoring model does not change: components stay Blade views with
+    | `<template>/<script>/<style>`, controllers still call
+    | `pwaxRender('pages.home', $data)`. SSR is a property of the response, not of the
+    | component.
+    |
+    | `@vue/server-renderer` and `@vue/compiler-dom` are optional peer dependencies, just
+    | as `@vue/compiler-dom` is for `pwax:compile`. An application that has not enabled
+    | SSR never needs to install them:
+    |
+    |     npm install --save-dev @vue/server-renderer @vue/compiler-dom
+    |
+    | Per-visitor pages are excluded by default. A page rendered with controller data is
+    | only prerendered when it has declared itself visitor-independent through
+    | `->cacheable()` — the same claim the compile cache and the service worker's
+    | offline cache already rely on. A page with no data is always eligible. This is the
+    | same boundary `Pwax::payload()` draws for addressability, for the same reason: a
+    | page whose output depends on the visitor cannot be prerendered for everyone.
+    |
+    */
+    'ssr' => [
+        'enabled' => false,
+
+        /*
+        | Which routes to prerender. `['*']` matches every eligible page; a list of
+        | view-name patterns (Str::is syntax) matches only those. A site that wants its
+        | marketing pages prerendered but an admin SPA left alone lists the marketing
+        | views here.
+        */
+        'routes' => ['*'],
+
+        /*
+        | View-name patterns to skip even when matched by `routes`. Checked after
+        | `routes`, so a broad `routes => ['*']` plus a narrow exclude is the usual shape.
+        */
+        'exclude' => [],
+
+        /*
+        | The Node binary. Defaults to `node` on the PATH; set this to an absolute path
+        | for deployments where the web server's PATH does not include Node.
+        */
+        'node' => 'node',
+
+        /*
+        | The SSR bridge script. Defaults to the package's own `bin/ssr.mjs`. Point this
+        | at your own script only if you need to customise the render pipeline.
+        */
+        'script' => null,
+
+        /*
+        | Where to cache prerendered HTML, keyed on the component hash + a digest of the
+        | controller data. A page rendered with no data is cached forever; a page
+        | rendered with data is cached only when `->cacheable()` was called — reusing
+        | the same visitor-independence claim the compile cache relies on. `null` uses
+        | the application's default cache store.
+        */
+        'cache' => [
+            'store' => null,
+            'ttl' => null,
+        ],
+
+        /*
+        | Seconds to wait for the Node process. A prerender that exceeds this is
+        | abandoned and the response falls back to the SPA shell, so a slow Node never
+        | takes the page down.
+        */
+        'timeout' => 5,
+
+        /*
+        | What to do when the prerender fails — Node is missing, the peer dependency is
+        | not installed, the component throws during render.
+        |
+        | 'spa'    Serve the normal SPA shell. The page still works; it just is not
+        |          prerendered. The default, and the only safe choice in production.
+        | 'error'  Return a 500. For development, when you want to know the prerender
+        |          broke rather than silently falling back.
+        */
+        'fallback' => 'spa',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Middleware
     |--------------------------------------------------------------------------
     |

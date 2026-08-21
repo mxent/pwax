@@ -236,8 +236,8 @@ fine; removing from them is a major version.
   spelling gives you the others.
 - `Mxent\Pwax\Http\Responses\ComponentResponse` and its fluent API:
   `title()`, `description()`, `canonical()`, `meta()`, `property()`,
-  `offline()`, `status()`. Implements `Responsable`, so a controller can
-  `return $response;`.
+  `offline()`, `status()`, `prerenderable()`, `spaOnly()`. Implements
+  `Responsable`, so a controller can `return $response;`.
 - The `Mxent\Pwax\Pwa\HeadMeta` resolver and its `Data\Head` value object —
   page metadata flows through this, and the runtime carries the resolved
   head in the payload so client-side navigations update `<title>` and the
@@ -253,6 +253,12 @@ fine; removing from them is a major version.
   `vue.*` move for the canonical recipe).
 - The HTTP routes registered by `routes/web.php` (the `__pwax__/*` prefix).
 - The HTTP headers `X-Pwax-Component` and `X-Pwax-Location`.
+- The informational response header `X-Pwax-SSR` (`1` when the page was
+  prerendered, `0` on SPA fallback). Not part of `Vary` — prerendered HTML
+  is the "shell" branch of the existing content negotiation.
+- The `pwax-state` JSON island id (default `pwax-state`, configurable via
+  `stateIslandId` in the runtime config), carrying a prerendered page's
+  resolved state for hydration.
 - The response headers set by `pwax.security.*` (`COOP`, `COEP`,
   `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`).
 
@@ -285,6 +291,9 @@ reachable from this object is part of the contract:
 - `window.pwax.share` — Web Share integration.
 - `window.pwax.prefetch(url)` — explicit prefetch.
 - `window.pwax.progress.{start,done,reset}` — the progress bar.
+- `window.pwax.ssrState` — the server's prerendered state for the initial
+  page, or `null` when the page was not prerendered. Read in a page
+  component's `data()`/`setup()` to seed hydration.
 - The service worker registration at `/sw.js`.
 - The web manifest at `/manifest.json` and `/manifest.webmanifest`.
 - The component route prefix `__pwax__` and the URL shape `__pwax__/c/{id}.js`.
@@ -481,6 +490,9 @@ half of the issues that arrive on the maintainer queue:
   `$pwaxMeta`. The meta flow goes through
   `ComponentResponse::title/description/canonical/meta/property` and
   `Pwa\HeadMeta::resolve()`. A consumer setting `pwaxMeta` is dead code.
+  This is also true for SSR: the prerendered page's `<title>` and meta tags
+  come from the same `HeadMeta` resolver, not from a shared variable, so a
+  `pwaxMeta` share is invisible to crawlers too.
 - **Manual `<script src="/__pwax__/pwax.js">` in a published shell** — the
   package adds the runtime itself.
 - **Custom registration of `pwax/sw.js` from the application** — let the

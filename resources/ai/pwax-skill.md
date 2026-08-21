@@ -248,7 +248,7 @@ return pwaxRender('pages.post.show', ['post' => $post])
 ```
 
 Methods available: `title()`, `description()`, `canonical()`, `meta()`,
-`property()`, `offline()`, `status()`. Use `->status(404)` instead of
+`property()`, `offline()`, `status()`, `prerenderable()`, `spaOnly()`. Use `->status(404)` instead of
 converting the response to a Symfony `Response` and calling
 `setStatusCode()` on it — that bypasses the runtime's signal that the
 URL produced a real page. The 404 fallback should look like:
@@ -660,7 +660,100 @@ and out of `<template>`, which is the idiomatic split anyway.
 
 ---
 
-## 18. Bundling your own JS / CSS alongside Pwax
+## 18. Server-side rendering for SEO
+
+Off by default. When enabled, the first-paint response of an eligible
+route is prerendered to real HTML through a Node bridge
+(`bin/ssr.mjs`), using the same compiled `Component` the browser would
+receive run through `@vue/server-renderer`. The client runtime then
+**hydrates** the existing DOM via `createSSRApp` rather than replacing
+it. The authoring model does not change: components stay Blade views,
+controllers still call `pwaxRender()`.
+
+### Enabling it
+
+```bash
+npm install --save-dev @vue/server-renderer @vue/compiler-dom
+```
+
+```php
+'ssr' => [
+    'enabled' => true,
+    'routes' => ['*'],          // or view-name patterns: ['pages.*']
+    'exclude' => [],            // e.g. ['pages.admin.*']
+    'node' => 'node',
+    'timeout' => 5,
+    'fallback' => 'spa',        // 'spa' (default) or 'error'
+],
+```
+
+`php artisan pwax:doctor` checks the bridge's dependencies and version
+alignment when SSR is enabled.
+
+### Which pages get prerendered
+
+A page rendered with controller data is only prerendered when it has
+declared itself visitor-independent through `->cacheable()` — the same
+claim the compile cache and the service worker's offline cache rely
+on. A page with no data is always eligible. This is the same boundary
+as `pwax:compile`'s "template must be the same for every visitor"
+constraint, for the same reason.
+
+```php
+// Prerendered (data-free):
+Route::get('/', fn () => pwaxRender('pages.home'));
+
+// Prerendered (cacheable, visitor-independent):
+Route::get('/about', fn () => pwaxRender('pages.about', $content)->cacheable(3600));
+
+// Not prerendered (per-visitor data, not cacheable):
+Route::get('/dashboard', fn () => pwaxRender('pages.dashboard', ['user' => $user]));
+
+// Explicit opt-out, even when matched by ssr.routes:
+Route::get('/interactive-demo', fn () => pwaxRender('pages.demo')->spaOnly());
+```
+
+### Seeding hydration state
+
+A page component can read the server's prerendered state in `data()`
+or `setup()` via `window.pwax.ssrState` (null when not prerendered):
+
+```blade
+<script>
+    export default {
+        data() {
+            return { title: window.pwax?.ssrState?.title ?? 'Home' };
+        },
+    };
+</script>
+```
+
+The runtime also merges `ssrState` into a component's `data()` return
+automatically for the initial render — the author's own `data()` wins
+for any key it sets, so a component that does not read `ssrState` still
+hydrates with matching values.
+
+### Failure mode
+
+On any failure — Node missing, peer dep not installed, component
+throws during render — the `Prerenderer` falls back to the normal SPA
+shell (`ssr.fallback => 'spa'`), so a Node outage never takes the page
+down. Prerendered responses carry `X-Pwax-SSR: 1`; SPA fallbacks carry
+`X-Pwax-SSR: 0`. A runtime fetch (with `X-Pwax-Component`) still
+receives JSON, never prerendered HTML — the content negotiation is
+unchanged.
+
+### Metadata still flows through the fluent API
+
+SSR does **not** introduce a `View::share('pwaxMeta', ...)` mechanism.
+The prerendered page's `<title>` and meta tags come from the same
+`ComponentResponse::title/description/canonical/meta/property` +
+`HeadMeta::resolve()` flow as the SPA. A `pwaxMeta` share is invisible
+to crawlers too — it is dead code with or without SSR.
+
+---
+
+## 19. Bundling your own JS / CSS alongside Pwax
 
 Pwax owns the runtime, but you can still ship your own JS / CSS:
 
@@ -684,7 +777,7 @@ its own application JS / CSS, Pwax for the runtime and pages, and
 
 ---
 
-## 19. Debugging a `pwax:doctor` warning
+## 20. Debugging a `pwax:doctor` warning
 
 The doctor names the problem and the fix. Read the warning in full:
 
@@ -705,6 +798,10 @@ The doctor names the problem and the fix. Read the warning in full:
 - **"CDN assets have no subresource integrity hashes configured"** —
   every entry in `pwax.assets.cdn.integrity` needs an `sha384-…`
   hash.
+- **"SSR is enabled but the bridge failed"** — `@vue/server-renderer`
+  or `@vue/compiler-dom` is missing or version-mismatched. Run
+  `npm install --save-dev @vue/server-renderer @vue/compiler-dom`,
+  matching the version in `pwax.assets.versions.vue`.
 
 The full list lives in `src/Console/Commands/DoctorCommand.php`. When
 the doctor says "no problems, N warnings", every warning is a thing
@@ -716,7 +813,7 @@ checks whether precached entries are reachable.
 
 ---
 
-## 20. Pitfalls worth their own section
+## 21. Pitfalls worth their own section
 
 ### The `@{{ }}` escape
 
@@ -765,7 +862,7 @@ view of the same name. There is no upstream merge; `pwax:install
 
 ---
 
-## 21. When you are stuck
+## 22. When you are stuck
 
 1. `php artisan pwax:doctor` — most warnings name the fix.
 2. `php artisan pwax:routes` — every endpoint Pwax owns.

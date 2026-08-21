@@ -21,6 +21,26 @@ export function createStyleManager(doc = document) {
     }
 
     /**
+     * An already-present `<style>` for this key, if the server inlined one.
+     *
+     * Scanned rather than matched with an attribute selector: keys are component
+     * identifiers and `pwax:page`, and a colon in a selector value would have to be quoted
+     * and escaped. There are only ever a handful of these elements.
+     *
+     * @param {string} key
+     * @returns {Element|null}
+     */
+    function findStyle(key) {
+        for (const el of doc.querySelectorAll('style[data-pwax-style]')) {
+            if (el.getAttribute('data-pwax-style') === key) {
+                return el;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Register a user of a stylesheet, inserting it if this is the first.
      *
      * @param {string} key stable identity for the style — the component id
@@ -36,6 +56,18 @@ export function createStyleManager(doc = document) {
 
         if (existing) {
             existing.count += 1;
+            return;
+        }
+
+        // A prerendered page arrives with its stylesheet already in the head: the server
+        // inlines it so the HTML it sent is styled before any JavaScript has run. Adopting
+        // that element rather than appending a second copy is what keeps the count honest —
+        // and what lets `release()` actually remove it when the page is navigated away
+        // from, instead of leaving the first page's rules applying to every page after it.
+        const adopted = findStyle(key);
+
+        if (adopted) {
+            entries.set(key, { count: 1, el: adopted });
             return;
         }
 

@@ -7,6 +7,7 @@
 
 import { applyHead } from './head.js';
 import { HttpError } from './http.js';
+import { pageTemplate } from './pageTemplate.mjs';
 import {
     ensureRenderable,
     importInlineModule,
@@ -15,9 +16,24 @@ import {
     toComponentOptions,
 } from './modules.js';
 
-const PAGE_STYLE_KEY = 'pwax:page';
-
-const DEFAULT_LOADER = '<div class="pwax-loading" role="status">Loading…</div>';
+/**
+ * The style manager key for a page's own stylesheet.
+ *
+ * Keyed on the component, not on the slot. This was the constant `pwax:page`, which reads
+ * like an identity and is not one: the manager counts references per key, so acquiring the
+ * next page's stylesheet under the same key as the current one merely incremented a counter
+ * and left the *previous* page's CSS in the document — and `mount()` acquires before it
+ * releases, deliberately, so that the swap never flashes unstyled content. The net effect
+ * was that from the second page onward every visitor saw the first page's rules and none of
+ * their own. Distinct keys make the acquire/release pair do what it says, and keep the
+ * overlap that avoids the flash.
+ *
+ * `hash` is the component digest the payload always carries; the style's length is the
+ * fallback, matching how `toOptions()` keys the inline module cache.
+ */
+function pageStyleKey(payload) {
+    return 'pwax:page:' + (payload?.hash || (payload?.style || '').length);
+}
 
 /**
  * Run a DOM mutation inside `document.startViewTransition` when the browser supports it.
@@ -84,24 +100,110 @@ const csrfReload = {
 };
 
 /**
- * The error screen, used when the server did not send one.
+ * Turn a payload into Vue component options.
  *
- * A trimmed copy of `components/error.blade.php` — no home link, because this file cannot
- * know where home is. Keep the two in step: an application that publishes the view should
- * not get a visibly different screen from one that does not.
+ * `module` is present only for components addressable by URL alone. A page rendered with
+ * controller data is not, so it ships its script inline.
+ *
+ * Module scope rather than a method: it reads no instance state, and hydration has to
+ * resolve the initial page's options *before* there is an instance to read them from.
  */
-const DEFAULT_ERROR = `
-    <div class="pwax-screen pwax-error" role="alert">
-        <div class="pwax-screen__panel">
-            <p class="pwax-screen__code" v-text="error.status"></p>
-            <h1 class="pwax-screen__title" v-text="error.statusText"></h1>
-            <p class="pwax-screen__message" v-text="error.message"></p>
-            <div class="pwax-screen__actions">
-                <button type="button" class="pwax-button pwax-retry" @click="retry">Try again</button>
-            </div>
-        </div>
-    </div>
-`;
+async function toOptions(payload) {
+    if (payload.module) {
+        const module = await importModule(payload.module);
+        const options = toComponentOptions(module);
+        const meta = styleMetadata(module);
+
+        if (!options.template && !options.render && payload.template) {
+            options.template = payload.template;
+        }
+
+        if (!payload.style && meta.style) {
+            payload.style = meta.style;
+        }
+
+        return ensureRenderable(options);
+    }
+
+    if (!payload.script) {
+        return ensureRenderable({ template: payload.template || '' });
+    }
+
+    const module = await importInlineModule(payload.script, payload.hash || payload.script.length);
+    const options = toComponentOptions(module);
+
+    // A page's precompiled render function travels inside its inline script, so
+    // `toComponentOptions` has already found it; the template is the fallback for when
+    // there is none.
+    if (!options.template && !options.render) {
+        options.template = payload.template || '';
+    }
+
+    return ensureRenderable(options);
+}
+
+/**
+ * Resolve the prerendered page's component options, ready to hydrate.
+ *
+ * `createSSRApp` walks the DOM the server sent and attaches reactivity to it, which only
+ * works if the virtual DOM it builds on the first render already matches that markup. The
+ * page component therefore has to be in hand *before* `mount()` is called — and `created()`
+ * cannot do it, because Vue renders as soon as `created()` returns and will not wait for a
+ * promise. So the runtime resolves it here, before the application is even created, and
+ * hands the result to `createPageComponent()` as its initial component.
+ *
+ * This is what `prepareInitial()` was reaching for. That version was a method on the
+ * options object rather than on an instance, so everything it assigned to `this` landed on
+ * the component *definition*, where `data()` promptly shadowed it: the instance still
+ * rendered the loader, the server's HTML was discarded, and — because it had also consumed
+ * the inlined payload — the runtime fetched the page it was already displaying.
+ *
+ * Returns the options, or throws; the caller falls back to a client-side render.
+ *
+ * @returns {Promise<object>}
+ */
+export async function resolveInitialPage({ payload, styles, config, ssrState = null }) {
+    await Promise.all([
+        ...(payload.styles || []).map((href) => styles.link(href)),
+        ...(payload.scripts || []).map((src) => styles.script(src)),
+    ]);
+
+    const options = await toOptions(payload);
+
+    // Seed the component's state with what the server rendered with.
+    //
+    // The server's values win. The author's `data()` still runs — a component may rely on
+    // what it does as much as on what it returns — but where the two disagree it is the
+    // server's markup that is already in the document, and the client has to agree with it
+    // or Vue throws the prerender away and draws the page again. That is the whole reason
+    // the state island exists, and the merge used to run the other way round, which made it
+    // incapable of changing anything at all.
+    if (ssrState) {
+        const own = options.data;
+
+        options.data =
+            typeof own === 'function'
+                ? function ssrHydrationData(...args) {
+                      return { ...own.apply(this, args), ...ssrState };
+                  }
+                : () => ({ ...ssrState });
+    }
+
+    if (payload.title) {
+        document.title = payload.title;
+    }
+
+    applyHead(payload.head);
+
+    // Last, so that a throw anywhere above leaves nothing acquired. The caller falls back
+    // to a client-side mount on failure, and that path acquires this same key itself —
+    // a reference taken here and never recorded on the instance would never be given back.
+    styles.acquire(pageStyleKey(payload), payload.style || '', { nonce: config.nonce });
+
+    // `markRaw` for the same reason `mount()` uses it: these options are about to sit in
+    // `data()`, and Vue would otherwise walk them and make the whole definition reactive.
+    return Vue.markRaw(options);
+}
 
 export function createPageComponent({
     http,
@@ -114,95 +216,23 @@ export function createPageComponent({
     prefetcher = null,
     templates = {},
     progress = null,
+    // The prerendered page's options, already resolved by `resolveInitialPage()`. When
+    // present, the very first render draws this component instead of the loader — which is
+    // the only way `createSSRApp` can hydrate the markup the server sent, since Vue builds
+    // the virtual DOM it compares against before any lifecycle hook could fetch anything.
+    initialComponent = null,
 }) {
     let initialPayload = initial;
 
-    // The server's prerendered state for the initial page, or null. Set by `index.js`
-    // before the page component is mounted, and consumed in `mount()` so the first
-    // render hydrates with the same values the server rendered with.
-    let ssrState = null;
+    // `resolveInitialPage()` has already consumed the inlined payload for this URL, so
+    // `visit()` must not mount it a second time.
+    const hydratedPath = initialComponent ? initial?.url || '' : null;
+
+    if (initialComponent) {
+        initialPayload = null;
+    }
 
     return {
-        /**
-         * Set the SSR state for the initial page.
-         *
-         * Called once by `index.js` after it reads the `pwax-state` island. A page that
-         * was not prerendered receives null and behaves exactly as before.
-         *
-         * @param {Record<string, unknown>|null} state
-         */
-        setSsrState(state) {
-            ssrState = state;
-        },
-
-        /**
-         * Resolve the initial page's options before mount, for hydration.
-         *
-         * When the server prerendered the page, `createSSRApp` needs the page component
-         * already in place at mount time so the virtual DOM it produces matches the
-         * server-rendered HTML it is hydrating. This resolves the inlined initial
-         * payload's options, applies the SSR state, and sets `this.component` — without
-         * the DOM swap `mount()` would do, because there is nothing to swap: the DOM is
-         * already there. Returns true when it consumed the initial payload (hydration
-         * will proceed), false when there was none (the caller falls back to `createApp`).
-         *
-         * @returns {Promise<boolean>}
-         */
-        async prepareInitial() {
-            if (!initialPayload || !initialPayload.component) {
-                return false;
-            }
-
-            // The URL lives on the outer payload, not on the component itself — same
-            // shape `visit()` reads. `currentPath` is what keys the transition and what
-            // `beforeRouteUpdate` compares against, so it must match the route.
-            this.currentPath = initialPayload.url || '';
-
-            const payload = initialPayload.component;
-            initialPayload = null;
-
-            try {
-                await Promise.all([
-                    ...(payload.styles || []).map((href) => styles.link(href)),
-                    ...(payload.scripts || []).map((src) => styles.script(src)),
-                ]);
-
-                const options = await this.toOptions(payload);
-
-                // Seed the component's `data()` with the server's resolved state so the
-                // hydrated reactive values match the prerendered HTML. The author's own
-                // `data()` runs first and wins for any key it sets; SSR state fills in
-                // only what the author did not, which is the safe merge for hydration.
-                if (ssrState && typeof options.data === 'function') {
-                    const originalData = options.data;
-                    options.data = function ssrHydrationData(...args) {
-                        const own = originalData.apply(this, args);
-                        return { ...ssrState, ...own };
-                    };
-                } else if (ssrState && typeof options.data !== 'function') {
-                    options.data = () => ({ ...ssrState });
-                }
-
-                styles.acquire(PAGE_STYLE_KEY, payload.style || '', { nonce: config.nonce });
-                this.mountedStyleKey = PAGE_STYLE_KEY;
-
-                if (payload.title) {
-                    document.title = payload.title;
-                }
-
-                applyHead(payload.head);
-
-                this.component = Vue.markRaw(options);
-                this.renderedPath = this.currentPath;
-                this.loading = false;
-                this.announced = true;
-
-                return true;
-            } catch (error) {
-                this.fail(error);
-                return false;
-            }
-        },
         name: 'PwaxPage',
 
         /*
@@ -231,38 +261,44 @@ export function createPageComponent({
          *
          * Loader and error markup come from the server so they stay customisable through
          * Blade, while this bundle itself remains static and cacheable.
+         *
+         * Built by `pageTemplate()` rather than written here, because `bin/ssr.mjs` has to
+         * render the identical structure for a prerendered page to hydrate — see the
+         * module's own docblock.
          */
-        template: `
-            <template v-if="error">${templates.error || DEFAULT_ERROR}</template>
-            <template v-else>
-                <template v-if="!component">${templates.loader || DEFAULT_LOADER}</template>
-                <component v-if="component" :is="component" :key="renderedPath"></component>
-            </template>
-        `,
+        template: pageTemplate(templates),
 
         data() {
             return {
-                component: null,
-                loading: true,
+                // Non-null only when hydrating: the server already drew this page, so the
+                // first render has to produce it rather than the loader.
+                component: initialComponent,
+                loading: !initialComponent,
                 error: null,
-                currentPath: null,
+                currentPath: hydratedPath,
                 // The path of the component actually on screen, which during a navigation
                 // is not the path being navigated to. It is what keys the transition, so
                 // it must change only when the rendered page does.
-                renderedPath: null,
+                renderedPath: hydratedPath,
                 // The first paint is not a navigation: the browser has just read the
-                // document, so announcing it again would be noise.
-                announced: false,
+                // document, so announcing it again would be noise. A hydrated page has
+                // already had its first paint, so the next navigation is a real one and
+                // should be announced.
+                announced: !!initialComponent,
             };
         },
 
         created() {
-            // When `prepareInitial()` already resolved and mounted the initial page for
-            // hydration, the `created()` hook has nothing to fetch — the component is in
-            // place and the DOM is already rendered. Skipping `visit()` is what makes
-            // hydration a no-op for the first paint rather than a second render that
-            // replaces the server's HTML.
+            // Hydrating: `resolveInitialPage()` has the component, the server has the
+            // markup, and there is nothing to fetch. Skipping `visit()` is what makes the
+            // first paint a hydration rather than a second render that throws the
+            // server's HTML away.
             if (this.component) {
+                // That call also acquired this page's stylesheet. Recording it here is
+                // what makes the first navigation release it rather than leaving it
+                // applying to every page after this one.
+                this.mountedStyleKey = pageStyleKey(initial?.component);
+
                 return;
             }
 
@@ -271,7 +307,12 @@ export function createPageComponent({
 
         beforeUnmount() {
             this.abort();
-            styles.release(PAGE_STYLE_KEY);
+
+            // Whatever this page acquired, which is not a constant: the key carries the
+            // component's digest so each page's stylesheet has its own identity.
+            if (this.mountedStyleKey) {
+                styles.release(this.mountedStyleKey);
+            }
         },
 
         async beforeRouteUpdate(to, from) {
@@ -404,10 +445,12 @@ export function createPageComponent({
                     // ready, so the swap never flashes unstyled content.
                     const previous = this.mountedStyleKey;
 
-                    const options = await this.toOptions(payload);
+                    const options = await toOptions(payload);
 
-                    styles.acquire(PAGE_STYLE_KEY, payload.style || '', { nonce: config.nonce });
-                    this.mountedStyleKey = PAGE_STYLE_KEY;
+                    const key = pageStyleKey(payload);
+
+                    styles.acquire(key, payload.style || '', { nonce: config.nonce });
+                    this.mountedStyleKey = key;
 
                     if (previous) {
                         styles.release(previous);
@@ -547,49 +590,6 @@ export function createPageComponent({
                 }
 
                 document.getElementById(config.mount || 'pwax')?.focus?.({ preventScroll: true });
-            },
-
-            /**
-             * Turn a payload into Vue component options.
-             *
-             * `module` is present only for components addressable by URL alone. A page
-             * rendered with controller data is not, so it ships its script inline.
-             */
-            async toOptions(payload) {
-                if (payload.module) {
-                    const module = await importModule(payload.module);
-                    const options = toComponentOptions(module);
-                    const meta = styleMetadata(module);
-
-                    if (!options.template && !options.render && payload.template) {
-                        options.template = payload.template;
-                    }
-
-                    if (!payload.style && meta.style) {
-                        payload.style = meta.style;
-                    }
-
-                    return ensureRenderable(options);
-                }
-
-                if (!payload.script) {
-                    return ensureRenderable({ template: payload.template || '' });
-                }
-
-                const module = await importInlineModule(
-                    payload.script,
-                    payload.hash || payload.script.length
-                );
-                const options = toComponentOptions(module);
-
-                // A page's precompiled render function travels inside its inline script,
-                // so `toComponentOptions` has already found it; the template is the
-                // fallback for when there is none.
-                if (!options.template && !options.render) {
-                    options.template = payload.template || '';
-                }
-
-                return ensureRenderable(options);
             },
 
             /**

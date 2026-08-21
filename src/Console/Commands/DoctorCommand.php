@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Mxent\Pwax\Pwa\AssetManifest;
 use Mxent\Pwax\Pwa\ComponentRegistry;
+use Mxent\Pwax\Pwa\Ssr\Prerenderer;
 use Mxent\Pwax\Pwa\Strategy;
 use Mxent\Pwax\Pwa\WebManifest;
 use Mxent\Pwax\Pwax;
@@ -1353,8 +1354,17 @@ class DoctorCommand extends Command
             return;
         }
 
-        $script = dirname(__DIR__, 3) . '/bin/ssr.mjs';
+        // The same file the `Prerenderer` will run, `ssr.script` included — checking the
+        // package's own bridge while the application runs another one is a clean bill of
+        // health for something that was never going to be executed.
+        $script = app(Prerenderer::class)->scriptPath();
         $node = (string) ($config->get('pwax.ssr.node') ?: 'node');
+
+        if (! is_file($script)) {
+            $this->fail_(sprintf('SSR is enabled but the bridge script was not found at %s.', $script));
+
+            return;
+        }
 
         // Run the bridge with an empty payload and ask it to report its dependencies.
         // The bridge writes `{ok: false, message: …}` to stdout when a peer dep is
@@ -1383,7 +1393,18 @@ class DoctorCommand extends Command
             /** @var array<string, mixed> $result */
             $result = json_decode($process->getOutput(), true, 512, JSON_THROW_ON_ERROR);
         } catch (Throwable) {
-            $this->fail_(sprintf('SSR bridge did not return JSON. Node output: %s', trim($process->getOutput())));
+            // The bridge reports its own problems as JSON on stdout, so reaching here means
+            // Node itself died — an unresolvable import, a syntax error, a missing script.
+            // That goes to stderr, and reporting only the (empty) stdout is how a missing
+            // `vue` package used to surface as "Node output:" followed by nothing at all.
+            $error = trim($process->getErrorOutput());
+
+            $this->fail_(sprintf(
+                'SSR bridge did not return JSON. %s',
+                $error !== ''
+                    ? 'Node said: ' . $this->firstLine($error)
+                    : 'Node wrote nothing to stdout or stderr.'
+            ));
 
             return;
         }
@@ -1394,6 +1415,11 @@ class DoctorCommand extends Command
             return;
         }
 
+        $this->ok(sprintf(
+            'SSR bridge renders (vue, @vue/server-renderer and @vue/compiler-dom at %s)',
+            (string) $config->get('pwax.assets.versions.vue', '?')
+        ));
+
         $fallback = (string) $config->get('pwax.ssr.fallback', 'spa');
 
         $this->assert(
@@ -1401,5 +1427,31 @@ class DoctorCommand extends Command
             'SSR fallback is "spa" (a Node failure serves the SPA shell)',
             sprintf('SSR fallback is "%s" — a Node failure will return a 500. Set ssr.fallback to "spa" for production.', $fallback),
         );
+    }
+
+    /**
+     * The one line of a Node stack trace that says what went wrong.
+     *
+     * Not the first non-empty line: an uncaught throw puts the offending file and line
+     * number there, then the source, then a caret, and only then the message. For a missing
+     * package that meant reporting `node:internal/modules/package_json_reader:314` — a true
+     * statement about Node's internals and no help at all — instead of
+     * `Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'vue' …`. So the error line is
+     * sought first, and the first non-empty line is the fallback.
+     */
+    private function firstLine(string $output): string
+    {
+        $lines = array_values(array_filter(
+            array_map(trim(...), preg_split('/\R/', $output) ?: []),
+            static fn (string $line): bool => $line !== '',
+        ));
+
+        foreach ($lines as $line) {
+            if (preg_match('/^[A-Za-z]*(Error|Exception)\b/', $line) === 1) {
+                return $line;
+            }
+        }
+
+        return $lines[0] ?? $output;
     }
 }

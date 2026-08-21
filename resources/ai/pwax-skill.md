@@ -673,8 +673,14 @@ controllers still call `pwaxRender()`.
 ### Enabling it
 
 ```bash
-npm install --save-dev @vue/server-renderer @vue/compiler-dom
+npm install --save-dev vue@3.5.41 @vue/server-renderer@3.5.41 @vue/compiler-dom@3.5.41
 ```
+
+All three, pinned to `assets.versions.vue`. `vue` is on that list
+because the bridge renders a real Vue application in Node — Pwax
+vendors Vue for the *browser*, so it is not otherwise an npm
+dependency. A missing or mismatched package makes every prerender fall
+back to the SPA shell, which looks exactly like SSR being off.
 
 ```php
 'ssr' => [
@@ -693,11 +699,12 @@ alignment when SSR is enabled.
 ### Which pages get prerendered
 
 A page rendered with controller data is only prerendered when it has
-declared itself visitor-independent through `->cacheable()` — the same
-claim the compile cache and the service worker's offline cache rely
-on. A page with no data is always eligible. This is the same boundary
-as `pwax:compile`'s "template must be the same for every visitor"
-constraint, for the same reason.
+declared itself visitor-independent — through `->cacheable()`, the same
+claim the compile cache and the service worker's offline cache rely on,
+or through `->prerenderable()`, which makes that claim without asking
+for the payload to be cached. A page with no data is always eligible.
+This is the same boundary as `pwax:compile`'s "template must be the
+same for every visitor" constraint, for the same reason.
 
 ```php
 // Prerendered (data-free):
@@ -706,12 +713,19 @@ Route::get('/', fn () => pwaxRender('pages.home'));
 // Prerendered (cacheable, visitor-independent):
 Route::get('/about', fn () => pwaxRender('pages.about', $content)->cacheable(3600));
 
-// Not prerendered (per-visitor data, not cacheable):
+// Prerendered (same claim, no payload caching):
+Route::get('/posts/{post}', fn (Post $post) => pwaxRender('pages.post', compact('post'))
+    ->prerenderable());
+
+// Not prerendered (per-visitor data, neither declared):
 Route::get('/dashboard', fn () => pwaxRender('pages.dashboard', ['user' => $user]));
 
 // Explicit opt-out, even when matched by ssr.routes:
 Route::get('/interactive-demo', fn () => pwaxRender('pages.demo')->spaOnly());
 ```
+
+With `APP_DEBUG` on, a route that was skipped is logged with the rule
+that skipped it — the answer to "why is `X-Pwax-SSR` still `0`".
 
 ### Seeding hydration state
 
@@ -728,10 +742,13 @@ or `setup()` via `window.pwax.ssrState` (null when not prerendered):
 </script>
 ```
 
-The runtime also merges `ssrState` into a component's `data()` return
-automatically for the initial render — the author's own `data()` wins
-for any key it sets, so a component that does not read `ssrState` still
-hydrates with matching values.
+You rarely need to. The runtime merges `ssrState` into the component's
+`data()` for the initial render automatically, and **the server's
+values win** where the two disagree: its markup is already in the
+document, so the client has to agree with it or Vue discards the
+prerender and draws the page again. Your `data()` still runs; it just
+does not overrule what was already rendered. Every navigation after the
+first is an ordinary client render, with `data()` in sole charge.
 
 ### Failure mode
 
@@ -742,6 +759,31 @@ down. Prerendered responses carry `X-Pwax-SSR: 1`; SPA fallbacks carry
 `X-Pwax-SSR: 0`. A runtime fetch (with `X-Pwax-Component`) still
 receives JSON, never prerendered HTML — the content negotiation is
 unchanged.
+
+### What a prerendered document looks like
+
+Three things differ from the SPA shell, and all three exist so the
+markup is usable before (and without) JavaScript:
+
+- The mount element carries `data-pwax-prerendered` and **no**
+  `pwax-preloader` class — that class draws an opaque `::before`
+  overlay, which would cover the very content being prerendered.
+- The page's compiled `<style>` is inlined in the head as
+  `<style data-pwax-style="pwax:page:<hash>">`, and its external stylesheets
+  are `rel="stylesheet"` rather than `rel="preload"`. The runtime's
+  style manager *adopts* that block rather than appending a second copy.
+- The `<noscript>` block is a one-line hint rather than the "this app
+  needs JavaScript" wall.
+
+Node is started once per uncached page (~100ms before your component
+renders). The prerender cache — component hash + data digest, honouring
+`ssr.cache.ttl` — keeps that off the critical path after the first
+visitor.
+
+The bridge receives the same payload the browser does, so `pwax:compile`
+and SSR compose: both sides render through the shipped `__pwaxRender`.
+A component script may reference the global `Vue`, as it can in the
+browser — the bridge publishes it before evaluating any module.
 
 ### Metadata still flows through the fluent API
 
@@ -798,10 +840,15 @@ The doctor names the problem and the fix. Read the warning in full:
 - **"CDN assets have no subresource integrity hashes configured"** —
   every entry in `pwax.assets.cdn.integrity` needs an `sha384-…`
   hash.
-- **"SSR is enabled but the bridge failed"** — `@vue/server-renderer`
-  or `@vue/compiler-dom` is missing or version-mismatched. Run
-  `npm install --save-dev @vue/server-renderer @vue/compiler-dom`,
-  matching the version in `pwax.assets.versions.vue`.
+- **"SSR is enabled but the bridge failed"** — one of `vue`,
+  `@vue/server-renderer` or `@vue/compiler-dom` is missing or
+  version-mismatched; the message names which. Run
+  `npm install --save-dev vue@<v> @vue/server-renderer@<v> @vue/compiler-dom@<v>`
+  at the version in `pwax.assets.versions.vue`.
+- **"SSR bridge did not return JSON"** — Node itself died before the
+  script could report anything, and the message carries its first line
+  of stderr. Usually a `node` binary the web server cannot run, or a
+  `ssr.script` pointing somewhere that is not the bridge.
 
 The full list lives in `src/Console/Commands/DoctorCommand.php`. When
 the doctor says "no problems, N warnings", every warning is a thing

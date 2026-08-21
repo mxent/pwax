@@ -75,15 +75,51 @@ describe('style manager', () => {
     // injected style, including those of imported components still on screen.
     it('a page navigation does not disturb an imported component stylesheet', () => {
         styles.acquire('/c/modal.js', '.modal{}');
-        styles.acquire('pwax:page', '.home{}');
+        styles.acquire('pwax:page:home', '.home{}');
 
-        styles.release('pwax:page');
-        styles.acquire('pwax:page', '.about{}');
+        styles.release('pwax:page:home');
+        styles.acquire('pwax:page:about', '.about{}');
 
         expect(document.querySelector('style[data-pwax-style="/c/modal.js"]')).not.toBeNull();
-        expect(document.querySelector('style[data-pwax-style="pwax:page"]').textContent).toBe(
+        expect(document.querySelector('style[data-pwax-style="pwax:page:about"]').textContent).toBe(
             '.about{}'
         );
+    });
+
+    // `page.js` acquires the incoming stylesheet *before* releasing the outgoing one, on
+    // purpose, so that the swap never leaves a frame with neither applied. Under one shared
+    // key that overlap was the bug rather than the feature: acquire found an existing entry,
+    // bumped its count and returned, so the element kept the old page's CSS and the new
+    // page's was never inserted. Distinct keys are what make the overlap safe, and this
+    // asserts the order `page.js` actually uses — the test above uses the other one.
+    it('swaps the page stylesheet when the incoming one is acquired before the outgoing is released', () => {
+        styles.acquire('pwax:page:home', '.home{}');
+        styles.acquire('pwax:page:about', '.about{}');
+        styles.release('pwax:page:home');
+
+        expect(document.querySelector('style[data-pwax-style="pwax:page:home"]')).toBeNull();
+        expect(document.querySelector('style[data-pwax-style="pwax:page:about"]').textContent).toBe(
+            '.about{}'
+        );
+    });
+
+    // The server inlines a prerendered page's stylesheet into the head. Adopting it is what
+    // keeps one element per page rather than two with the same rules.
+    it('adopts a stylesheet the server already put in the document', () => {
+        const inlined = document.createElement('style');
+        inlined.setAttribute('data-pwax-style', 'pwax:page:home');
+        inlined.textContent = '.home{}';
+        document.head.appendChild(inlined);
+
+        styles.acquire('pwax:page:home', '.home{}');
+
+        expect(document.querySelectorAll('style[data-pwax-style="pwax:page:home"]')).toHaveLength(
+            1
+        );
+
+        styles.release('pwax:page:home');
+
+        expect(document.querySelector('style[data-pwax-style="pwax:page:home"]')).toBeNull();
     });
 
     it('does not re-add a stylesheet link that is already present', async () => {

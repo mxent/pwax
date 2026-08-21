@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Mxent\Pwax\Data\Component;
 use Mxent\Pwax\Http\Responses\ComponentResponse;
+use Mxent\Pwax\Pwax;
 use Mxent\Pwax\Support\Shell;
 use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Symfony\Component\Process\Process;
@@ -34,7 +35,12 @@ use Throwable;
  * Caching is keyed on the component hash plus a digest of the controller data, so a
  * changed component or a changed payload produces a new entry. A page rendered with no
  * data is cached indefinitely (like the compile cache); a page rendered with data is
- * cached only when it is cacheable, and for the TTL the response declared.
+ * cached only when it is cacheable, and for the TTL `ssr.cache.ttl` or the response
+ * declared.
+ *
+ * There is no `flush()` here on purpose. `pwax:clear` flushes the store named by
+ * `pwax.ssr.cache.store` along with the others, which is the same thing and does not need
+ * this class to be resolved to do it.
  */
 class Prerenderer
 {
@@ -68,25 +74,57 @@ class Prerenderer
             return false;
         }
 
-        if ($response->isSpaOnly()) {
-            return false;
-        }
-
         $view = $response->view();
 
+        if ($response->isSpaOnly()) {
+            return $this->skip($view, 'the route called spaOnly()');
+        }
+
         if (! $this->matchesRoutes($view)) {
-            return false;
+            return $this->skip($view, 'the view name does not match pwax.ssr.routes');
         }
 
         if ($this->isExcluded($view)) {
-            return false;
+            return $this->skip($view, 'the view name matches pwax.ssr.exclude');
+        }
+
+        // An explicit `prerenderable()` is the route author saying this page is safe to
+        // prerender for everyone, which is exactly the claim the check below infers. It
+        // therefore overrides that check rather than merely surviving it — without this,
+        // the method could only ever be a no-op, since not opting out is the default.
+        if ($response->isPrerenderForced()) {
+            return true;
         }
 
         // A page rendered with no data is a pure function of its view name: every visitor
         // produces the same bytes, so it is safe to prerender. A page rendered *with*
         // data is only safe when the route has declared it visitor-independent through
         // `cacheable()` — the same claim the compile cache relies on.
-        return $response->data() === [] || $response->isCacheable();
+        if ($response->data() === [] || $response->isCacheable()) {
+            return true;
+        }
+
+        return $this->skip(
+            $view,
+            'it was rendered with controller data and declared neither cacheable() nor prerenderable()'
+        );
+    }
+
+    /**
+     * Record why a route was not prerendered, and answer "no".
+     *
+     * Silence is the wrong answer here. A route that quietly serves the SPA shell looks
+     * exactly like SSR not working at all, and the eligibility rules — a view pattern, an
+     * exclusion, an undeclared per-visitor page — are not visible from the response. This
+     * only speaks when the application is in debug mode, so a production log is unaffected.
+     */
+    private function skip(string $view, string $reason): false
+    {
+        if ($this->config->get('app.debug') && function_exists('app') && app()->bound('log')) {
+            Log::debug("pwax: not prerendering [{$view}] because {$reason}.");
+        }
+
+        return false;
     }
 
     /**
@@ -95,9 +133,13 @@ class Prerenderer
      *
      * @return array{html: string, state: string}|null
      */
-    public function render(ComponentResponse $response, Request $request): ?array
+    public function render(ComponentResponse $response, Request $request, ?Component $component = null): ?array
     {
-        $component = $response->component();
+        // Passed in by `ComponentResponse::shell()`, which has already compiled it. Asking
+        // the response for it again re-renders the Blade view — the compile cache is keyed
+        // on the rendered output, so the render has to happen before the cache can be
+        // consulted, and every prerendered request paid for the view twice.
+        $component ??= $response->component();
         $data = $response->data();
         $key = $this->cacheKey($component, $data);
 
@@ -126,7 +168,7 @@ class Prerenderer
         }
 
         if ($cacheable && $this->cache !== null) {
-            $ttl = $response->payloadTtl();
+            $ttl = $this->cacheTtl($response);
 
             try {
                 if ($ttl !== null) {
@@ -150,40 +192,46 @@ class Prerenderer
      */
     public function payload(Component $component, array $data, Request $request): array
     {
-        $shell = app(Shell::class);
-        $templates = $shell->templates();
-        $content = $templates['content'] ?? '<main><router-view></router-view></main>';
-
         return [
             'version' => (string) $this->config->get('pwax.assets.versions.vue', ''),
             'url' => $request->getRequestUri(),
-            'component' => $component->toArray(),
+            // The payload the *browser* receives for this page, not the bare component.
+            // The difference is the precompiled render function: `Pwax::payload()` prepends
+            // it to the inline script for a non-addressable page, so the client renders
+            // through `__pwaxRender` while the bridge, handed `toArray()`, compiled the
+            // template itself. Two routes to the same markup that agree only as long as the
+            // store is in step with the templates — and if it ever is not, they disagree
+            // precisely where a mismatch is hardest to read. Sending the same bytes to both
+            // removes the question.
+            'component' => app(Pwax::class)->payload($component, addressable: false),
             'data' => $data,
-            // The content template the client app renders as its root. The server must
-            // render the same wrapper so the prerendered HTML hydrates without a mismatch.
-            'contentTemplate' => $content,
+            // Every markup fragment the client runtime renders: the root content template,
+            // and the loader and error branches of the page component. The bridge builds
+            // the same component tree from them, because hydration compares structure and
+            // the page component is a fragment — its branch placeholders and its `<!--[-->`
+            // anchors have to be in the server's HTML or Vue discards the whole prerender.
+            'templates' => app(Shell::class)->templates(),
         ];
     }
 
     /**
-     * Flush the prerender cache. Called by `pwax:clear`.
+     * How long to keep a prerendered page, in seconds, or null to keep it indefinitely.
+     *
+     * `ssr.cache.ttl` wins when it is set: it is the application saying how long *any*
+     * prerender may be trusted, which is a different question from how long a payload may
+     * sit in an HTTP cache. Without it, a page that declared `cacheable()` reuses that
+     * lifetime, and a page with no data is kept indefinitely — its key is the component
+     * hash, so a changed component simply produces a new entry and the old one ages out.
      */
-    public function flush(): void
+    private function cacheTtl(ComponentResponse $response): ?int
     {
-        $this->memo = [];
+        $configured = $this->config->get('pwax.ssr.cache.ttl');
 
-        if ($this->cache === null) {
-            return;
+        if (is_numeric($configured)) {
+            return max(0, (int) $configured);
         }
 
-        try {
-            // Content-addressed keys, no tags — same situation as the component cache.
-            // `clear()` flushes the whole store, which is acceptable under an explicit
-            // `pwax:clear`.
-            $this->cache->clear();
-        } catch (Throwable) {
-            // Nothing to flush, or no permission.
-        }
+        return $response->payloadTtl();
     }
 
     /**
@@ -225,7 +273,11 @@ class Prerenderer
             base_path(),
             null,
             (string) json_encode($this->payload($component, $data, $request), JSON_THROW_ON_ERROR),
-            (int) ((float) $this->config->get('pwax.ssr.timeout', 5) * 1000),
+            // Seconds. `Process` has taken seconds since Symfony 2, and multiplying by a
+            // thousand turned the documented five-second budget into eighty-three minutes:
+            // a Node process that hung held the worker for as long as it cared to, which is
+            // the failure the timeout exists to prevent. `pwax:doctor` passes seconds too.
+            (float) $this->config->get('pwax.ssr.timeout', 5),
         );
 
         try {
@@ -298,7 +350,14 @@ class Prerenderer
         return null;
     }
 
-    private function scriptPath(): string
+    /**
+     * The bridge script this application will actually run.
+     *
+     * Public because `pwax:doctor` has to check the same file. It used to hardcode the
+     * package's own `bin/ssr.mjs`, so an application that pointed `ssr.script` elsewhere
+     * got a clean bill of health for a script it does not use.
+     */
+    public function scriptPath(): string
     {
         $configured = $this->config->get('pwax.ssr.script');
 

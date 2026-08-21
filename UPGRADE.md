@@ -3,14 +3,22 @@
 ## Server-side rendering (optional, no breaking change)
 
 SSR is a new opt-in feature, off by default. No existing application changes behaviour.
-To enable it, install the optional peer dependency and set `pwax.ssr.enabled` to `true`:
+To enable it, install the optional peer dependencies — pinned to the Vue version Pwax
+vendors — and set `pwax.ssr.enabled` to `true`:
 
 ```bash
-npm install --save-dev @vue/server-renderer @vue/compiler-dom
+npm install --save-dev vue@3.5.41 @vue/server-renderer@3.5.41 @vue/compiler-dom@3.5.41
+php artisan pwax:doctor
 ```
 
+All three, at the same version. `vue` is on that list because the SSR bridge renders a real
+Vue application in Node; Pwax serves Vue to the browser from its own vendored copy, so it is
+not otherwise an npm dependency of your application. A missing or mismatched package makes
+every prerender fall back to the SPA shell — which looks exactly like SSR being switched off,
+and is why `pwax:doctor` is part of enabling it rather than an afterthought.
+
 See the README's "Server-side rendering for SEO" section for the full configuration and
-per-route API. `php artisan pwax:doctor` checks the bridge when SSR is enabled.
+per-route API.
 
 ## 4.x → 5.0
 

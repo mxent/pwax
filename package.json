@@ -12,8 +12,8 @@
         "test:watch": "vitest",
         "lint": "eslint src/js tests/js build.js bin",
         "lint:fix": "eslint --fix src/js tests/js build.js bin",
-        "format": "prettier --write \"src/js/**/*.js\" \"tests/js/**/*.js\" build.js \"bin/**/*.mjs\"",
-        "format:check": "prettier --check \"src/js/**/*.js\" \"tests/js/**/*.js\" build.js \"bin/**/*.mjs\"",
+        "format": "prettier --write \"src/js/**/*.{js,mjs}\" \"tests/js/**/*.js\" build.js \"bin/**/*.mjs\"",
+        "format:check": "prettier --check \"src/js/**/*.{js,mjs}\" \"tests/js/**/*.js\" build.js \"bin/**/*.mjs\"",
         "types": "tsc --noEmit --strict --lib es2022,dom types/pwax.d.ts"
     },
     "devDependencies": {
@@ -30,13 +30,17 @@
     },
     "peerDependencies": {
         "@vue/compiler-dom": "^3.5.41",
-        "@vue/server-renderer": "^3.5.41"
+        "@vue/server-renderer": "^3.5.41",
+        "vue": "^3.5.41"
     },
     "peerDependenciesMeta": {
         "@vue/compiler-dom": {
             "optional": true
         },
         "@vue/server-renderer": {
+            "optional": true
+        },
+        "vue": {
             "optional": true
         }
     },

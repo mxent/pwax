@@ -35,7 +35,7 @@
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}" dir="{{ $pwaxShell->direction() }}">
 
 <head>
-    <x-pwax::includes.head :shell="$pwaxShell" :component="$pwaxComponent ?? null" :head="$pwaxHead ?? null" :title="$pwaxTitle ?? null" />
+    <x-pwax::includes.head :shell="$pwaxShell" :component="$pwaxComponent ?? null" :head="$pwaxHead ?? null" :title="$pwaxTitle ?? null" :prerendered="$pwaxSsr ?? false" />
     @stack('pwax-head')
 </head>
 
@@ -51,6 +51,12 @@
         `pwax-preloader` covers the mount point with the spinner until the runtime mounts
         and removes the class. Content rendered inside is replaced on mount.
 
+        A prerendered page does not get the class at all. The spinner is drawn by a
+        `::before` pseudo-element with `inset: 0` and `z-index: 9999` — an opaque cover over
+        whatever is inside — so a prerendered page kept it hidden behind a loading indicator
+        until JavaScript booted, and hid it from a visitor without JavaScript permanently.
+        That is the one visitor the prerender is for.
+
         This is the first load, and it is the browser's own wait: a document arriving. The
         progress bar has no part in it — that is for navigations, where the address bar
         does not move and nothing else would say a page is on its way. It is not rendered
@@ -65,8 +71,9 @@
         anywhere in the app was announced, and the whole application was labelled
         "Loading". This element is a container; nothing about it is a status.
     --}}
-    <div id="pwax" class="pwax-preloader" tabindex="-1"@if (isset($pwaxPrerendered) && $pwaxPrerendered) data-pwax-prerendered @endif>
-        @if (isset($pwaxPrerendered) && $pwaxPrerendered)
+    @php($pwaxIsPrerendered = isset($pwaxPrerendered) && $pwaxPrerendered)
+    <div id="pwax" @class(['pwax-preloader' => ! $pwaxIsPrerendered]) tabindex="-1"@if ($pwaxIsPrerendered) data-pwax-prerendered @endif>
+        @if ($pwaxIsPrerendered)
             {{-- The prerendered page content. Trusted server output from the Node SSR bridge, so raw echo is correct — same trust level as the JSON islands below. The runtime hydrates this DOM rather than replacing it. --}}
             {!! $pwaxPrerendered !!}
         @else
@@ -75,7 +82,7 @@
         @endif
     </div>
 
-    @if (isset($pwaxPrerendered) && $pwaxPrerendered)
+    @if ($pwaxIsPrerendered)
         {{--
             The page's content is already in the document, prerendered by the Node SSR
             bridge. JavaScript is only needed for interactivity and client-side

@@ -531,6 +531,24 @@ before answering.
   breaking change and the version bumps.
 - **Committing `dist/` unchanged when `src/js/` changed.** CI catches it,
   but it is a signal you forgot the build step.
+- **Changing the page component's template without going through
+  `src/js/pageTemplate.mjs`.** `PwaxPage` is a fragment: Vue brackets its
+  output with `<!--[-->` / `<!--]-->` anchors and leaves a `<!---->` where
+  a branch did not render, and hydration compares every one of those nodes.
+  `bin/ssr.mjs` builds the same wrapper from that module for exactly this
+  reason. Two copies of the template means prerendered pages that look
+  right, fail to hydrate, and are silently re-rendered on the client —
+  which is what shipped the first time. `tests/js/ssrHydration.test.js`
+  asserts node identity across the mount, which is what catches it.
+- **Adding a bare `import` to `bin/*.mjs` for a package the application may
+  not have.** `package.json` is `export-ignore`d from the Composer package,
+  so these scripts run inside someone else's `node_modules`. Every optional
+  dependency goes through a `try`/`fail()` guard that names the install
+  command; an unguarded top-level `await import()` dies before the script
+  can report anything, and the PHP side sees only a non-zero exit. Relative
+  imports of `src/js/*.mjs` are fine — and must be `.mjs`, or Node resolves
+  them against the host application's `package.json` and loads them as
+  CommonJS.
 - **Adding a new dependency without checking the consumer.** A Laravel
   package is consumed by hundreds of apps; a new hard dependency is a
   surprise to all of them. Talk to the maintainers first.

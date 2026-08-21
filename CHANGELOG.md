@@ -18,19 +18,48 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - New `ssr.*` config block (`pwax.ssr.enabled`, `routes`, `exclude`, `node`, `script`,
     `cache.store`, `cache.ttl`, `timeout`, `fallback`). Off by default.
   - New `ComponentResponse::prerenderable()` and `ComponentResponse::spaOnly()` fluent
-    methods for per-route opt-in/opt-out.
-  - New `@vue/server-renderer` optional peer dependency (mirrors `@vue/compiler-dom`).
-  - New `bin/ssr.mjs` Node bridge, modelled on `bin/compile-templates.mjs`.
+    methods for per-route opt-in/opt-out. `prerenderable()` overrides the eligibility
+    inference: it is the same visitor-independence claim `cacheable()` makes, without the
+    payload caching, for a page that is the same for everyone but has no reason to be
+    HTTP-cacheable.
+  - New optional peer dependencies: `vue`, `@vue/server-renderer` and `@vue/compiler-dom`,
+    all pinned to `assets.versions.vue`. `vue` is among them because the bridge renders a
+    real Vue application in Node — Pwax vendors Vue for the browser, not for npm — and the
+    bridge reports any of the three missing or mismatched as a readable message rather than
+    dying with an unhandled module error.
+  - New `bin/ssr.mjs` Node bridge, modelled on `bin/compile-templates.mjs`. It renders the
+    page inside the same `PwaxPage` wrapper the client builds, from the shared
+    `src/js/pageTemplate.mjs`, so the fragment anchors and branch placeholders Vue's
+    hydration compares are present in the server's HTML. It is handed the same payload the
+    browser receives — `Pwax::payload()`, not the bare `Component` — so a precompiled
+    application renders through the same `__pwaxRender` on both sides instead of the server
+    recompiling the template and agreeing only by coincidence. The Vue runtime is published
+    as `globalThis.Vue` before any component module is evaluated, because that is the global
+    such a module dereferences in the browser.
   - New `X-Pwax-SSR` response header (`1` prerendered, `0` SPA fallback) — informational,
-    not part of `Vary`.
+    not part of `Vary`. With `APP_DEBUG` on, a `0` is accompanied by a log line naming the
+    rule that skipped the route.
   - New `pwax-state` JSON island carrying the prerendered page's resolved state for
-    hydration; new `stateIslandId` runtime config key.
+    hydration; new `stateIslandId` runtime config key. The server's values take precedence
+    over the component's own `data()` for the initial render, which is what makes the
+    island able to reconcile a `data()` that is not a pure function of the document.
   - New `window.pwax.ssrState` — the server's prerendered state, for a page component to
     read in `data()`/`setup()`.
-  - `pwax:doctor` checks the SSR bridge's dependencies and version alignment when enabled.
-  - `pwax:clear` flushes the prerender cache.
-  - Per-visitor pages (rendered with data, not declared `cacheable()`) are excluded by
-    default — same boundary as the compile cache and payload addressability.
+  - A prerendered response inlines the page's compiled `<style>` in the head (keyed
+    `data-pwax-style="pwax:page:<hash>"`, adopted rather than duplicated by the runtime's
+    style manager) and links its external stylesheets rather than merely preloading them, so the
+    markup is styled before any JavaScript runs. The mount element carries no
+    `pwax-preloader` class, whose `::before` overlay would otherwise cover the content.
+  - `pwax:doctor` checks the SSR bridge's dependencies and version alignment when enabled,
+    against the script `ssr.script` actually names rather than the package's own — and
+    reports the line of Node's stderr that says what went wrong when the bridge cannot start
+    at all, rather than the file-and-line header an uncaught throw prints first.
+  - `pwax:clear` flushes the prerender cache along with the other Pwax stores.
+  - Per-visitor pages (rendered with data, declared neither `cacheable()` nor
+    `prerenderable()`) are excluded by default — same boundary as the compile cache and
+    payload addressability.
+  - Requires `symfony/process`, now declared in `composer.json` rather than relied on
+    transitively through `laravel/framework`.
 - **`MAINTAINING.md`.** The maintainer's counterpart to `CONTRIBUTING.md`: the release
   procedure and why `dist/` has to be rebuilt *before* the tag, how to update the vendored
   Vue/Vue Router/Pinia builds so their versions and SRI hashes stay in step, how to widen
@@ -173,6 +202,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   browsers actually offer for; `service_worker.source_maps` is off in production;
   the `push_subscriptions` table exists when VAPID is configured. Each is a check
   that previously failed silently or in a place the developer was not looking.
+
+### Fixed
+
+- **A page's stylesheet is replaced on navigation instead of the first page's being kept.**
+  The style manager counts references per key, and every page acquired its stylesheet under
+  the same constant key `pwax:page` — which reads like an identity and is not one. `mount()`
+  acquires the incoming stylesheet *before* releasing the outgoing one, deliberately, so the
+  swap never leaves a frame with neither applied; under one shared key that overlap meant
+  the second acquire found the existing entry, incremented its count and returned. From the
+  second page onward, every visitor got the first page's rules and none of their own. The
+  key now carries the component's digest (`pwax:page:<hash>`), so each page's stylesheet has
+  its own identity and the acquire/release pair does what it says. Scoped styles hid the
+  symptom — their selectors do not match another page's elements — so it showed up only on
+  components with an unscoped `<style>` block.
 
 ### Changed
 

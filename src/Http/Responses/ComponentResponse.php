@@ -45,7 +45,11 @@ class ComponentResponse implements Responsable
 
     private bool $storable = true;
 
-    private bool $prerenderable = true;
+    /**
+     * Tri-state: null is the default (eligibility is inferred), true is an explicit opt-in
+     * that overrides the inference, false is `spaOnly()`.
+     */
+    private ?bool $prerenderable = null;
 
     /** @var array<string, string> */
     private array $headers = [];
@@ -70,12 +74,20 @@ class ComponentResponse implements Responsable
     }
 
     /**
-     * Allow this page to be prerendered to HTML for SEO.
+     * Prerender this page to HTML for SEO, whatever its data looks like.
      *
-     * On by default for eligible pages (those matching `pwax.ssr.routes`, not excluded,
-     * and either data-free or declared {@see cacheable()}). Call this to re-enable after
-     * a blanket `->spaOnly()`, or to make an explicit statement that the page should be
-     * prerendered when SSR is enabled.
+     * Eligibility is otherwise inferred: a page matching `pwax.ssr.routes`, not excluded,
+     * and either data-free or declared {@see cacheable()}. This is the explicit override
+     * for the case the inference gets wrong — a page rendered with controller data that
+     * really is the same for every visitor, but has no reason to be `cacheable()`.
+     *
+     *     Route::get('/posts/{post}', fn (Post $post) => pwaxRender('pages.post', compact('post'))
+     *         ->prerenderable());
+     *
+     * It is the same claim `cacheable()` makes, without the caching: you are saying this
+     * page's output does not depend on who is asking. Do not call it on a page that renders
+     * anything particular to the visitor — the prerendered HTML is cached and served to
+     * everyone.
      */
     public function prerenderable(bool $allow = true): self
     {
@@ -94,9 +106,7 @@ class ComponentResponse implements Responsable
      */
     public function spaOnly(): self
     {
-        $this->prerenderable = false;
-
-        return $this;
+        return $this->prerenderable(false);
     }
 
     /**
@@ -313,7 +323,19 @@ class ComponentResponse implements Responsable
      */
     public function isSpaOnly(): bool
     {
-        return ! $this->prerenderable;
+        return $this->prerenderable === false;
+    }
+
+    /**
+     * Has this response explicitly asked to be prerendered through {@see prerenderable()}?
+     *
+     * Distinct from "has not opted out", which is every response. Only an explicit call
+     * overrides the visitor-independence inference the {@see Prerenderer} would otherwise
+     * make.
+     */
+    public function isPrerenderForced(): bool
+    {
+        return $this->prerenderable === true;
     }
 
     public function component(): Component
@@ -328,7 +350,7 @@ class ComponentResponse implements Responsable
         return $this->pwax->compile(
             $this->view,
             $this->data,
-            store: $this->data === [] || $this->payloadTtl !== null,
+            store: $this->data === [] || $this->payloadTtl !== null || $this->isPrerenderForced(),
         );
     }
 
@@ -420,7 +442,10 @@ class ComponentResponse implements Responsable
         $prerenderer = app(Prerenderer::class);
 
         if ($prerenderer->shouldRender($this, $request)) {
-            $result = $prerenderer->render($this, $request);
+            // `$component` is handed over rather than looked up again: the prerenderer
+            // would otherwise ask this response for it, and compiling means rendering the
+            // Blade view, so every prerendered page rendered its view twice.
+            $result = $prerenderer->render($this, $request, $component);
 
             if ($result !== null) {
                 $prerendered = $result['html'];
@@ -429,12 +454,12 @@ class ComponentResponse implements Responsable
 
                 // The per-response hydration signal travels in the initial payload, not
                 // in the application-wide runtime config — it varies by route, and the
-                // runtime config island is the same for every page. The state rides
-                // alongside it so the client can seed hydration without a second island
-                // read; the standalone `pwax-state` island below is the no-JS / SEO
-                // surface and the source the runtime reads when there is no inline state.
+                // runtime config island is the same for every page. The state itself does
+                // not ride along with it: it lives in the `pwax-state` island below, which
+                // is where the runtime reads it and what a crawler or a no-JS visitor can
+                // see. Sending it in both places shipped every prerendered page's state
+                // twice for a copy nothing ever read.
                 $payload['hydrate'] = true;
-                $payload['state'] = json_decode($state, true, 512, JSON_THROW_ON_ERROR);
             }
         }
 

@@ -150,7 +150,16 @@ class Prerenderer
         // consulted, and every prerendered request paid for the view twice.
         $component ??= $response->component();
         $data = $response->data();
-        $key = $this->cacheKey($component, $data);
+
+        // Collected before the key is built, not inside `invoke()`, because what this page
+        // renders to depends on them. `@pwaxImport` resolves to a URL carrying the imported
+        // view's *name*, so editing that view leaves the importing page's source — and its
+        // hash — untouched: keyed on the page alone, a changed sub-component would have been
+        // served from cache indefinitely. That costs a Blade render per imported component
+        // on a cache hit, which is a fraction of the Node spawn the cache exists to avoid,
+        // and it keeps the promise the rest of the package's caches make.
+        $imports = $this->imports($component);
+        $key = $this->cacheKey($component, $data, $imports);
 
         if (isset($this->memo[$key])) {
             return $this->memo[$key];
@@ -170,7 +179,7 @@ class Prerenderer
             }
         }
 
-        $result = $this->invoke($component, $data, $request);
+        $result = $this->invoke($component, $data, $request, $imports);
 
         if ($result === null) {
             return null;
@@ -262,8 +271,22 @@ class Prerenderer
         while ($queue !== []) {
             $url = array_shift($queue);
 
-            if (isset($seen[$url]) || count($collected) >= self::MAX_IMPORTS) {
+            if (isset($seen[$url])) {
                 continue;
+            }
+
+            if (count($collected) >= self::MAX_IMPORTS) {
+                // Said once, in its own terms. Stopping here means the bridge is handed a
+                // graph with holes in it, and the failure it reports — "no source was
+                // provided for …" — points at the allowlist, which would be the wrong place
+                // to look.
+                $this->report(new \RuntimeException(sprintf(
+                    'Stopped collecting components for the prerender at %d. The page reaches more '
+                    . 'than that through @pwaxImport, so it cannot be prerendered.',
+                    self::MAX_IMPORTS
+                )));
+
+                break;
             }
 
             $seen[$url] = true;
@@ -316,10 +339,23 @@ class Prerenderer
 
     /**
      * @param  array<string, mixed>  $data
+     * @param  array<string, array<string, mixed>>  $imports
      */
-    private function cacheKey(Component $component, array $data): string
+    private function cacheKey(Component $component, array $data, array $imports = []): string
     {
-        return self::CACHE_PREFIX . $component->hash() . ':' . hash('xxh128', json_encode($data) ?: '');
+        // The imported components' own digests are part of the key. Their URLs are derived
+        // from view names rather than content, so nothing else in this key moves when one of
+        // them is edited.
+        $digests = [];
+
+        foreach ($imports as $url => $imported) {
+            $digests[] = $url . '=' . (string) ($imported['hash'] ?? '');
+        }
+
+        return self::CACHE_PREFIX
+            . $component->hash()
+            . ':' . hash('xxh128', json_encode($data) ?: '')
+            . ':' . hash('xxh128', implode(',', $digests));
     }
 
     /**
@@ -335,13 +371,13 @@ class Prerenderer
      * Spawn the Node bridge and parse its response.
      *
      * @param  array<string, mixed>  $data
+     * @param  array<string, array<string, mixed>>  $imports
      * @return array{html: string, state: string, styles: array<string, string>}|null
      */
-    private function invoke(Component $component, array $data, Request $request): ?array
+    private function invoke(Component $component, array $data, Request $request, array $imports): ?array
     {
         $script = $this->scriptPath();
         $node = (string) ($this->config->get('pwax.ssr.node') ?: 'node');
-        $imports = $this->imports($component);
 
         if (! is_file($script)) {
             $this->report(new \RuntimeException("The SSR bridge script was not found at {$script}."));

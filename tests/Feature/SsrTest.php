@@ -119,6 +119,11 @@ class SsrTest extends TestCase
             $router->get('/ssr-imports', fn () => pwaxRender('pages.ssr-imports'))
                 ->name('ssr.imports');
 
+            // A page whose imported component renders differently depending on config,
+            // so a test can change what it renders without touching the page's own source.
+            $router->get('/ssr-varying', fn () => pwaxRender('pages.ssr-varying'))
+                ->name('ssr.varying');
+
             // A page that opts out of SSR explicitly.
             $router->get('/ssr-spa-only', fn () => pwaxRender('pages.home')->spaOnly())
                 ->name('ssr.spa-only');
@@ -388,6 +393,28 @@ class SsrTest extends TestCase
 
         // The named-export form resolves too.
         $this->assertStringContainsString('<em class="pill">Pill</em>', $html);
+    }
+
+    public function test_a_changed_import_is_not_served_from_the_prerender_cache(): void
+    {
+        $this->requireNode();
+
+        $this->assertStringContainsString(
+            '>first<',
+            (string) $this->get('/ssr-varying')->getContent()
+        );
+
+        // The imported component's *content* changes; the importing page's source does not.
+        // `@pwaxImport` resolves to a URL carrying the imported view's name rather than a
+        // digest of it, so the page's own hash cannot notice — and the prerender cache was
+        // keyed on that hash alone, which meant an edited sub-component was served from
+        // cache indefinitely.
+        config()->set('pwax_test.label', 'second');
+
+        $html = (string) $this->get('/ssr-varying')->getContent();
+
+        $this->assertStringContainsString('>second<', $html);
+        $this->assertStringNotContainsString('>first<', $html);
     }
 
     public function test_an_imported_component_s_stylesheet_reaches_the_document(): void

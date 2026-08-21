@@ -1574,6 +1574,8 @@ available while it runs. That boundary is worth knowing before you turn SSR on:
 | `@pwaxImport`, including named exports and components that import each other | Application-wide plugins and directives from `pwax.vue.*` — they are browser modules |
 | `data()`, `computed`, `setup()` (including `async setup()`) | Browser APIs during render: `document`, `window`, `localStorage`, `navigator` |
 | `<style scoped>`, the page's own stylesheet and its imports' | `mounted()` and anything after it — as in any SSR, it does not run on the server |
+| `<Transition>`, `<KeepAlive>`, `<Suspense>`, `v-html`, slots | `<Teleport>`, when it actually renders something — its content belongs outside the mount element, and the target is a selector the shell cannot know in advance |
+| Native custom elements (`<my-widget>`) — rendered as-is, exactly as the browser does | Anything an application-level plugin registers, since the plugin is not loaded |
 | `pwax:compile`'s precompiled render functions | Anything reading the DOM to decide what to render |
 
 `typeof window === 'undefined'` is how a component asks whether it is being prerendered,

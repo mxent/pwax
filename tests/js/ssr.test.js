@@ -279,6 +279,64 @@ describe('bin/ssr.mjs renders a component to HTML', () => {
         expect(directive.message).toContain('tooltip');
     });
 
+    it('leaves a native custom element alone', () => {
+        // A hyphenated tag Vue cannot resolve is rendered as a literal element of that
+        // name — here and in the browser alike, since Pwax does not set `isCustomElement`.
+        // The markup agrees, so there is nothing to refuse, and refusing would have blocked
+        // every application that uses a web component from prerendering at all.
+        const result = render({
+            component: {
+                template: '<div><my-widget>x</my-widget></div>',
+                script: '',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toBe(wrapped('<div><my-widget>x</my-widget></div>'));
+    });
+
+    it('refuses a page whose content is teleported out of the mount element', () => {
+        // `<Teleport>` renders its children somewhere else in the document, and the server
+        // renderer collects them separately rather than putting them in the returned
+        // string. Placing them would mean knowing every target in advance, which is not
+        // possible — `to` is a selector and it can be computed. So the markup would ship
+        // without the modal, dropdown or dialog that was the point of prerendering it.
+        const result = render({
+            component: {
+                template: '<div><Teleport to="body"><p>Modal</p></Teleport></div>',
+                script: '',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.message).toContain('Teleport');
+        expect(result.message).toContain('spaOnly()');
+    });
+
+    it('is unbothered by a teleport that renders nothing', () => {
+        // The common shape: a modal that is closed. Nothing is teleported, so nothing is
+        // missing from the markup, so there is nothing to refuse.
+        const result = render({
+            component: {
+                template:
+                    '<div class="a"><Teleport v-if="open" to="body"><p>Modal</p></Teleport></div>',
+                script: 'export default { data() { return { open: false }; } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('<div class="a">');
+    });
+
     it('names the browser API a component reached for, and what to do instead', () => {
         const result = render({
             component: {

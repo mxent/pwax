@@ -214,7 +214,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sub-component silently opted itself out of SSR while looking configured for it. The PHP
   side now walks the component graph and sends each imported component's source with the
   payload (transitively, cycles included — the browser fetches those URLs over HTTP and Node
-  cannot, since they are routes on the application serving the request), and the bridge
+  cannot, since they are routes on the application serving the request; their digests join
+  the prerender cache key, because an `@pwaxImport` URL carries the imported view's *name*
+  and an edited sub-component would otherwise be served from cache indefinitely), and the
+  bridge
   rewrites that one emitted expression rather than declaring a `window` global. Declaring
   one would be worse than the bug: `typeof window === 'undefined'` is *the* server check,
   and a component using it correctly would start taking the browser branch and reading
@@ -224,10 +227,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A prerender that cannot be trusted fails instead of shipping.** An unresolved component
   rendered as a literal `<MysteryThing></MysteryThing>` element, an unresolved directive was
-  silently dropped, and an async component that could not load became an empty comment — in
-  every case `ok: true` and markup that merely *differs* from what the browser builds, which
-  a crawler then indexes and the visitor's browser throws away. All three now fail the
-  prerender, so the SPA shell is served instead, which is only slower. The bridge pins Vue's
+  silently dropped, an async component that could not load became an empty comment, and a
+  `<Teleport>`'s children were left out of the markup altogether — in every case `ok: true`
+  and HTML that merely *differs* from what the browser builds, which a crawler then indexes
+  and the visitor's browser throws away. All four now fail the prerender, so the SPA shell is served instead, which is only slower. The bridge pins Vue's
   development build to keep the checks working: `warn()` is stripped from the production
   build, so on a server with `NODE_ENV=production` the two resolution failures had no
   symptom at all. The rendered HTML is byte-identical between the builds.

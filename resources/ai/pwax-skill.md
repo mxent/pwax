@@ -796,10 +796,14 @@ Works: `@pwaxImport` (named exports and mutual imports included), `data()`,
 `computed`, `setup()` and `async setup()`, `<style scoped>`, and
 `pwax:compile`'s precompiled render functions.
 
+Also fine: `<Transition>`, `<KeepAlive>`, `<Suspense>`, `v-html` and slots.
+
 Does not: application-wide plugins and directives from `pwax.vue.*` (browser
 modules, not loadable in Node), browser APIs during render (`document`,
-`window`, `localStorage`, `navigator`), and `mounted()` — which does not run on
-the server, as in any SSR.
+`window`, `localStorage`, `navigator`), `mounted()` — which does not run on the
+server, as in any SSR — and `<Teleport>` when it actually renders something,
+since its content belongs outside the mount element and the target is a selector
+the shell cannot know in advance. A closed modal teleports nothing and is fine.
 
 `typeof window === 'undefined'` answers truthfully: the bridge does not declare
 a `window`. Code needing a browser goes in `mounted()`; a page that cannot avoid

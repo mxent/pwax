@@ -483,7 +483,14 @@ async function renderOne() {
      * diagnostic and goes to stderr, where it cannot corrupt the result on stdout.
      */
     app.config.warnHandler = (message) => {
-        if (/Failed to resolve (component|directive)/.test(message)) {
+        const unresolved = /Failed to resolve (component|directive): (\S+)/.exec(message);
+
+        // A hyphen means it may well be a native custom element, which Vue renders as a
+        // literal element of that name — on the client exactly as here, so the markup
+        // agrees and there is nothing to refuse. Pwax does not set `isCustomElement`, so
+        // the browser's console carries the same warning; a name without a hyphen is a Vue
+        // component that was meant to resolve and did not.
+        if (unresolved && !(unresolved[1] === 'component' && unresolved[2].includes('-'))) {
             failures.push(explain(message));
 
             return;
@@ -558,7 +565,29 @@ async function renderOne() {
         },
     });
 
-    const html = await renderToString(app);
+    /*
+     * `<Teleport>` renders its children somewhere else in the document — `body`, usually —
+     * and the server renderer collects them here instead of putting them in the returned
+     * string. Placing them would mean the shell knowing every teleport target in advance,
+     * which it cannot: `to` is a selector, and it can be computed.
+     *
+     * So the markup would ship without the teleported content in it, which for the thing
+     * people teleport — a modal, a dropdown, a dialog — is often the content worth
+     * prerendering, and the browser would then find nothing to hydrate at the target. A page
+     * that actually teleports something during the prerender fails; one whose modal is
+     * closed teleports nothing and is unaffected.
+     */
+    const context = {};
+    const html = await renderToString(app, context);
+
+    if (Object.keys(context.teleports || {}).length > 0) {
+        failures.push(
+            'pwax: this page renders a `<Teleport>`, whose content belongs outside the mount ' +
+                'element and cannot be placed by the prerenderer — the markup would ship without ' +
+                'it and the browser would find nothing to hydrate at the target. Render the ' +
+                'content in place, or mark the route `->spaOnly()`.'
+        );
+    }
 
     if (failures.length) {
         return { ok: false, message: failures[0], errors: { render: failures.join('\n') } };

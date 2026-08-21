@@ -102,15 +102,15 @@ describe('bin/ssr.mjs renders a component to HTML', () => {
         // Run against a node that cannot resolve the peer dep. The simplest way without
         // uninstalling is to point NODE_PATH at an empty directory; the script's dynamic
         // import then fails and the guard fires.
-        const out = execFileSync(
-            'node',
-            [`${root}/bin/ssr.mjs`],
-            {
-                input: JSON.stringify({ version: '3.5.41', component: { template: '<div></div>' }, data: {} }),
-                encoding: 'utf8',
-                env: { ...process.env, NODE_PATH: '/var/empty' },
-            }
-        );
+        const out = execFileSync('node', [`${root}/bin/ssr.mjs`], {
+            input: JSON.stringify({
+                version: '3.5.41',
+                component: { template: '<div></div>' },
+                data: {},
+            }),
+            encoding: 'utf8',
+            env: { ...process.env, NODE_PATH: '/var/empty' },
+        });
 
         // The peer dep is installed in this environment, so the guard does not fire here.
         // This test asserts the happy path instead; the missing-dependency path is

@@ -124,7 +124,10 @@ async function boot() {
     // feature existed, falls through to `createApp` unchanged.
     const mountEl = document.getElementById(config.mount || 'pwax');
     const hydrating =
-        !!initial && initial.hydrate === true && !!mountEl && mountEl.hasAttribute('data-pwax-prerendered');
+        !!initial &&
+        initial.hydrate === true &&
+        !!mountEl &&
+        mountEl.hasAttribute('data-pwax-prerendered');
 
     const ssrState = hydrating ? loadSsrState(config.stateIslandId) : null;
 
@@ -182,7 +185,10 @@ async function boot() {
             didHydrate = await page.prepareInitial();
         } catch (error) {
             // `prepareInitial` swallows its own errors via `fail()`, but guard the edge.
-            console.error('pwax: hydration preparation failed, falling back to client render', error);
+            console.error(
+                'pwax: hydration preparation failed, falling back to client render',
+                error
+            );
         }
     }
 

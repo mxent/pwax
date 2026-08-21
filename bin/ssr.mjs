@@ -184,7 +184,8 @@ async function renderOne() {
     const contentTemplate = input.contentTemplate || '<main><router-view></router-view></main>';
 
     const module = await evaluateModule(script);
-    const options = typeof module.default === 'function' ? module.default() : { ...(module.default || {}) };
+    const options =
+        typeof module.default === 'function' ? module.default() : { ...(module.default || {}) };
 
     // The author's own `render` or `template` wins outright; otherwise the Blade template
     // applies. Mirrors `toComponentOptions` in the client runtime.
@@ -265,7 +266,7 @@ async function renderOne() {
     // `<a>` with the `to` value as `href`, which matches what the client renders.
     app.component('router-link', {
         props: { to: { type: [String, Object], default: '' } },
-        template: '<a :href="typeof to === \'string\' ? to : to.path || \'\'"><slot></slot></a>',
+        template: "<a :href=\"typeof to === 'string' ? to : to.path || ''\"><slot></slot></a>",
     });
 
     const html = await renderToString(app);

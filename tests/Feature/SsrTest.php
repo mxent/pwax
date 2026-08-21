@@ -4,6 +4,7 @@ namespace Mxent\Pwax\Tests\Feature;
 
 use Mxent\Pwax\Pwa\Ssr\Prerenderer;
 use Mxent\Pwax\Tests\TestCase;
+use Symfony\Component\Process\Process;
 
 /**
  * Server-side rendering: the first-paint response of an eligible route is prerendered to
@@ -16,6 +17,52 @@ use Mxent\Pwax\Tests\TestCase;
  */
 class SsrTest extends TestCase
 {
+    /**
+     * Whether the Node SSR bridge can actually run in this environment.
+     *
+     * The PHP CI matrix does not install Node or the optional `@vue/server-renderer`
+     * peer dependency, so tests that assert prerendered HTML would fail there even
+     * though the feature works. Tests that require a working bridge are skipped when it
+     * is not available; tests that only assert the exclusion/fallback logic run
+     * everywhere, because those paths do not invoke Node at all.
+     */
+    private static bool $nodeAvailable = false;
+
+    public static function setUpBeforeClass(): void
+    {
+        parent::setUpBeforeClass();
+
+        // Probe once: can `bin/ssr.mjs` render a trivial component? This is the same
+        // check `pwax:doctor` performs, so the two agree about what "available" means.
+        $script = dirname(__DIR__, 2) . '/bin/ssr.mjs';
+        $node = 'node';
+
+        if (! is_file($script)) {
+            return;
+        }
+
+        $process = new Process(
+            [$node, $script],
+            dirname($script, 2),
+            null,
+            (string) json_encode([
+                'version' => '3.5.41',
+                'component' => ['template' => '<div></div>'],
+                'data' => [],
+            ], JSON_THROW_ON_ERROR),
+            10,
+        );
+
+        try {
+            $process->run();
+            $result = json_decode($process->getOutput(), true, 512);
+
+            self::$nodeAvailable = ($result['ok'] ?? false) === true;
+        } catch (\Throwable) {
+            self::$nodeAvailable = false;
+        }
+    }
+
     protected function defineEnvironment($app): void
     {
         parent::defineEnvironment($app);
@@ -50,8 +97,24 @@ class SsrTest extends TestCase
         });
     }
 
+    /**
+     * Skip a test that requires a working Node SSR bridge.
+     *
+     * The PHP CI matrix runs without Node; these tests are only meaningful where the
+     * bridge can actually render. The exclusion and fallback tests do not call Node and
+     * run everywhere.
+     */
+    private function requireNode(): void
+    {
+        if (! self::$nodeAvailable) {
+            $this->markTestSkipped('The Node SSR bridge is not available in this environment.');
+        }
+    }
+
     public function test_a_data_free_page_is_prerendered(): void
     {
+        $this->requireNode();
+
         $response = $this->get('/ssr-home');
 
         $response->assertOk();
@@ -64,6 +127,8 @@ class SsrTest extends TestCase
 
     public function test_a_prerendered_page_carries_the_state_island(): void
     {
+        $this->requireNode();
+
         $response = $this->get('/ssr-home');
 
         $html = (string) $response->getContent();
@@ -82,6 +147,8 @@ class SsrTest extends TestCase
 
     public function test_a_prerendered_page_has_the_hydrate_flag_in_the_initial_payload(): void
     {
+        $this->requireNode();
+
         $response = $this->get('/ssr-home');
 
         $html = (string) $response->getContent();
@@ -96,6 +163,8 @@ class SsrTest extends TestCase
 
     public function test_a_cacheable_page_with_data_is_prerendered(): void
     {
+        $this->requireNode();
+
         $response = $this->get('/ssr-named');
 
         $response->assertOk();
@@ -157,6 +226,8 @@ class SsrTest extends TestCase
 
     public function test_a_prerendered_page_has_a_minimal_noscript_block(): void
     {
+        $this->requireNode();
+
         $response = $this->get('/ssr-home');
 
         $html = (string) $response->getContent();
@@ -178,6 +249,8 @@ class SsrTest extends TestCase
 
     public function test_prerendered_results_are_cached(): void
     {
+        $this->requireNode();
+
         $prerenderer = $this->app->make(Prerenderer::class);
         $cache = $this->app->make('cache')->store('array');
 

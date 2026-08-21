@@ -330,6 +330,39 @@ class SsrTest extends TestCase
         $this->assertStringContainsString('data-pwax-prerendered', $html);
     }
 
+    public function test_the_prerendered_markup_is_the_mount_element_s_only_child(): void
+    {
+        $this->requireNode();
+
+        $html = (string) $this->get('/ssr-home')->getContent();
+
+        // Vue hydrates from `container.firstChild`. Indent the markup inside the mount
+        // element — which is what a Blade view looks like once someone formats it — and that
+        // first child is a whitespace text node where the virtual DOM expects an element.
+        // Vue does not recover gracefully from a mismatch on the container's first node: it
+        // renders the whole application again *before* the server's markup and leaves that
+        // markup in place, so the visitor sees every page twice.
+        $this->assertMatchesRegularExpression(
+            '/<div id="pwax"[^>]*data-pwax-prerendered[^>]*><main\b/',
+            $html,
+            'the prerendered markup begins immediately after the mount element\'s opening tag'
+        );
+
+        // And nothing trails it either.
+        $this->assertStringContainsString('</main></div>', $html);
+    }
+
+    public function test_a_prerendered_shell_emits_no_empty_class_attribute(): void
+    {
+        $this->requireNode();
+
+        $html = (string) $this->get('/ssr-home')->getContent();
+
+        // `@class(['pwax-preloader' => false])` rendered `class=""`. Harmless, and still
+        // noise in the one element every visitor's devtools opens on first.
+        $this->assertStringNotContainsString('<div id="pwax" class=""', $html);
+    }
+
     public function test_a_prerendered_page_carries_its_stylesheet_in_the_document(): void
     {
         $this->requireNode();

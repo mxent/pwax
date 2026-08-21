@@ -110,9 +110,18 @@ async function bootAndWait(event = 'pwax:ready') {
  * The module cache is reset on each import and the document has to be in place first —
  * the same approach `reboot.test.js` takes.
  */
-async function boot({ html, state, component, url = '/' }) {
+async function boot({ html, state, component, url = '/', indent = false }) {
     document.head.innerHTML = '';
-    document.body.innerHTML = `<div id="pwax" tabindex="-1" data-pwax-prerendered>${html}</div>`;
+
+    // `indent` reproduces a shell someone has reformatted: the markup sits on its own line
+    // inside the mount element, so `container.firstChild` is a whitespace text node rather
+    // than the page. The shipped shell emits no such whitespace — see the test that asserts
+    // it — but the view is publishable, and a mismatch on the container's first node makes
+    // Vue render the whole application again *before* the server's markup instead of
+    // hydrating it, which shows up as every page rendered twice.
+    document.body.innerHTML = indent
+        ? `<div id="pwax" tabindex="-1" data-pwax-prerendered>\n        \n            ${html}\n    </div>`
+        : `<div id="pwax" tabindex="-1" data-pwax-prerendered>${html}</div>`;
 
     island('pwax-config', JSON.stringify({ mount: 'pwax', templates: TEMPLATES, pinia: false }));
     island(
@@ -183,6 +192,31 @@ describe('a prerendered page hydrates rather than being re-rendered', () => {
         // a new one created in its place.
         expect(document.querySelector('#pwax h1')).toBe(heading);
         expect(document.querySelector('#pwax p').textContent).toBe('3');
+        assertNoMismatch();
+    });
+
+    it('renders the page once when the shell indents the prerendered markup', async () => {
+        const component = {
+            template: '<div class="home"><h1>{{ title }}</h1></div>',
+            script: 'export default { data() { return { title: "Home" }; } };',
+            style: '',
+        };
+
+        const result = prerender({ url: '/', component, data: {} });
+
+        await boot({
+            html: result.html,
+            state: result.serializedState,
+            component,
+            indent: true,
+        });
+
+        // The symptom of a mismatch on the container's first child is not a subtle one:
+        // Vue leaves the server's markup where it is and inserts a second, client-rendered
+        // copy before it. Counting is the assertion.
+        expect(document.querySelectorAll('#pwax main')).toHaveLength(1);
+        expect(document.querySelectorAll('#pwax h1')).toHaveLength(1);
+        expect(document.querySelector('#pwax h1').textContent).toBe('Home');
         assertNoMismatch();
     });
 

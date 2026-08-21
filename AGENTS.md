@@ -531,6 +531,14 @@ before answering.
   breaking change and the version bumps.
 - **Committing `dist/` unchanged when `src/js/` changed.** CI catches it,
   but it is a signal you forgot the build step.
+- **Putting anything but the prerendered markup inside `<div id="pwax">`.**
+  Vue hydrates from `container.firstChild`. A newline there is a mismatch on
+  the first node it looks at, and Vue's recovery is to render the application
+  again *before* the server's markup and leave that markup in place — the page,
+  twice. The shell keeps the tag, the echo and the closing tag on one line for
+  that reason, and the runtime strips edge whitespace as a second line of
+  defence for published shells. `tests/Feature/SsrTest.php` asserts the shape
+  and `tests/js/ssrHydration.test.js` asserts the count.
 - **Changing the page component's template without going through
   `src/js/pageTemplate.mjs`.** `PwaxPage` is a fragment: Vue brackets its
   output with `<!--[-->` / `<!--]-->` anchors and leaves a `<!---->` where

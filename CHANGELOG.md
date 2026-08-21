@@ -205,6 +205,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A prerendered page is hydrated rather than rendered a second time underneath itself.**
+  Vue hydrates from `container.firstChild`, and the shell indented the prerendered markup
+  inside `<div id="pwax">` — so that first child was a whitespace text node where the
+  virtual DOM expected an element. A mismatch on the container's very first node is not one
+  Vue recovers gracefully from: it drops the text node, renders the whole application from
+  scratch *before* the next sibling, and leaves the server's markup exactly where it was.
+  The visitor saw every prerendered page twice. The shell now emits the markup as the mount
+  element's only child, on one line, with the `@if` outside the element rather than inside
+  it; and the runtime strips whitespace-only text nodes from the element's edges before
+  hydrating, so a shell an application has published and reformatted — or published before
+  SSR existed — cannot reintroduce it. A leading comment is deliberately left alone, since
+  an application that overrides `pwax.blade.content` with a multi-root template makes
+  `<!--[-->` a node hydration genuinely expects.
+
 - **A page's stylesheet is replaced on navigation instead of the first page's being kept.**
   The style manager counts references per key, and every page acquired its stylesheet under
   the same constant key `pwax:page` — which reads like an identity and is not one. `mount()`

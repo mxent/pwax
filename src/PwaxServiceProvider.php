@@ -40,6 +40,7 @@ use Mxent\Pwax\Pwa\HeadMeta;
 use Mxent\Pwax\Pwa\PageRegistry;
 use Mxent\Pwax\Pwa\PublicAssets;
 use Mxent\Pwax\Pwa\ServiceWorker;
+use Mxent\Pwax\Pwa\Ssr\Prerenderer;
 use Mxent\Pwax\Pwa\WebManifest;
 use Mxent\Pwax\Support\ComponentId;
 use Mxent\Pwax\Support\RenderFunctionStore;
@@ -53,6 +54,7 @@ class PwaxServiceProvider extends ServiceProvider
 
         $this->registerCompiler();
         $this->registerPwax();
+        $this->registerPrerenderer();
 
         if ($this->app->runningInConsole()) {
             $this->commands([
@@ -114,6 +116,9 @@ class PwaxServiceProvider extends ServiceProvider
                 false => '<fg=yellow;options=bold>OFF</>',
                 default => 'production only',
             },
+            'SSR' => $this->config()->get('pwax.ssr.enabled')
+                ? '<fg=green;options=bold>ENABLED</>'
+                : '<fg=yellow;options=bold>DISABLED</>',
         ]);
     }
 
@@ -123,6 +128,28 @@ class PwaxServiceProvider extends ServiceProvider
         $config = $this->app->make(Config::class);
 
         return $config;
+    }
+
+    /**
+     * Register the SSR prerenderer.
+     *
+     * Bound as a singleton because it holds a per-request memo and a once-per-process
+     * failure flag. The cache store follows `pwax.ssr.cache.store`, falling back to the
+     * application default when null — the same convention the component cache uses.
+     */
+    protected function registerPrerenderer(): void
+    {
+        $this->app->singleton(Prerenderer::class, function ($app): Prerenderer {
+            /** @var Config $config */
+            $config = $app->make(Config::class);
+
+            $store = (string) $config->get('pwax.ssr.cache.store', '') ?: null;
+
+            return new Prerenderer(
+                $config,
+                $this->cacheStore($app, $store),
+            );
+        });
     }
 
     protected function registerCompiler(): void

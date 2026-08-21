@@ -117,7 +117,92 @@ export function createPageComponent({
 }) {
     let initialPayload = initial;
 
+    // The server's prerendered state for the initial page, or null. Set by `index.js`
+    // before the page component is mounted, and consumed in `mount()` so the first
+    // render hydrates with the same values the server rendered with.
+    let ssrState = null;
+
     return {
+        /**
+         * Set the SSR state for the initial page.
+         *
+         * Called once by `index.js` after it reads the `pwax-state` island. A page that
+         * was not prerendered receives null and behaves exactly as before.
+         *
+         * @param {Record<string, unknown>|null} state
+         */
+        setSsrState(state) {
+            ssrState = state;
+        },
+
+        /**
+         * Resolve the initial page's options before mount, for hydration.
+         *
+         * When the server prerendered the page, `createSSRApp` needs the page component
+         * already in place at mount time so the virtual DOM it produces matches the
+         * server-rendered HTML it is hydrating. This resolves the inlined initial
+         * payload's options, applies the SSR state, and sets `this.component` — without
+         * the DOM swap `mount()` would do, because there is nothing to swap: the DOM is
+         * already there. Returns true when it consumed the initial payload (hydration
+         * will proceed), false when there was none (the caller falls back to `createApp`).
+         *
+         * @returns {Promise<boolean>}
+         */
+        async prepareInitial() {
+            if (!initialPayload || !initialPayload.component) {
+                return false;
+            }
+
+            // The URL lives on the outer payload, not on the component itself — same
+            // shape `visit()` reads. `currentPath` is what keys the transition and what
+            // `beforeRouteUpdate` compares against, so it must match the route.
+            this.currentPath = initialPayload.url || '';
+
+            const payload = initialPayload.component;
+            initialPayload = null;
+
+            try {
+                await Promise.all([
+                    ...(payload.styles || []).map((href) => styles.link(href)),
+                    ...(payload.scripts || []).map((src) => styles.script(src)),
+                ]);
+
+                const options = await this.toOptions(payload);
+
+                // Seed the component's `data()` with the server's resolved state so the
+                // hydrated reactive values match the prerendered HTML. The author's own
+                // `data()` runs first and wins for any key it sets; SSR state fills in
+                // only what the author did not, which is the safe merge for hydration.
+                if (ssrState && typeof options.data === 'function') {
+                    const originalData = options.data;
+                    options.data = function ssrHydrationData(...args) {
+                        const own = originalData.apply(this, args);
+                        return { ...ssrState, ...own };
+                    };
+                } else if (ssrState && typeof options.data !== 'function') {
+                    options.data = () => ({ ...ssrState });
+                }
+
+                styles.acquire(PAGE_STYLE_KEY, payload.style || '', { nonce: config.nonce });
+                this.mountedStyleKey = PAGE_STYLE_KEY;
+
+                if (payload.title) {
+                    document.title = payload.title;
+                }
+
+                applyHead(payload.head);
+
+                this.component = Vue.markRaw(options);
+                this.renderedPath = this.currentPath;
+                this.loading = false;
+                this.announced = true;
+
+                return true;
+            } catch (error) {
+                this.fail(error);
+                return false;
+            }
+        },
         name: 'PwaxPage',
 
         /*
@@ -172,6 +257,15 @@ export function createPageComponent({
         },
 
         created() {
+            // When `prepareInitial()` already resolved and mounted the initial page for
+            // hydration, the `created()` hook has nothing to fetch — the component is in
+            // place and the DOM is already rendered. Skipping `visit()` is what makes
+            // hydration a no-op for the first paint rather than a second render that
+            // replaces the server's HTML.
+            if (this.component) {
+                return;
+            }
+
             return this.visit(this.$route.fullPath);
         },
 

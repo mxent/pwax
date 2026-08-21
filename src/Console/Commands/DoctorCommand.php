@@ -15,6 +15,7 @@ use Mxent\Pwax\Support\RenderFunctionStore;
 use Mxent\Pwax\Support\Shell;
 use Symfony\Component\HttpKernel\Exception\MethodNotAllowedHttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+use Symfony\Component\Process\Process;
 use Throwable;
 
 /**
@@ -65,6 +66,7 @@ class DoctorCommand extends Command
         $this->checkDisplayMode($config);
         $this->checkWorkerSourceMap($config);
         $this->checkPushSubscriptionsTable($config);
+        $this->checkSsr($config);
 
         $this->newLine();
 
@@ -1334,6 +1336,70 @@ class DoctorCommand extends Command
             'push_subscriptions table exists',
             'pwax.push.public_key is set but the database has no `push_subscriptions` '
                 . 'table. The endpoint from `pwax:push-endpoint` will throw on every write.'
+        );
+    }
+
+    /**
+     * SSR checks.
+     *
+     * When SSR is off — the default — there is nothing to check. When it is on, the one
+     * thing that breaks silently is a missing or mismatched `@vue/server-renderer`: the
+     * Node bridge fails, the `Prerenderer` falls back to the SPA shell, and the page
+     * works but is not prerendered — exactly the regression the doctor exists to name.
+     */
+    private function checkSsr(Config $config): void
+    {
+        if (! $config->get('pwax.ssr.enabled', false)) {
+            return;
+        }
+
+        $script = dirname(__DIR__, 3) . '/bin/ssr.mjs';
+        $node = (string) ($config->get('pwax.ssr.node') ?: 'node');
+
+        // Run the bridge with an empty payload and ask it to report its dependencies.
+        // The bridge writes `{ok: false, message: …}` to stdout when a peer dep is
+        // missing or mismatched, and `{ok: true, …}` when both resolve.
+        $process = new Process(
+            [$node, $script],
+            base_path(),
+            null,
+            (string) json_encode([
+                'version' => $config->get('pwax.assets.versions.vue', ''),
+                'component' => ['template' => '<div></div>'],
+                'data' => [],
+            ], JSON_THROW_ON_ERROR),
+            10,
+        );
+
+        try {
+            $process->run();
+        } catch (Throwable $e) {
+            $this->fail_(sprintf('SSR is enabled but Node could not start (%s): %s', $node, $e->getMessage()));
+
+            return;
+        }
+
+        try {
+            /** @var array<string, mixed> $result */
+            $result = json_decode($process->getOutput(), true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            $this->fail_(sprintf('SSR bridge did not return JSON. Node output: %s', trim($process->getOutput())));
+
+            return;
+        }
+
+        if (($result['ok'] ?? false) !== true) {
+            $this->fail_(sprintf('SSR is enabled but the bridge failed: %s', (string) ($result['message'] ?? 'Unknown error.')));
+
+            return;
+        }
+
+        $fallback = (string) $config->get('pwax.ssr.fallback', 'spa');
+
+        $this->assert(
+            $fallback === 'spa',
+            'SSR fallback is "spa" (a Node failure serves the SPA shell)',
+            sprintf('SSR fallback is "%s" — a Node failure will return a 500. Set ssr.fallback to "spa" for production.', $fallback),
         );
     }
 }

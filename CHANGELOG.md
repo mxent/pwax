@@ -9,6 +9,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Server-side rendering for SEO.** The first-paint response of an eligible route is
+  prerendered to real HTML through a Node SSR bridge (`bin/ssr.mjs`), using the same
+  compiled `Component` the browser would receive run through `@vue/server-renderer`. The
+  client runtime then hydrates the existing DOM via `createSSRApp` rather than replacing
+  it. The developer's authoring model does not change: components stay Blade views with
+  `<template>/<script>/<style>`, controllers still call `pwaxRender('pages.home', $data)`.
+  - New `ssr.*` config block (`pwax.ssr.enabled`, `routes`, `exclude`, `node`, `script`,
+    `cache.store`, `cache.ttl`, `timeout`, `fallback`). Off by default.
+  - New `ComponentResponse::prerenderable()` and `ComponentResponse::spaOnly()` fluent
+    methods for per-route opt-in/opt-out.
+  - New `@vue/server-renderer` optional peer dependency (mirrors `@vue/compiler-dom`).
+  - New `bin/ssr.mjs` Node bridge, modelled on `bin/compile-templates.mjs`.
+  - New `X-Pwax-SSR` response header (`1` prerendered, `0` SPA fallback) — informational,
+    not part of `Vary`.
+  - New `pwax-state` JSON island carrying the prerendered page's resolved state for
+    hydration; new `stateIslandId` runtime config key.
+  - New `window.pwax.ssrState` — the server's prerendered state, for a page component to
+    read in `data()`/`setup()`.
+  - `pwax:doctor` checks the SSR bridge's dependencies and version alignment when enabled.
+  - `pwax:clear` flushes the prerender cache.
+  - Per-visitor pages (rendered with data, not declared `cacheable()`) are excluded by
+    default — same boundary as the compile cache and payload addressability.
 - **`MAINTAINING.md`.** The maintainer's counterpart to `CONTRIBUTING.md`: the release
   procedure and why `dist/` has to be rebuilt *before* the tag, how to update the vendored
   Vue/Vue Router/Pinia builds so their versions and SRI hashes stay in step, how to widen

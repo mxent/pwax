@@ -474,6 +474,124 @@ function publishImports(imports) {
 }
 
 /**
+ * Run a fetched script in a Worker thread with a timeout.
+ *
+ * A browser-side CSS engine like `@tailwindcss/browser@4` may hang synchronously in
+ * jsdom — `MutationObserver` callbacks that never fire, `requestAnimationFrame` loops
+ * that jsdom does not drive — and there is no way to interrupt a synchronous hang from
+ * the same thread. The Worker isolates it: if the script does not complete within the
+ * budget, the Worker is terminated and the bridge continues without the script's
+ * output.
+ *
+ * The Worker creates its own jsdom document from the current DOM's HTML, applies the
+ * CSSOM polyfills (constructed stylesheets, `adoptedStyleSheets`), injects the script
+ * as a `<script>` element, waits for styles to appear in `<head>`, and returns them.
+ *
+ * @param {string} code  The script source code.
+ * @param {string} domHtml  The current mount element's innerHTML.
+ * @param {string} url  The document URL.
+ * @param {number} budget  Milliseconds before terminating.
+ * @returns {Promise<string[]>}  Array of injected `<style>` text contents.
+ */
+async function runScriptInWorker(code, domHtml, url, budget) {
+    const { Worker } = await import('node:worker_threads');
+    const { writeFileSync, mkdtempSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+
+    const workerCode = `
+        const { workerData, parentPort } = require('worker_threads');
+        const { JSDOM } = require('jsdom');
+
+        const { code, domHtml, url, budget } = workerData;
+
+        const dom = new JSDOM(
+            '<!DOCTYPE html><html><head></head><body><div id="pwax">' + domHtml + '</div></body></html>',
+            { runScripts: 'dangerously', pretendToBeVisual: true, url }
+        );
+
+        const { window } = dom;
+        const doc = window.document;
+
+        if (window.CSSStyleSheet && !window.CSSStyleSheet.prototype.replaceSync) {
+            window.CSSStyleSheet.prototype.replaceSync = function(css) { this._cssText = css; };
+            window.CSSStyleSheet.prototype.replace = function(css) { this._cssText = css; return Promise.resolve(this); };
+        }
+
+        if (doc.adoptedStyleSheets === undefined) {
+            let sheets = [];
+            Object.defineProperty(doc, 'adoptedStyleSheets', {
+                get: () => sheets,
+                set: (s) => {
+                    sheets = Array.isArray(s) ? s : [];
+                    for (const sheet of sheets) {
+                        if (sheet && sheet._cssText) {
+                            const style = doc.createElement('style');
+                            style.textContent = sheet._cssText;
+                            doc.head.appendChild(style);
+                        }
+                    }
+                },
+                configurable: true,
+            });
+        }
+
+        const scriptEl = doc.createElement('script');
+        scriptEl.textContent = code;
+        doc.head.appendChild(scriptEl);
+
+        setTimeout(() => {
+            const styles = [];
+            for (const s of doc.head.querySelectorAll('style')) {
+                if (s.textContent && s.textContent.trim()) {
+                    styles.push(s.textContent);
+                }
+            }
+            parentPort.postMessage({ styles });
+            process.exit(0);
+        }, Math.min(budget - 100, 2000));
+    `;
+
+    const tmpDir = mkdtempSync(join(tmpdir(), 'pwax-script-'));
+    const workerPath = join(tmpDir, 'worker.cjs');
+
+    writeFileSync(workerPath, workerCode);
+
+    return new Promise((resolve) => {
+        const worker = new Worker(workerPath, {
+            workerData: { code, domHtml, url, budget },
+        });
+
+        let settled = false;
+
+        const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            worker.terminate();
+            rmSync(tmpDir, { recursive: true, force: true });
+            resolve(result);
+        };
+
+        worker.on('message', (msg) => finish(msg.styles || []));
+        worker.on('error', (err) => {
+            process.stderr.write(
+                `pwax: script worker error: ${err.message?.slice(0, 200)}; skipping.\n`
+            );
+            finish([]);
+        });
+
+        setTimeout(() => {
+            if (!settled) {
+                process.stderr.write(
+                    `pwax: script did not complete within ${budget}ms; skipping.\n`
+                );
+                finish([]);
+            }
+        }, budget);
+    });
+}
+
+/**
  * Render one component to an HTML string.
  *
  * @returns {Promise<{ok: boolean, html?: string, serializedState?: any, errors?: Record<string,string>}>}
@@ -1057,14 +1175,73 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
 
     // A document whose body mirrors the shell's mount element, so the app mounts into the
     // same container it will in the browser. `pretendToBeVisual` enables `requestAnimationFrame`,
-    // which some components and libraries reach for in `mounted()`.
+    // which some components and libraries reach for in `mounted()`. `runScripts: 'dangerously'`
+    // allows the bridge to inject fetched scripts (a CSS engine like `@tailwindcss/browser`)
+    // as `<script>` elements that execute in the jsdom window's context — the only way a
+    // CDN script can see `document`, `window`, `MutationObserver` and the rest of the DOM
+    // API it needs to scan the page and inject styles.
     const dom = new JSDOM(
         '<!DOCTYPE html><html><head></head><body><div id="pwax"></div></body></html>',
-        { pretendToBeVisual: true, url: documentUrl() }
+        { pretendToBeVisual: true, url: documentUrl(), runScripts: 'dangerously' }
     );
 
     const { window } = dom;
     const doc = window.document;
+
+    /*
+     * Polyfill the CSSOM APIs that jsdom does not implement but that browser-side CSS
+     * engines (the `@tailwindcss/browser` build, any library that uses constructed
+     * stylesheets) require.
+     *
+     * `CSSStyleSheet.prototype.replaceSync` and `document.adoptedStyleSheets` are part of
+     * the CSSStyleSheet construction API. jsdom has `CSSStyleSheet` but not these — so a
+     * script that constructs a stylesheet and calls `replaceSync(cssText)` throws, and the
+     * injected styles never appear in the document. The polyfill stores the CSS text on the
+     * sheet and, for adopted sheets, injects it as a `<style>` element in `<head>`, which is
+     * what the settle mode then captures.
+     */
+    if (window.CSSStyleSheet && !window.CSSStyleSheet.prototype.replaceSync) {
+        window.CSSStyleSheet.prototype.replaceSync = function replaceSync(cssText) {
+            this._cssText = cssText;
+        };
+
+        window.CSSStyleSheet.prototype.replace = function replace(cssText) {
+            this._cssText = cssText;
+            return Promise.resolve(this);
+        };
+    }
+
+    if (doc.adoptedStyleSheets === undefined) {
+        let adoptedSheets = [];
+        let adoptedStyleElements = new Map();
+
+        Object.defineProperty(doc, 'adoptedStyleSheets', {
+            get() {
+                return adoptedSheets;
+            },
+            set(sheets) {
+                // Remove `<style>` elements from the previous set.
+                for (const el of adoptedStyleElements.values()) {
+                    el.remove();
+                }
+                adoptedStyleElements = new Map();
+
+                adoptedSheets = Array.isArray(sheets) ? sheets : [];
+
+                // Inject each sheet's CSS as a `<style>` element in `<head>`, so the
+                // settle mode can capture it.
+                for (const sheet of adoptedSheets) {
+                    if (sheet && sheet._cssText) {
+                        const style = doc.createElement('style');
+                        style.textContent = sheet._cssText;
+                        doc.head.appendChild(style);
+                        adoptedStyleElements.set(sheet, style);
+                    }
+                }
+            },
+            configurable: true,
+        });
+    }
 
     // Vue's `runtime-dom` CJS build captures `document` in a closure when the module is
     // first imported — at the top of this file, where `document` is undefined. So
@@ -1284,6 +1461,68 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
         activity = trackActivity(window, ceiling);
 
         app.mount(doc.getElementById('pwax'));
+
+        // Fetch and evaluate the application's own scripts (`pwax.scripts`) in the jsdom
+        // context *after* the app has mounted. A CSS engine like `@tailwindcss/browser`
+        // scans the DOM for class names and injects `<style>` tags; running it before the
+        // mount would scan an empty document.
+        //
+        // Each script runs in a **Worker thread** with a timeout. A browser-side CSS engine
+        // like `@tailwindcss/browser@4` uses APIs jsdom does not fully implement
+        // (`MutationObserver` timing, `requestAnimationFrame` ordering) and may hang
+        // synchronously — `appendChild(scriptEl)` blocks the event loop and there is no way
+        // to interrupt it from the same thread. The Worker isolates the hang: if the script
+        // does not complete within the per-script budget, the Worker is terminated and the
+        // bridge continues with the app's markup alone.
+        //
+        // A script that fails to load, throws, or hangs is not fatal — the prerender still
+        // produces the app's markup, just without whatever that script would have added.
+        const scripts = Array.isArray(input.scripts) ? input.scripts : [];
+        const perScriptBudget = Math.max(500, Math.min(3000, Math.floor(ceiling * 0.4)));
+
+        for (const script of scripts) {
+            const src = typeof script === 'string' ? script : script?.src;
+
+            if (!src || typeof src !== 'string') {
+                continue;
+            }
+
+            try {
+                const response = await fetch(src);
+
+                if (!response.ok) {
+                    process.stderr.write(
+                        `pwax: script ${src} returned ${response.status}; skipping.\n`
+                    );
+
+                    continue;
+                }
+
+                const code = await response.text();
+
+                // Run the script in a Worker with a timeout. The Worker creates its own
+                // jsdom document from the current DOM's HTML, applies the CSSOM polyfills,
+                // injects the script, waits for it to produce styles, and returns them.
+                const injectedStyles = await runScriptInWorker(
+                    code,
+                    doc.getElementById('pwax').innerHTML,
+                    documentUrl(),
+                    perScriptBudget
+                );
+
+                // Inject any styles the Worker captured into the real document's `<head>`.
+                for (const css of injectedStyles) {
+                    const style = doc.createElement('style');
+
+                    style.textContent = css;
+                    doc.head.appendChild(style);
+                }
+            } catch (error) {
+                process.stderr.write(
+                    `pwax: could not fetch or evaluate script ${src}: ${error.message}; skipping.\n`
+                );
+            }
+        }
 
         /*
          * Wait for the app to become stable before serialising the DOM.

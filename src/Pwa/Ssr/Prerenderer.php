@@ -293,6 +293,16 @@ class Prerenderer
             // The hard ceiling for the stability poll, in seconds. The bridge polls until
             // the document is quiet; this is the safety net, not the strategy.
             'timeout' => (float) $this->config->get('pwax.ssr.timeout', 5),
+            // The application's own extra scripts from `pwax.scripts` — a CSS engine that
+            // scans the DOM and injects styles, a theme script, etc. In settle mode the
+            // bridge fetches and evaluates each one in the jsdom context before mounting
+            // the app, so the styles they inject are captured in the serialised HTML.
+            // Without this, a CDN-hosted CSS runtime like `@tailwindcss/browser` would
+            // never run during the prerender and the page would ship without its styles.
+            'scripts' => array_values(array_map(
+                fn ($script) => is_array($script) ? $script : ['src' => (string) $script],
+                (array) $this->config->get('pwax.scripts', []),
+            )),
         ];
     }
 
@@ -409,7 +419,8 @@ class Prerenderer
             . ':' . hash('xxh128', json_encode($data) ?: '')
             . ':' . hash('xxh128', implode(',', $digests))
             . ':' . hash('xxh128', implode("\0", $templates))
-            . ':' . ($this->config->get('pwax.ssr.settle', false) ? 's' : 'n');
+            . ':' . ($this->config->get('pwax.ssr.settle', false) ? 's' : 'n')
+            . ':' . hash('xxh128', json_encode((array) $this->config->get('pwax.scripts', [])) ?: '');
     }
 
     /**

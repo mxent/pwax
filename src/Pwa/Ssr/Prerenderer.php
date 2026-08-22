@@ -79,7 +79,7 @@ class Prerenderer
      * deployment SSR is most likely to be running in, since it is the one where not paying
      * for a PHP bootstrap per request matters.
      *
-     * @var array<string, array{html: string, state: string, styles: array<string, string>}>
+     * @var array<string, array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}>
      */
     private array $memo = [];
 
@@ -161,7 +161,7 @@ class Prerenderer
      * Prerender the response's component, returning HTML + serialized state or null on
      * any failure (so the caller falls back to the SPA shell).
      *
-     * @return array{html: string, state: string, styles: array<string, string>}|null
+     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}|null
      */
     public function render(ComponentResponse $response, Request $request, ?Component $component = null): ?array
     {
@@ -200,6 +200,11 @@ class Prerenderer
                 $cached = $this->cache->get($key);
 
                 if (is_array($cached) && isset($cached['html'], $cached['state'], $cached['styles'])) {
+                    // Normalise older cache entries that predate `hydrate` and `headStyles`,
+                    // so `remember()` receives a complete array shape.
+                    $cached['hydrate'] ??= true;
+                    $cached['headStyles'] ??= [];
+
                     return $this->remember($key, $cached);
                 }
             } catch (Throwable $e) {
@@ -273,6 +278,15 @@ class Prerenderer
             // inside the module, and dereferencing `window` in Node throws before anything
             // renders.
             'imports' => $imports,
+            // Whether to wait for post-mount async work (styles injected at mount time,
+            // data fetched then rendered, any DOM mutation after the initial render)
+            // before serialising. When true, the bridge mounts to a jsdom document, lets
+            // lifecycle hooks run, and waits for the app to become stable before
+            // serialising the final DOM.
+            'settle' => (bool) $this->config->get('pwax.ssr.settle', false),
+            // The hard ceiling for the stability poll, in seconds. The bridge polls until
+            // the document is quiet; this is the safety net, not the strategy.
+            'timeout' => (float) $this->config->get('pwax.ssr.timeout', 5),
         ];
     }
 
@@ -388,7 +402,8 @@ class Prerenderer
             . $component->hash()
             . ':' . hash('xxh128', json_encode($data) ?: '')
             . ':' . hash('xxh128', implode(',', $digests))
-            . ':' . hash('xxh128', implode("\0", $templates));
+            . ':' . hash('xxh128', implode("\0", $templates))
+            . ':' . ($this->config->get('pwax.ssr.settle', false) ? 's' : 'n');
     }
 
     /**
@@ -398,8 +413,8 @@ class Prerenderer
      * in its original position and let a page that is read on every request age out from
      * under itself. Deleting first and re-inserting moves it to the back.
      *
-     * @param  array{html: string, state: string, styles: array<string, string>}  $result
-     * @return array{html: string, state: string, styles: array<string, string>}
+     * @param  array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}  $result
+     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}
      */
     private function remember(string $key, array $result): array
     {
@@ -420,7 +435,7 @@ class Prerenderer
      * @param  array<string, mixed>  $data
      * @param  array<string, array<string, mixed>>  $imports
      * @param  array<string, string>  $templates
-     * @return array{html: string, state: string, styles: array<string, string>}|null
+     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}|null
      */
     private function invoke(Component $component, array $data, Request $request, array $imports, array $templates): ?array
     {
@@ -514,7 +529,20 @@ class Prerenderer
             }
         }
 
-        return ['html' => $html, 'state' => $state, 'styles' => $styles];
+        return [
+            'html' => $html,
+            'state' => $state,
+            'styles' => $styles,
+            'hydrate' => $decoded['hydrate'] ?? true,
+            // Styles injected into `<head>` during a settle-mode prerender (libraries
+            // that inject styles at mount time). The shell inlines these in the
+            // real `<head>` so they are visible to crawlers and present before the client
+            // re-renders.
+            'headStyles' => array_values(array_filter(
+                (array) ($decoded['headStyles'] ?? []),
+                fn ($s) => is_string($s) && $s !== ''
+            )),
+        ];
     }
 
     /**

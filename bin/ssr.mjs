@@ -408,6 +408,7 @@ function publishImports(imports) {
  * @returns {Promise<{ok: boolean, html?: string, serializedState?: any, errors?: Record<string,string>}>}
  */
 async function renderOne() {
+    const settle = () => input.settle === true;
     const component = input.component || {};
     const data = input.data || {};
     const template = component.template || '';
@@ -461,116 +462,94 @@ async function renderOne() {
         };
     }
 
-    const app = Vue.createSSRApp({ template: contentTemplate });
-
     /*
-     * A component that throws must fail the prerender, not shrink it.
+     * Build the app: shared between the fast `renderToString` path and the DOM-based
+     * settle path. Both need the same component registrations, error/warn handlers and
+     * state capture, so the only branch is the render strategy at the end.
      *
-     * Vue's default is to warn and carry on, and an async component that cannot load
-     * renders as an empty comment — so a page whose `@pwaxImport` did not resolve came back
-     * `ok: true` with the sub-component simply missing from the HTML. That is the worst
-     * available outcome: the markup ships, the crawler indexes a page with a hole in it, and
-     * the browser then finds a comment where it expected an element and re-renders the
-     * subtree. Falling back to the SPA shell is strictly better than half a page.
+     * `ssr` selects between `createSSRApp` (for `renderToString`) and `createApp` (for the
+     * DOM-based settle path). The settle path mounts to a fresh jsdom document, so there is
+     * nothing to hydrate — `createSSRApp` would warn "container is empty" and fall back to
+     * a full mount anyway, but its internal hydration bookkeeping can interfere with the
+     * mount. `createApp` does exactly what the browser does: mount from scratch.
      */
     const failures = [];
 
-    app.config.errorHandler = (error) => {
-        failures.push(explain(error && error.message ? error.message : String(error)));
+    const buildApp = (ssr = true) => {
+        const app = (ssr ? Vue.createSSRApp : Vue.createApp)({ template: contentTemplate });
+
+        app.config.errorHandler = (error) => {
+            failures.push(explain(error && error.message ? error.message : String(error)));
+        };
+
+        app.config.warnHandler = (message) => {
+            const unresolved = /Failed to resolve (component|directive): (\S+)/.exec(message);
+
+            if (unresolved && !(unresolved[1] === 'component' && unresolved[2].includes('-'))) {
+                failures.push(explain(message));
+
+                return;
+            }
+
+            process.stderr.write(`[Vue warn]: ${message}\n`);
+        };
+
+        app.component('router-view', {
+            name: 'PwaxPage',
+            template: pageTemplate(templates),
+            data: () => ({
+                component: Vue.markRaw(options),
+                loading: false,
+                error: null,
+                currentPath: url,
+                renderedPath: url,
+                announced: true,
+            }),
+        });
+
+        app.component('router-link', {
+            props: { to: { type: [String, Object], default: '' } },
+            render() {
+                const href = typeof this.to === 'string' ? this.to : this.to.path || '';
+                const active = href !== '' && url !== '' && url.split('?')[0] === href;
+
+                return Vue.h(
+                    'a',
+                    {
+                        'aria-current': active ? 'page' : null,
+                        href,
+                        class: active ? 'router-link-active router-link-exact-active' : '',
+                    },
+                    this.$slots.default ? this.$slots.default() : []
+                );
+            },
+        });
+
+        return app;
     };
 
     /*
-     * A warning about something Vue could not resolve is a failure here.
+     * The settle path: mount to a jsdom document, let lifecycle hooks run, wait for
+     * the app to become stable, and serialise the final DOM.
      *
-     * In the browser it is recoverable — the component or directive is usually registered
-     * by an application plugin that has since loaded. In a prerender nothing arrives later:
-     * an unresolved component is emitted as a literal element of that name and an
-     * unresolved directive is silently dropped, so the markup ships looking plausible and
-     * disagrees with the browser's the moment it hydrates. Every other warning is a
-     * diagnostic and goes to stderr, where it cannot corrupt the result on stdout.
+     * This is what captures the things `renderToString` cannot: a script injecting
+     * `<style>` tags in `mounted()`, a `fetch` that populates a list, any DOM
+     * mutation that happens after the initial render. The result is the full page as the
+     * browser's first paint would show it — complete for crawlers and no-JS visitors.
+     *
+     * The client does *not* hydrate this HTML: the DOM may carry content the
+     * synchronous virtual DOM does not (the fetched list, the injected styles), so
+     * `createSSRApp`'s node-by-node comparison would bail out and re-render anyway.
+     * Instead the client re-renders from scratch — slower for it, but the prerendered HTML
+     * was for the crawler, and the swap is invisible to a visitor whose page has already
+     * painted. This is the same trade Angular Universal makes when hydration is not
+     * available, and it is the right one for content that is not knowable synchronously.
      */
-    app.config.warnHandler = (message) => {
-        const unresolved = /Failed to resolve (component|directive): (\S+)/.exec(message);
+    if (settle()) {
+        return await renderWithDom(options, templates, contentTemplate, failures, captured, data);
+    }
 
-        // A hyphen means it may well be a native custom element, which Vue renders as a
-        // literal element of that name — on the client exactly as here, so the markup
-        // agrees and there is nothing to refuse. Pwax does not set `isCustomElement`, so
-        // the browser's console carries the same warning; a name without a hyphen is a Vue
-        // component that was meant to resolve and did not.
-        if (unresolved && !(unresolved[1] === 'component' && unresolved[2].includes('-'))) {
-            failures.push(explain(message));
-
-            return;
-        }
-
-        process.stderr.write(`[Vue warn]: ${message}\n`);
-    };
-
-    /*
-     * `router-view` renders the *page component wrapper*, not the page component.
-     *
-     * This is the difference between HTML that hydrates and HTML that does not. On the
-     * client, `<router-view>` resolves to `PwaxPage`, whose template has two root-level
-     * `<template>` blocks — so it is a fragment, and Vue brackets its output with
-     * `<!--[-->` / `<!--]-->` anchors and leaves a `<!---->` placeholder where the loader
-     * branch did not render. Hydration walks those nodes and expects every one of them.
-     *
-     * Rendering the page component directly here produced the right elements and none of
-     * the anchors, so `createSSRApp` bailed out on the very first node, threw the server's
-     * markup away and drew the page again on the client — the prerender was doing nothing
-     * but costing a Node process. Building the stand-in from `pageTemplate()`, the same
-     * function `src/js/page.js` uses, means the two structures cannot disagree.
-     *
-     * The state below is the success branch, which is the only branch a prerender reaches:
-     * an error would have been reported instead of rendered.
-     */
-    app.component('router-view', {
-        name: 'PwaxPage',
-        template: pageTemplate(templates),
-        data: () => ({
-            component: Vue.markRaw(options),
-            loading: false,
-            error: null,
-            currentPath: url,
-            renderedPath: url,
-            announced: true,
-        }),
-    });
-
-    /*
-     * `router-link`, rendering exactly what Vue Router's own `RouterLink` renders.
-     *
-     * Vue Router is not installed here — Pwax vendors it as a browser global — so the
-     * bridge stands in for it. "Roughly an `<a>`" is not close enough: this was written as
-     * a `template` with a `<slot>`, and a compiled slot outlet is a fragment, so the server
-     * wrapped every link's text in `<!--[-->` / `<!--]-->` anchors that `RouterLink` does
-     * not produce. That is a node-structure mismatch on any page with a nav.
-     *
-     * A render function passing the slot's vnodes straight through as array children emits
-     * them inline, as `RouterLink` does. `aria-current` and the active classes are matched
-     * too — those are only attributes, which Vue would patch rather than bail on, but a
-     * patch is still a wasted DOM write and a "hydration completed but contains mismatches"
-     * line in everyone's console.
-     */
-    app.component('router-link', {
-        props: { to: { type: [String, Object], default: '' } },
-        render() {
-            const href = typeof this.to === 'string' ? this.to : this.to.path || '';
-            const active = href !== '' && url !== '' && url.split('?')[0] === href;
-
-            return Vue.h(
-                'a',
-                {
-                    'aria-current': active ? 'page' : null,
-                    href,
-                    // An empty string, not null, for an inactive link: `RouterLink` always
-                    // binds the class, so the attribute is present either way.
-                    class: active ? 'router-link-active router-link-exact-active' : '',
-                },
-                this.$slots.default ? this.$slots.default() : []
-            );
-        },
-    });
+    const app = buildApp();
 
     /*
      * `<Teleport>` renders its children somewhere else in the document — `body`, usually —
@@ -605,6 +584,326 @@ async function renderOne() {
     const { state: serializedState, unseeded } = seedable(captured, data);
 
     return { ok: true, html, serializedState, unseeded };
+}
+
+/**
+ * Render by mounting to a jsdom document and waiting for post-mount behaviour.
+ *
+ * Requires `jsdom` as an optional peer dependency. When it is not installed, the bridge
+ * reports the failure with the install command rather than crashing — the same pattern the
+ * missing-dependency guards at the top of this file use.
+ *
+ * The client does not hydrate this HTML (see `renderOne`'s docblock). The result carries
+ * `hydrate: false` so the PHP side can tell the runtime to re-render rather than attempt
+ * hydration.
+ *
+ * @param {any} options  The resolved page component options.
+ * @param {Record<string, string>} templates  The markup fragments from `Shell::templates()`.
+ * @param {string} contentTemplate  The root content template.
+ * @param {string[]} failures  Shared failure collector.
+ * @param {Record<string, any>} captured  The captured state from `data()`/`setup()`.
+ * @param {Record<string, any>} data  The controller data.
+ * @returns {Promise<{ok: boolean, html?: string, serializedState?: any, unseeded?: string[], hydrate?: boolean}>}
+ */
+
+/**
+ * Wait for the app to become stable, the way Angular's `ApplicationRef.isStable` does.
+ *
+ * After the initial mount, `mounted()` hooks fire, promises resolve, timers are
+ * scheduled. Each of those may mutate the DOM. A fixed delay guesses how long they will
+ * take; polling until the document is quiet does not.
+ *
+ * The strategy: snapshot the DOM, flush microtasks, wait a short round for timers, then
+ * snapshot again. If the two snapshots agree, the app is stable and we stop. If not,
+ * something is still changing the DOM, so we loop. The `ceiling` is the hard limit: a
+ * page that never settles (a `setInterval`, a reconnect loop) is abandoned at the
+ * timeout, and whatever has rendered is serialised.
+ *
+ * The round length is short — 10 ms — because a round only needs to be long enough for a
+ * `setTimeout(0)` callback to fire. A page that schedules `setTimeout(500)` for a
+ * debounced input will settle in one round once that timer fires, which the ceiling
+ * allows for.
+ *
+ * @param {Window} window  The jsdom window.
+ * @param {number} ceiling  Hard ceiling in milliseconds.
+ */
+async function waitForStable(window, ceiling) {
+    const round = 10;
+    const start = Date.now();
+    let previous = window.document.getElementById('pwax').innerHTML;
+
+    for (;;) {
+        // Flush microtasks (promise chains from mounted/setup).
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        // Wait a round for any timers scheduled in the previous flush.
+        await new Promise((resolve) => setTimeout(resolve, round));
+
+        const current = window.document.getElementById('pwax').innerHTML;
+
+        if (current === previous) {
+            return;
+        }
+
+        previous = current;
+
+        if (Date.now() - start >= ceiling) {
+            return;
+        }
+    }
+}
+
+async function renderWithDom(options, templates, contentTemplate, failures, captured, data) {
+    const url = typeof input.url === 'string' ? input.url : '';
+    let JSDOM;
+
+    try {
+        ({ JSDOM } = await import('jsdom'));
+    } catch {
+        fail(
+            'The optional peer dependency jsdom is not installed. Run ' +
+                '`npm install --save-dev jsdom` in your application, or set pwax.ssr.settle to false.'
+        );
+    }
+
+    // The ceiling for the stability poll, in milliseconds. Derived from `ssr.timeout`
+    // (seconds) with a floor of 1 second so a short timeout still leaves room for a
+    // render round. The bridge polls until the document is quiet rather than sleeping
+    // for a fixed duration, in the same way Angular's `ApplicationRef.isStable` waits
+    // for the app to settle. The ceiling is the safety net, not the strategy.
+    const ceiling = Math.max(1000, Math.min(30000, (Number(input.timeout) || 5) * 1000));
+
+    // A document whose body mirrors the shell's mount element, so the app mounts into the
+    // same container it will in the browser. `pretendToBeVisual` enables `requestAnimationFrame`,
+    // which some components and libraries reach for in `mounted()`.
+    const dom = new JSDOM(
+        '<!DOCTYPE html><html><head></head><body><div id="pwax"></div></body></html>',
+        { pretendToBeVisual: true, url: input.url || 'http://localhost/' }
+    );
+
+    const { window } = dom;
+    const doc = window.document;
+
+    // Vue's `runtime-dom` CJS build captures `document` in a closure when the module is
+    // first imported — at the top of this file, where `document` is undefined. So
+    // `createApp(...).mount()` reaches for a null `document` and crashes. The fix is to
+    // build a renderer whose `nodeOps` operate on the jsdom document directly, using
+    // `createRenderer` with a shallow copy of Vue's own `nodeOps` retargeted to `doc`.
+    //
+    // `@vue/runtime-dom` exports both `nodeOps` and `createRenderer`; the latter takes
+    // `nodeOps` and `patchProp` and returns a `createApp` that uses them. This is the
+    // supported extension point for rendering to a non-browser DOM.
+    const runtimeDom = await import('@vue/runtime-dom');
+    const jsdomNodeOps = {
+        insert(child, parent, anchor) {
+            if (anchor !== null) {
+                parent.insertBefore(child, anchor);
+            } else {
+                parent.appendChild(child);
+            }
+        },
+        remove(child) {
+            const parent = child.parentNode;
+            if (parent) parent.removeChild(child);
+        },
+        createElement(tag, _isSVG, _isCustom) {
+            return doc.createElement(tag);
+        },
+        createText(text) {
+            return doc.createTextNode(text);
+        },
+        createComment(text) {
+            return doc.createComment(text);
+        },
+        setText(node, text) {
+            node.textContent = text;
+        },
+        setElementText(el, text) {
+            el.textContent = text;
+        },
+        parentNode(node) {
+            return node.parentNode;
+        },
+        nextSibling(node) {
+            return node.nextSibling;
+        },
+        querySelector(selector) {
+            return doc.querySelector(selector);
+        },
+        setScopeId(el, id) {
+            el.setAttribute(id, '');
+        },
+        insertStaticContent(content, parent, anchor, _isSVG) {
+            const tpl = doc.createElement('template');
+            tpl.innerHTML = content;
+            const nodes = [...tpl.content.childNodes];
+            nodes.forEach((n) => parent.insertBefore(n, anchor));
+            return nodes;
+        },
+    };
+
+    // Vue's runtime-dom dereferences `SVGElement` and `SVGAnimatedString` from the global
+    // scope (not from `window`) when mounting. jsdom does not provide them, so they must
+    // be published on `globalThis` for the duration of the mount. Saved and restored so
+    // a subsequent render in the same process (the doctor's probe) is unaffected.
+    const savedSvgElement = globalThis.SVGElement;
+    const savedSvgAnimatedString = globalThis.SVGAnimatedString;
+
+    globalThis.SVGElement = window.SVGElement || window.Element;
+    globalThis.SVGAnimatedString =
+        window.SVGAnimatedString ||
+        class SVGAnimatedString {
+            constructor() {
+                this.baseVal = '';
+                this.animVal = '';
+            }
+        };
+
+    // Vue's createApp reads `document` and `window` from the global scope. Publish them
+    // for the duration of the render so the app mounts to the jsdom document rather than
+    // throwing `document is not defined`. Saved and restored so a second render in the
+    // same process (the doctor's probe) is unaffected.
+    const savedDocument = globalThis.document;
+    const savedWindow = globalThis.window;
+
+    globalThis.document = doc;
+    globalThis.window = window;
+
+    try {
+        // Build the app with a renderer that targets the jsdom document. `createRenderer`
+        // returns `{ createApp }` just like `Vue.createApp`, but its host functions operate
+        // on `doc` rather than the cached null `document`. The `patchProp` is a minimal
+        // implementation that covers the attribute types a prerendered page touches.
+        const renderer = runtimeDom.createRenderer({
+            ...jsdomNodeOps,
+            patchProp(el, key, _prev, next) {
+                if (key === 'class') {
+                    el.className = next ?? '';
+                } else if (key === 'style' && typeof next === 'object') {
+                    for (const [k, v] of Object.entries(next)) {
+                        el.style[k] = v;
+                    }
+                } else if (key.startsWith('on') && typeof next === 'function') {
+                    el.addEventListener(key.slice(2).toLowerCase(), next);
+                } else if (next === false || next == null) {
+                    el.removeAttribute(key);
+                } else {
+                    el.setAttribute(key, String(next));
+                }
+            },
+        });
+
+        const app = renderer.createApp({ template: contentTemplate });
+
+        app.config.errorHandler = (error) => {
+            failures.push(explain(error && error.message ? error.message : String(error)));
+        };
+
+        app.config.warnHandler = (message) => {
+            const unresolved = /Failed to resolve (component|directive): (\S+)/.exec(message);
+
+            if (unresolved && !(unresolved[1] === 'component' && unresolved[2].includes('-'))) {
+                failures.push(explain(message));
+
+                return;
+            }
+
+            process.stderr.write(`[Vue warn]: ${message}\n`);
+        };
+
+        app.component('router-view', {
+            name: 'PwaxPage',
+            template: pageTemplate(templates),
+            data: () => ({
+                component: Vue.markRaw(options),
+                loading: false,
+                error: null,
+                currentPath: url,
+                renderedPath: url,
+                announced: true,
+            }),
+        });
+
+        app.component('router-link', {
+            props: { to: { type: [String, Object], default: '' } },
+            render() {
+                const href = typeof this.to === 'string' ? this.to : this.to.path || '';
+                const active = href !== '' && url !== '' && url.split('?')[0] === href;
+
+                return Vue.h(
+                    'a',
+                    {
+                        'aria-current': active ? 'page' : null,
+                        href,
+                        class: active ? 'router-link-active router-link-exact-active' : '',
+                    },
+                    this.$slots.default ? this.$slots.default() : []
+                );
+            },
+        });
+
+        app.mount(doc.getElementById('pwax'));
+
+        /*
+         * Wait for the app to become stable before serialising the DOM.
+         *
+         * Angular's `ApplicationRef.isStable` is the model: the server render waits for
+         * the app to settle — all pending microtasks, timers and async work drained —
+         * rather than sleeping for a fixed duration. A fixed delay guesses how long a
+         * `fetch` or a style-injecting script will take; polling until quiet does not.
+         *
+         * The poll flushes microtasks with `await`, then checks whether the document
+         * is still mutating. If it is, it waits another round and checks again. The
+         * `ceiling` is the safety net: a page that never settles (a polling interval, a
+         * reconnect loop) is abandoned at the timeout, and whatever has rendered so far
+         * is serialised — which is the same outcome a fixed delay produces, just without
+         * the guesswork about how long to wait.
+         */
+        await waitForStable(window, ceiling);
+
+        if (failures.length) {
+            return { ok: false, message: failures[0], errors: { render: failures.join('\n') } };
+        }
+
+        // Serialise the mount element's content. This is what the browser's first paint
+        // would show: the initial render plus everything `mounted()` added — injected
+        // styles, fetched data, DOM mutations.
+        const html = window.document.getElementById('pwax').innerHTML;
+
+        if (!html || html.trim() === '') {
+            failures.push('pwax: the page produced no content after settling.');
+
+            return { ok: false, message: failures[0] };
+        }
+
+        // Capture any `<style>` tags injected into `<head>` during the render —
+        // libraries that inject styles at mount time do this. These travel back to PHP
+        // so the shell can put them in the real `<head>`, where they are visible to
+        // crawlers and present before the client re-renders.
+        const headStyles = [];
+
+        for (const style of window.document.head.querySelectorAll('style')) {
+            if (style.textContent && style.textContent.trim()) {
+                headStyles.push(style.textContent);
+            }
+        }
+
+        const { state: serializedState, unseeded } = seedable(captured, data);
+
+        // `hydrate: false` tells the PHP side to mark the initial payload so the client
+        // re-renders rather than hydrating. The settled DOM may carry content the
+        // synchronous virtual DOM does not, so hydration would bail out anyway.
+        // `headStyles` carries any styles injected during the settle, so the shell can
+        // inline them in `<head>`.
+        return { ok: true, html, serializedState, unseeded, hydrate: false, headStyles };
+    } finally {
+        globalThis.document = savedDocument;
+        globalThis.window = savedWindow;
+        globalThis.SVGElement = savedSvgElement;
+        globalThis.SVGAnimatedString = savedSvgAnimatedString;
+
+        dom.window.close();
+    }
 }
 
 /**

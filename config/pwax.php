@@ -134,6 +134,35 @@ return [
         |          broke rather than silently falling back.
         */
         'fallback' => 'spa',
+
+        /*
+        | Wait for post-mount async work to complete before serialising the HTML.
+        |
+        | Off by default. The standard render is a single synchronous pass — Vue's
+        | `renderToString` — which captures the initial markup but nothing that happens
+        | after `mounted()`: a script that injects `<style>` tags, a `fetch` that
+        | populates a list, a `setTimeout` that reveals content. The browser renders
+        | all of that; the crawler sees none of it.
+        |
+        | Turning this on switches the bridge to a DOM-based render: the app is mounted to
+        | a jsdom document, lifecycle hooks run, and the bridge waits for the app to become
+        | stable — all pending microtasks, timers and async work drained — before
+        | serialising the final DOM. The result includes everything the browser's first
+        | paint would, whatever its source.
+        |
+        | There is no fixed delay. The bridge polls until the document is quiet, in the
+        | same way Angular's `ApplicationRef.isStable` waits for the app to settle rather
+        | than sleeping for a fixed duration. The Node `timeout` above is the hard ceiling.
+        |
+        | Requires `jsdom` as a dev dependency:
+        |
+        |   npm install --save-dev jsdom
+        |
+        | A page that fetches data at request time — from the database, an API — should be
+        | declared `->cacheable()` so the rendered HTML is cached and the fetch does not run
+        | on every request.
+        */
+        'settle' => false,
     ],
 
     /*

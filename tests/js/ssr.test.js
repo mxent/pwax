@@ -446,3 +446,87 @@ describe('bin/ssr.mjs renders a component to HTML', () => {
         expect(result.message).toContain('@vue/compiler-dom@3.5.41');
     });
 });
+
+describe('bin/ssr.mjs settle mode (post-mount rendering)', () => {
+    it('captures data populated in mounted()', () => {
+        // The standard renderToString path produces an empty list — mounted() has not
+        // run. Settle mode mounts to a jsdom document, lets mounted() fire, and waits
+        // for the app to become stable.
+        const result = render({
+            settle: true,
+            timeout: 5,
+            component: {
+                template:
+                    '<div><ul><li v-for="item in items" :key="item">{{ item }}</li></ul></div>',
+                script: 'export default { data() { return { items: [] }; }, mounted() { this.items = ["Apple", "Banana", "Cherry"]; } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('<li>Apple</li>');
+        expect(result.html).toContain('<li>Banana</li>');
+        expect(result.html).toContain('<li>Cherry</li>');
+        // Settle mode returns hydrate: false — the client re-renders, not hydrates.
+        expect(result.hydrate).toBe(false);
+    });
+
+    it('captures styles injected into <head> during mounted()', () => {
+        // A library that injects a <style> tag into <head> at mount time.
+        // The settle path captures those and returns them as headStyles.
+        const result = render({
+            settle: true,
+            timeout: 5,
+            component: {
+                template: '<div class="home"><h1>{{ title }}</h1></div>',
+                script: 'export default { data() { return { title: "Home" }; }, mounted() { const s = document.createElement("style"); s.textContent = ".home { color: red; }"; document.head.appendChild(s); } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.headStyles).toBeDefined();
+        expect(result.headStyles.length).toBeGreaterThan(0);
+        expect(result.headStyles.some((s) => s.includes('.home { color: red; }'))).toBe(true);
+    });
+
+    it('does not hydrate (returns hydrate: false)', () => {
+        const result = render({
+            settle: true,
+            timeout: 5,
+            component: {
+                template: '<div>{{ msg }}</div>',
+                script: 'export default { data() { return { msg: "Hi" }; } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.hydrate).toBe(false);
+    });
+
+    it('the standard path is unaffected when settle is false', () => {
+        const result = render({
+            component: {
+                template:
+                    '<div><ul><li v-for="item in items" :key="item">{{ item }}</li></ul></div>',
+                script: 'export default { data() { return { items: [] }; }, mounted() { this.items = ["Apple"]; } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        // The standard path does NOT run mounted(), so the list stays empty.
+        expect(result.ok).toBe(true);
+        expect(result.html).not.toContain('<li>Apple</li>');
+        // No hydrate flag means the default (true) — the client hydrates.
+        expect(result.hydrate).toBeUndefined();
+    });
+});

@@ -9,6 +9,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **SSR settle mode: post-mount rendering.** When `pwax.ssr.settle` is true, the SSR
+  bridge mounts the app to a jsdom document, lets lifecycle hooks run, waits for the
+  app to become stable — all pending microtasks, timers and async work drained — and
+  serialises the final DOM. This captures everything the standard `renderToString`
+  pass cannot: styles injected in `mounted()`, data fetched from an API then rendered
+  as a list, any DOM mutation that happens after the initial render. The result is the
+  full page as the browser's first paint would show it — complete for crawlers and
+  no-JS visitors. The client re-renders (does not hydrate) the HTML, since the DOM may
+  carry content the synchronous virtual DOM does not. There is no fixed delay — the
+  bridge polls until the document is quiet, like Angular's `ApplicationRef.isStable`;
+  the `ssr.timeout` is the hard ceiling. New config key: `ssr.settle` (bool, default
+  false). Requires `jsdom` as an optional peer dependency
+  (`npm install --save-dev jsdom`).
 - **Server-side rendering for SEO.** The first-paint response of an eligible route is
   prerendered to real HTML through a Node SSR bridge (`bin/ssr.mjs`), using the same
   compiled `Component` the browser would receive run through `@vue/server-renderer`. The
@@ -250,11 +263,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   placement instruction, not an attribute, and is not rendered as one. Head scripts are
   precached like any other, so moving one cannot drop it from the offline install.
 
-- **`pwax:doctor` names a browser-side CSS engine under SSR.** The Tailwind Play CDN,
-  `@tailwindcss/browser`, the UnoCSS runtime and Twind all generate their stylesheet by
-  reading the DOM in the browser, so a prerendered page ships its markup and none of its
-  styles: a crawler without JavaScript sees an unstyled document and everyone else sees the
-  page painted bare first. Worth naming because the local symptom is a few milliseconds
+- **`pwax:doctor` names a browser-side CSS engine under SSR.** A browser-side CSS
+  runtime (a CDN script, a JS-in-CSS library) generates its stylesheet by reading the
+  DOM in the browser, so a prerendered page ships its markup and none of its styles: a
+  crawler without JavaScript sees an unstyled document and everyone else sees the page
+  painted bare first. Worth naming because the local symptom is a few milliseconds
   nobody catches.
 
 - **A workbench demo application, so `testbench serve` serves something.** CONTRIBUTING.md

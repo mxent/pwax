@@ -260,7 +260,26 @@ async function evaluateModule(source) {
 function compileTemplate(template) {
     const { code } = compile(template, {
         mode: 'function',
-        hoistStatic: true,
+        // Off, and not for the reason the name suggests.
+        //
+        // `@vue/compiler-dom`'s `compile()` hardwires `transformHoist: stringifyStatic`
+        // when it is not the browser build — the browser build passes `null` — and that
+        // transform only ever runs when static hoisting is on. It rewrites a hoisted
+        // static subtree into a `createStaticVNode('<html string>')` the runtime mounts
+        // by assigning `innerHTML`, so those elements never reach `patchProp` and the
+        // markup comes from the compiler's own serialiser instead of from the DOM.
+        //
+        // The two serialisers disagree. `:required="true"` is stringified as
+        // `required="true"`, where an element built node-by-node — which is what the
+        // browser does, because it compiles the same template with the build that has
+        // the transform off — carries `required=""`. Same for `readonly`, `open`,
+        // `controls` and every other attribute whose presence is its value.
+        //
+        // Hoisting is a codegen optimisation and stringifying is part of it, so there is
+        // no supported way to keep one and drop the other. Turning it off costs a little
+        // work per render and buys markup identical to the browser's, which is the whole
+        // promise of the prerender.
+        hoistStatic: false,
         prefixIdentifiers: true,
         runtimeGlobalName: 'Vue',
         ssr: false,
@@ -635,7 +654,7 @@ async function renderOne() {
     // it purely as props (no `data()` or `setup()`).
     const { state: serializedState, unseeded } = seedable(captured, data);
 
-    return { ok: true, html, serializedState, unseeded };
+    return { ok: true, html: devAnchors(html), serializedState, unseeded };
 }
 
 /**
@@ -655,7 +674,7 @@ async function renderOne() {
  * @param {string[]} failures  Shared failure collector.
  * @param {Record<string, any>} captured  The captured state from `data()`/`setup()`.
  * @param {Record<string, any>} data  The controller data.
- * @returns {Promise<{ok: boolean, html?: string, serializedState?: any, unseeded?: string[], hydrate?: boolean}>}
+ * @returns {Promise<{ok: boolean, html?: string, serializedState?: any, unseeded?: string[], hydrate?: boolean, settled?: boolean, pending?: number}>}
  */
 
 /**
@@ -694,6 +713,68 @@ async function renderOne() {
  * the properties whose attribute form does not track the live value.
  */
 const DOM_PROPS = new Set(['innerHTML', 'textContent', 'value', 'checked', 'selected', 'muted']);
+
+/**
+ * Of those, the ones that also appear as an attribute in the serialised markup.
+ *
+ * Setting `el.value` alone leaves nothing in `outerHTML`, so a prerendered form arrived at
+ * the crawler — and at a visitor without JavaScript — with every field blank, every
+ * checkbox clear and no option selected, while the browser rendering the same component
+ * showed them filled. `innerHTML` and `textContent` are deliberately absent: their content
+ * is the element's children, not an attribute.
+ */
+const REFLECTED_PROPS = new Set(['value', 'checked', 'selected', 'muted']);
+
+/**
+ * Vue's development compiler labels the placeholder comment left where a `v-if` did not
+ * render; the production compiler the browser runs emits a bare `<!---->`.
+ *
+ * The bridge compiles with the development build on purpose — `warn()` is how an unresolved
+ * component or directive is caught, and production strips it — so the labels are the price
+ * of the diagnostics rather than something to fix by switching builds. Rewriting them on
+ * the way out costs nothing and is what makes the server's markup identical to the
+ * browser's, on both render paths.
+ *
+ * Only the labels go. `<!--[-->` and `<!--]-->` are the fragment anchors the client's
+ * hydration walks, and the browser produces those too.
+ */
+const devAnchors = (html) => html.replace(/<!--(?:v-if|v-else|v-else-if|v-for)-->/g, '<!---->');
+
+/**
+ * Attributes whose presence is the value, so `false` means "leave it out".
+ *
+ * Everywhere else `false` is an ordinary value and renders as the string `"false"` — which
+ * is what the browser does, and what this got wrong: `:data-active="false"` and
+ * `:aria-hidden="false"` were dropped from the server's markup and present in the
+ * browser's. The `aria-` case is not cosmetic. `aria-hidden="false"` and no `aria-hidden`
+ * at all mean different things to a screen reader once an ancestor has hidden the subtree.
+ *
+ * The rule is Vue's own: remove when the value is falsy and not the empty string, and emit
+ * the empty string otherwise.
+ */
+const BOOLEAN_ATTRS = new Set([
+    'allowfullscreen',
+    'async',
+    'autofocus',
+    'autoplay',
+    'controls',
+    'default',
+    'defer',
+    'disabled',
+    'formnovalidate',
+    'inert',
+    'ismap',
+    'itemscope',
+    'loop',
+    'multiple',
+    'nomodule',
+    'novalidate',
+    'open',
+    'playsinline',
+    'readonly',
+    'required',
+    'reversed',
+]);
 
 const setTimeoutOriginal = globalThis.setTimeout;
 
@@ -905,7 +986,7 @@ async function waitForStable(window, activity, ceiling) {
             quiet += 1;
 
             if (quiet >= 2) {
-                return;
+                return true;
             }
         } else {
             quiet = 0;
@@ -914,7 +995,7 @@ async function waitForStable(window, activity, ceiling) {
         previous = current;
 
         if (Date.now() - start >= ceiling) {
-            return;
+            return false;
         }
     }
 }
@@ -1116,16 +1197,36 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
                 if (DOM_PROPS.has(key)) {
                     el[key] = next ?? '';
 
+                    if (REFLECTED_PROPS.has(key)) {
+                        if (next === false || next == null) {
+                            el.removeAttribute(key);
+                        } else {
+                            el.setAttribute(key, next === true ? '' : String(next));
+                        }
+                    }
+
                     return;
                 }
 
-                if (next === false || next == null) {
+                if (next == null) {
                     el.removeAttribute(key);
 
                     return;
                 }
 
-                el.setAttribute(key, next === true ? '' : String(next));
+                if (BOOLEAN_ATTRS.has(key)) {
+                    // Vue's `includeBooleanAttr`: present unless the value is falsy, with
+                    // the empty string counting as present.
+                    if (next || next === '') {
+                        el.setAttribute(key, '');
+                    } else {
+                        el.removeAttribute(key);
+                    }
+
+                    return;
+                }
+
+                el.setAttribute(key, String(next));
             },
         });
 
@@ -1199,7 +1300,7 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
          * is serialised — which is the same outcome a fixed delay produces, just without
          * the guesswork about how long to wait.
          */
-        await waitForStable(window, activity, ceiling);
+        const settled = await waitForStable(window, activity, ceiling);
 
         if (failures.length) {
             return { ok: false, message: failures[0], errors: { render: failures.join('\n') } };
@@ -1208,7 +1309,7 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
         // Serialise the mount element's content. This is what the browser's first paint
         // would show: the initial render plus everything `mounted()` added — injected
         // styles, fetched data, DOM mutations.
-        const html = window.document.getElementById('pwax').innerHTML;
+        const html = devAnchors(window.document.getElementById('pwax').innerHTML);
 
         if (!html || html.trim() === '') {
             failures.push('pwax: the page produced no content after settling.');
@@ -1225,7 +1326,7 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
 
         for (const node of window.document.body.children) {
             if (node.id !== 'pwax' && node.outerHTML) {
-                bodyHtml.push(node.outerHTML);
+                bodyHtml.push(devAnchors(node.outerHTML));
             }
         }
 
@@ -1243,12 +1344,36 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
 
         const { state: serializedState, unseeded } = seedable(captured, data);
 
-        // `hydrate: false` tells the PHP side to mark the initial payload so the client
-        // re-renders rather than hydrating. The settled DOM may carry content the
-        // synchronous virtual DOM does not, so hydration would bail out anyway.
-        // `headStyles` carries any styles injected during the settle, so the shell can
-        // inline them in `<head>`.
-        return { ok: true, html, serializedState, unseeded, hydrate: false, headStyles, bodyHtml };
+        /*
+         * `hydrate: false` tells the PHP side to mark the initial payload so the client
+         * re-renders rather than hydrating. The settled DOM may carry content the
+         * synchronous virtual DOM does not, so hydration would bail out anyway.
+         * `headStyles` carries any styles injected during the settle, so the shell can
+         * inline them in `<head>`.
+         *
+         * `settled: false` means the poll gave up at the ceiling with work still in flight,
+         * so what follows is a partial page — the list that was still being fetched is not
+         * in it, and neither is anything that depended on it.
+         *
+         * It is reported rather than failed on, because a partial prerender is still better
+         * than none and the client fills in the rest on boot. But it is worth saying: the
+         * commonest cause is not a slow API at all. A page whose `mounted()` fetches its own
+         * application cannot be prerendered by a single-worker development server — the one
+         * process is busy serving this very request, so the fetch waits for a reply that
+         * cannot come until it returns. `php artisan serve` runs one worker unless
+         * `PHP_CLI_SERVER_WORKERS` says otherwise, and every production server runs more.
+         */
+        return {
+            ok: true,
+            html,
+            serializedState,
+            unseeded,
+            hydrate: false,
+            headStyles,
+            bodyHtml,
+            settled,
+            pending: Math.max(0, activity.pending),
+        };
     } finally {
         // Before the globals are put back, since the patches live on them.
         activity?.restore();

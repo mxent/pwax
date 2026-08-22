@@ -519,6 +519,7 @@ class Prerenderer
         );
 
         $this->reportUnseeded($decoded['unseeded'] ?? []);
+        $this->reportUnsettled($decoded);
 
         // The imported components' stylesheets travel out with the HTML so the shell can
         // put them in the document. The browser attaches them as each module loads, which is
@@ -573,6 +574,44 @@ class Prerenderer
      * hydration mismatch, and neither the missing element nor the console line points
      * anywhere near `data()`. One debug line naming the key is the whole difference.
      */
+    /**
+     * Say so when a settle-mode prerender ran out of time with work still in flight.
+     *
+     * The page still ships — a partial prerender beats none, and the client finishes the job
+     * on boot — so nothing about this is an error the visitor sees. It is invisible from the
+     * outside, which is exactly the problem: the developer looking at the markup sees an
+     * empty list and no reason for it.
+     *
+     * The commonest cause is not a slow endpoint. A page whose `mounted()` fetches its own
+     * application deadlocks against a single-worker development server: the one process is
+     * busy serving this request and cannot answer the fetch until it finishes, so the fetch
+     * waits out the whole budget. `php artisan serve` runs one worker unless
+     * `PHP_CLI_SERVER_WORKERS` is set, and every production server runs more — so this is a
+     * failure people meet in development and never in production, which is the kind worth
+     * naming precisely.
+     *
+     * @param  array<string, mixed>  $decoded
+     */
+    private function reportUnsettled(array $decoded): void
+    {
+        if (! array_key_exists('settled', $decoded) || $decoded['settled'] !== false) {
+            return;
+        }
+
+        if (! $this->config->get('app.debug') || ! function_exists('app') || ! app()->bound('log')) {
+            return;
+        }
+
+        Log::debug(sprintf(
+            'pwax: the SSR settle pass ran out of time with %d operation(s) still pending, so the '
+            . 'prerendered markup is what had rendered by then. Raise `pwax.ssr.timeout` if the '
+            . 'work is genuinely slow — but if this page fetches its own application, check that '
+            . 'the development server runs more than one worker (`PHP_CLI_SERVER_WORKERS`), '
+            . 'because a single worker cannot answer a request it is still serving.',
+            max(0, (int) ($decoded['pending'] ?? 0))
+        ));
+    }
+
     private function reportUnseeded(mixed $keys): void
     {
         if (! is_array($keys) || $keys === []) {

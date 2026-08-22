@@ -3,6 +3,7 @@
 namespace Mxent\Pwax\Tests\Feature;
 
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\View;
 use Mxent\Pwax\Pwax;
 use Mxent\Pwax\Support\RenderFunctionStore;
@@ -124,6 +125,10 @@ class SsrTest extends TestCase
             // markup all arrive after `mounted()`.
             $router->get('/ssr-settle', fn () => pwaxRender('pages.ssr-settle'))
                 ->name('ssr.settle');
+
+            // A page that never settles, so the ceiling has to end the render.
+            $router->get('/ssr-restless', fn () => pwaxRender('pages.ssr-restless'))
+                ->name('ssr.restless');
 
             // A page that pulls in sub-components with `@pwaxImport`, by default export
             // and by named export.
@@ -814,6 +819,44 @@ class SsrTest extends TestCase
         // `v-html` is a DOM property, not an attribute. Written as one it rendered nothing.
         $this->assertStringContainsString('<em id="inner">from v-html</em>', $html);
         $this->assertStringNotContainsString('innerhtml=', $html);
+    }
+
+    /**
+     * A prerender abandoned at the ceiling ships a partial page, and says so.
+     *
+     * Nothing about it is visible from outside: the response is a 200 with `X-Pwax-SSR: 1`
+     * and markup that simply lacks whatever had not finished. A developer looking at an
+     * empty list has no way to tell it from a list that is genuinely empty — least of all
+     * when the cause is the one that catches everybody, a page fetching its own application
+     * through a development server with a single worker, which cannot answer a request it
+     * is still serving.
+     */
+    public function test_a_prerender_that_runs_out_of_time_says_so(): void
+    {
+        $this->requireNode();
+
+        config()->set('pwax.ssr.settle', true);
+        config()->set('pwax.ssr.timeout', 3);
+        config()->set('app.debug', true);
+
+        $messages = [];
+
+        Log::listen(function ($message) use (&$messages): void {
+            $messages[] = (string) $message->message;
+        });
+
+        $response = $this->get('/ssr-restless');
+
+        // Still prerendered: what had rendered by the ceiling is better than nothing, and
+        // the client finishes the job on boot.
+        $response->assertHeader('X-Pwax-SSR', '1');
+        $this->assertStringContainsString('id="tick"', (string) $response->getContent());
+
+        $this->assertNotEmpty(array_filter(
+            $messages,
+            fn (string $message): bool => str_contains($message, 'ran out of time')
+                && str_contains($message, 'PHP_CLI_SERVER_WORKERS')
+        ), 'The settle timeout was not reported: ' . implode(' | ', $messages));
     }
 
     public function test_settle_mode_is_off_unless_asked_for(): void

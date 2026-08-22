@@ -1870,6 +1870,41 @@ Under a single-process `php artisan serve` it deadlocks until the prerender time
 `PHP_CLI_SERVER_WORKERS`, run behind a real server, or read the data in the controller and
 pass it to `pwaxRender()`, which needs no HTTP call at all.
 
+### What the prerender guarantees
+
+The markup the server sends is the markup the browser would have built. Not an
+approximation of it — the same attributes, the same values, the same placeholder comments.
+That is the point of prerendering at all: a crawler reading the first paint and a visitor
+without JavaScript should see the page, not a sketch of it.
+
+Holding to that takes deliberate work, because Node and the browser do not compile a
+template the same way by default:
+
+| | The browser | The bridge, without care | Now |
+| --- | --- | --- | --- |
+| `:required="true"` | `required=""` | `required="true"` | `required=""` |
+| `:readonly="false"` | absent | `readonly="false"` | absent |
+| `:aria-hidden="false"` | `aria-hidden="false"` | absent | `aria-hidden="false"` |
+| `:value="'typed'"` | property, no attribute | absent from the HTML | `value="typed"` |
+| `v-if` that did not render | `<!---->` | `<!--v-if-->` | `<!---->` |
+
+The first two come from `@vue/compiler-dom`, which stringifies hoisted static subtrees into
+HTML when it runs under Node and does not when it runs in the browser — so past a threshold
+of about five elements carrying bindings, an entire subtree was written by the compiler's
+serialiser rather than built node by node. Static hoisting is therefore off in both
+`bin/ssr.mjs` and `bin/compile-templates.mjs`; the same divergence otherwise appeared in
+whatever `php artisan pwax:compile` produced.
+
+`value`, `checked`, `selected` and `muted` are the other direction. Vue sets them as DOM
+*properties*, and a property leaves nothing behind in serialised HTML, so a prerendered form
+reached the crawler with every field blank while the browser showed them filled. The bridge
+reflects them back onto attributes, which is what `@vue/server-renderer` does too.
+
+None of this is configurable. It is a correctness property, held by
+`tests/js/ssr.test.js` and by loading the same components in a real browser twice — once
+with JavaScript disabled to read what the server sent, once normally to read what the
+browser made — and diffing.
+
 ### Observability
 
 Prerendered responses carry `X-Pwax-SSR: 1`; SPA fallbacks carry `X-Pwax-SSR: 0`. The
@@ -1884,6 +1919,12 @@ A `0` means one of two things, and they are worth telling apart:
   `prerenderable()`.
 - **The prerender failed and fell back.** A warning is logged once per process, and
   `php artisan pwax:doctor` reproduces it with the underlying Node error.
+
+A settle-mode page can also come back as a `1` that is only *part* of the page: the bridge
+abandons a render at `ssr.timeout` and serialises whatever had rendered by then. That is the
+right outcome — a partial prerender beats none, and the client finishes on boot — and an
+invisible one, so with `APP_DEBUG` on the log says how much work was still pending. The
+usual cause is not a slow endpoint but the single-worker deadlock described above.
 
 ## Security
 

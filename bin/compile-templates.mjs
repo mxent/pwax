@@ -99,7 +99,26 @@ for (const [hash, template] of Object.entries(input.templates || {})) {
             // module the browser would have to import separately. The generated chunk ends
             // in `return function render(…)`, so evaluating it yields the function.
             mode: 'function',
-            hoistStatic: true,
+            // Off, and not for the reason the name suggests.
+            //
+            // `@vue/compiler-dom`'s `compile()` hardwires `transformHoist: stringifyStatic`
+            // when it is not the browser build — the browser build passes `null` — and that
+            // transform only ever runs when static hoisting is on. It rewrites a hoisted
+            // static subtree into a `createStaticVNode('<html string>')` the runtime mounts
+            // by assigning `innerHTML`, so those elements never reach `patchProp` and the
+            // markup comes from the compiler's own serialiser instead of from the DOM.
+            //
+            // The two serialisers disagree. `:required="true"` is stringified as
+            // `required="true"`, where an element built node-by-node — which is what the
+            // browser does, because it compiles the same template with the build that has
+            // the transform off — carries `required=""`. Same for `readonly`, `open`,
+            // `controls` and every other attribute whose presence is its value.
+            //
+            // Hoisting is a codegen optimisation and stringifying is part of it, so there is
+            // no supported way to keep one and drop the other. Turning it off costs a little
+            // work per render and buys markup identical to the browser's, which is the whole
+            // promise of the prerender.
+            hoistStatic: false,
             // Not optional. Without it the compiler emits `with (_ctx) { … }`, which is a
             // SyntaxError in a module — and every component Pwax serves is a module.
             prefixIdentifiers: true,

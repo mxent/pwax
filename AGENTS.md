@@ -531,6 +531,16 @@ before answering.
   breaking change and the version bumps.
 - **Committing `dist/` unchanged when `src/js/` changed.** CI catches it,
   but it is a signal you forgot the build step.
+- **Letting the SSR tests skip in CI.** They need Node and the SSR peer
+  dependencies, and a suite that skips every one of them reports the same
+  green tick as one that runs them — which is how SSR shipped broken more
+  than once. The PHP workflow installs those dependencies and sets
+  `PWAX_REQUIRE_SSR=1`, which turns the skip into a failure.
+- **Leaving a compiler option to its default in `bin/*.mjs`.** `comments`
+  follows whether the compiler is a development build, and the SSR bridge
+  runs the development one on purpose. Anything the browser's production
+  runtime compiler decides differently is a hydration mismatch, so the
+  options that affect emitted markup are pinned explicitly on both sides.
 - **Putting anything but the prerendered markup inside `<div id="pwax">`.**
   Vue hydrates from `container.firstChild`. A newline there is a mismatch on
   the first node it looks at, and Vue's recovery is to render the application

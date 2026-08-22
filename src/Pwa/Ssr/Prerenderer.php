@@ -32,8 +32,12 @@ use Throwable;
  * the same reason: a page whose output depends on the visitor cannot be prerendered for
  * everyone.
  *
- * Caching is keyed on the component hash plus a digest of the controller data, so a
- * changed component or a changed payload produces a new entry. A page rendered with no
+ * Caching is keyed on everything the rendered output depends on: the component's digest,
+ * the controller data, the digests of every component reached through `@pwaxImport`, and
+ * the markup fragments the bridge builds the page component from. An edit anywhere in that
+ * set produces a new entry rather than serving the old page — the last two are there
+ * because an import URL carries a view *name*, and `pwax.blade.content` is a view an
+ * application is expected to publish. A page rendered with no
  * data is cached indefinitely (like the compile cache); a page rendered with data is
  * cached only when it is cacheable, and for the TTL `ssr.cache.ttl` or the response
  * declared.
@@ -159,7 +163,14 @@ class Prerenderer
         // on a cache hit, which is a fraction of the Node spawn the cache exists to avoid,
         // and it keeps the promise the rest of the package's caches make.
         $imports = $this->imports($component);
-        $key = $this->cacheKey($component, $data, $imports);
+
+        // The markup fragments are part of what was rendered, so they belong in the key.
+        // The bridge wraps the page in the content template and builds the page component
+        // from the loader and error markup; an application that changes `pwax.blade.content`
+        // — a header and footer around `<router-view>` is the obvious reason to — would
+        // otherwise keep being served HTML built from the previous layout.
+        $templates = app(Shell::class)->templates();
+        $key = $this->cacheKey($component, $data, $imports, $templates);
 
         if (isset($this->memo[$key])) {
             return $this->memo[$key];
@@ -179,7 +190,7 @@ class Prerenderer
             }
         }
 
-        $result = $this->invoke($component, $data, $request, $imports);
+        $result = $this->invoke($component, $data, $request, $imports, $templates);
 
         if ($result === null) {
             return null;
@@ -209,11 +220,14 @@ class Prerenderer
      * @param  array<string, array<string, mixed>>|null  $imports  Already collected by the
      *                                                             caller, which also needs
      *                                                             them for the stylesheets.
+     * @param  array<string, string>|null  $templates  Likewise: the caller keys the cache on
+     *                                                 them, so they are resolved once.
      * @return array<string, mixed>
      */
-    public function payload(Component $component, array $data, Request $request, ?array $imports = null): array
+    public function payload(Component $component, array $data, Request $request, ?array $imports = null, ?array $templates = null): array
     {
         $imports ??= $this->imports($component);
+        $templates ??= app(Shell::class)->templates();
 
         return [
             'version' => (string) $this->config->get('pwax.assets.versions.vue', ''),
@@ -233,7 +247,7 @@ class Prerenderer
             // the same component tree from them, because hydration compares structure and
             // the page component is a fragment — its branch placeholders and its `<!--[-->`
             // anchors have to be in the server's HTML or Vue discards the whole prerender.
-            'templates' => app(Shell::class)->templates(),
+            'templates' => $templates,
             // Every component this page reaches through `@pwaxImport`, keyed by the URL its
             // script calls. The browser fetches those modules over HTTP; Node cannot — the
             // URL is a route on the application that is currently serving this request — so
@@ -340,8 +354,9 @@ class Prerenderer
     /**
      * @param  array<string, mixed>  $data
      * @param  array<string, array<string, mixed>>  $imports
+     * @param  array<string, string>  $templates
      */
-    private function cacheKey(Component $component, array $data, array $imports = []): string
+    private function cacheKey(Component $component, array $data, array $imports = [], array $templates = []): string
     {
         // The imported components' own digests are part of the key. Their URLs are derived
         // from view names rather than content, so nothing else in this key moves when one of
@@ -355,7 +370,8 @@ class Prerenderer
         return self::CACHE_PREFIX
             . $component->hash()
             . ':' . hash('xxh128', json_encode($data) ?: '')
-            . ':' . hash('xxh128', implode(',', $digests));
+            . ':' . hash('xxh128', implode(',', $digests))
+            . ':' . hash('xxh128', implode("\0", $templates));
     }
 
     /**
@@ -372,9 +388,10 @@ class Prerenderer
      *
      * @param  array<string, mixed>  $data
      * @param  array<string, array<string, mixed>>  $imports
+     * @param  array<string, string>  $templates
      * @return array{html: string, state: string, styles: array<string, string>}|null
      */
-    private function invoke(Component $component, array $data, Request $request, array $imports): ?array
+    private function invoke(Component $component, array $data, Request $request, array $imports, array $templates): ?array
     {
         $script = $this->scriptPath();
         $node = (string) ($this->config->get('pwax.ssr.node') ?: 'node');
@@ -389,7 +406,7 @@ class Prerenderer
             [$node, $script],
             base_path(),
             null,
-            (string) json_encode($this->payload($component, $data, $request, $imports), JSON_THROW_ON_ERROR),
+            (string) json_encode($this->payload($component, $data, $request, $imports, $templates), JSON_THROW_ON_ERROR),
             // Seconds. `Process` has taken seconds since Symfony 2, and multiplying by a
             // thousand turned the documented five-second budget into eighty-three minutes:
             // a Node process that hung held the worker for as long as it cared to, which is

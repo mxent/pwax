@@ -207,6 +207,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A prerendered page whose mount element holds anything else is repaired, and says so.**
+  Vue hydrates from `container.firstChild`, and its recovery from a mismatch there is to
+  build the application afresh *before* that node and leave the server's copy where it is —
+  so the visitor sees the whole page twice. The shipped shell emits the markup as the only
+  child and the runtime trims edge whitespace, but a published shell that indents it, wraps
+  it in a `@yield`, or leaves a comment beside it can still put something there. The runtime
+  now removes the orphaned copy and names the cause in the console, rather than leaving a
+  doubled page to be diagnosed from the screen. A leading comment is still not trimmed
+  automatically: an application that overrides `pwax.blade.content` with a multi-root
+  template makes `<!--[-->` a node hydration genuinely expects.
+
+- **A template's HTML comments no longer break hydration.** `comments` defaults to whether
+  the compiler is a development build, and the bridge deliberately runs the development one
+  so that Vue's resolution warnings exist. Left to that default the server kept every
+  `<!-- … -->` in a template while the browser — compiling the same template with the
+  production runtime Pwax ships — dropped them, so any component containing a comment
+  hydrated with a mismatch. Both `bin/ssr.mjs` and `bin/compile-templates.mjs` now pin it to
+  what the browser does.
+
+- **A changed content template is not served from the prerender cache.** The bridge wraps the
+  page in `pwax.blade.content` and builds the page component from the loader and error
+  markup, so what it renders depends on all three — and changing that layout is the ordinary
+  reason to publish the view. Keyed without them, the prerender kept being built from the
+  previous layout.
+
 - **A page that uses `@pwaxImport` can be prerendered.** The directive compiles to
   `window.pwax.component("/__pwax__/c/….js")`, evaluated as the page's module loads — and
   Node has no `window`, so the bridge died with `ReferenceError: window is not defined`

@@ -212,6 +212,13 @@ function compileTemplate(template) {
         prefixIdentifiers: true,
         runtimeGlobalName: 'Vue',
         ssr: false,
+        // Pinned, not left to default. `comments` defaults to whether the compiler is a
+        // development build, and this bridge deliberately runs the development one so that
+        // Vue's resolution warnings exist. Left alone, the server kept every HTML comment in
+        // a template and the browser — compiling the same template with the *production*
+        // runtime Pwax ships — dropped them, so any component containing `<!-- … -->`
+        // hydrated with a mismatch. `false` is what the browser does.
+        comments: false,
     });
 
     // The generated chunk ends in `return function render(…)`, so evaluating it inside a

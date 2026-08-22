@@ -781,9 +781,10 @@ markup is usable before (and without) JavaScript:
   needs JavaScript" wall.
 
 Node is started once per uncached page (~100ms before your component
-renders). The prerender cache — component hash + data digest, honouring
-`ssr.cache.ttl` — keeps that off the critical path after the first
-visitor.
+renders). The prerender cache keeps that off the critical path after the
+first visitor; its key covers the component's digest, the controller data,
+the digests of every `@pwaxImport`ed component and the markup fragments,
+and honours `ssr.cache.ttl`.
 
 The bridge receives the same payload the browser does, so `pwax:compile`
 and SSR compose: both sides render through the shipped `__pwaxRender`.

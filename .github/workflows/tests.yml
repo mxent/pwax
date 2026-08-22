@@ -58,10 +58,24 @@ jobs:
       - name: Install dependencies
         run: composer update --${{ matrix.stability }} --prefer-dist --no-interaction
 
+      # The SSR feature tests run the real Node bridge, which needs the optional peer
+      # dependencies an application installs to enable SSR. Without them every one of those
+      # tests skipped, and a suite that skips them reports the same green tick as one that
+      # runs them — which is how SSR shipped broken more than once.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install the SSR bridge's dependencies
+        run: npm ci
+
       - name: Show installed versions
         run: composer show --direct
 
       - name: Run tests
+        env:
+          PWAX_REQUIRE_SSR: '1'
         run: vendor/bin/phpunit
 
   js:

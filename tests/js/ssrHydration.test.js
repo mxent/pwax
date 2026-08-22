@@ -119,7 +119,7 @@ async function bootAndWait(event = 'pwax:ready') {
  * The module cache is reset on each import and the document has to be in place first —
  * the same approach `reboot.test.js` takes.
  */
-async function boot({ html, state, component, url = '/', indent = false }) {
+async function boot({ html, state, component, url = '/', indent = false, prefix = '' }) {
     document.head.innerHTML = '';
 
     // `indent` reproduces a shell someone has reformatted: the markup sits on its own line
@@ -130,7 +130,7 @@ async function boot({ html, state, component, url = '/', indent = false }) {
     // hydrating it, which shows up as every page rendered twice.
     document.body.innerHTML = indent
         ? `<div id="pwax" tabindex="-1" data-pwax-prerendered>\n        \n            ${html}\n    </div>`
-        : `<div id="pwax" tabindex="-1" data-pwax-prerendered>${html}</div>`;
+        : `<div id="pwax" tabindex="-1" data-pwax-prerendered>${prefix}${html}</div>`;
 
     island('pwax-config', JSON.stringify({ mount: 'pwax', templates: TEMPLATES, pinia: false }));
     island(
@@ -305,6 +305,36 @@ describe('a prerendered page hydrates rather than being re-rendered', () => {
         expect(before).toContain(aside);
         expect(document.querySelectorAll('#pwax .modal')).toHaveLength(1);
         assertNoMismatch();
+    });
+
+    it('discards its own copy and says so when the markup cannot be hydrated', async () => {
+        // Something other than the prerendered markup as the mount element's first child —
+        // a comment a published shell emits, a `@yield` around the content. Vue's recovery
+        // is to build the application afresh *before* that node and leave the server's copy
+        // where it is, so the visitor sees the whole page twice. Whitespace is trimmed
+        // before hydrating; a comment cannot be, because a multi-root content template makes
+        // `<!--[-->` a node hydration genuinely expects.
+        const component = {
+            template: '<div class="home"><h1>Home</h1></div>',
+            script: '',
+            style: '',
+        };
+
+        const result = prerender({ url: '/', component, data: {} });
+
+        await boot({
+            html: result.html,
+            state: result.serializedState,
+            component,
+            prefix: '<!-- injected by a published shell -->',
+        });
+
+        // One copy of the page, not two.
+        expect(document.querySelectorAll('#pwax main')).toHaveLength(1);
+        expect(document.querySelectorAll('#pwax h1')).toHaveLength(1);
+
+        // And the reason is not left to be discovered by looking at the screen.
+        expect(consoleErrors.join('\n')).toContain('could not be hydrated');
     });
 
     it('does not fetch the page it is already displaying', async () => {

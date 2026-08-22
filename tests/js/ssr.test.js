@@ -279,6 +279,27 @@ describe('bin/ssr.mjs renders a component to HTML', () => {
         expect(directive.message).toContain('tooltip');
     });
 
+    it('drops template comments, as the production runtime compiler does', () => {
+        // `comments` defaults to whether the compiler is a development build, and this
+        // bridge deliberately runs the development one so Vue's resolution warnings exist.
+        // Left to that default the server kept every `<!-- … -->` in a template while the
+        // browser — compiling the same template with the production runtime Pwax ships —
+        // dropped them, so any component containing a comment hydrated with a mismatch.
+        const result = render({
+            component: {
+                template: '<div class="c"><!-- a note --><p>After</p></div>',
+                script: '',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toBe(wrapped('<div class="c"><p>After</p></div>'));
+        expect(result.html).not.toContain('a note');
+    });
+
     it('leaves a native custom element alone', () => {
         // A hyphenated tag Vue cannot resolve is rendered as a literal element of that
         // name — here and in the browser alike, since Pwax does not set `isCustomElement`.

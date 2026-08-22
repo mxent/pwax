@@ -100,8 +100,10 @@ return [
         'script' => null,
 
         /*
-        | Where to cache prerendered HTML, keyed on the component hash + a digest of the
-        | controller data. A page rendered with no data is cached forever; a page
+        | Where to cache prerendered HTML. The key covers everything the output depends
+        | on — the component's digest, the controller data, the digests of every component
+        | reached through `@pwaxImport`, and the markup fragments — so an edit anywhere in
+        | that set produces a new entry rather than serving the old page. A page rendered with no data is cached forever; a page
         | rendered with data is cached only when `->cacheable()` was called — reusing
         | the same visitor-independence claim the compile cache relies on. `null` uses
         | the application's default cache store.

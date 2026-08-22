@@ -32,8 +32,12 @@ use Throwable;
  * the same reason: a page whose output depends on the visitor cannot be prerendered for
  * everyone.
  *
- * Caching is keyed on the component hash plus a digest of the controller data, so a
- * changed component or a changed payload produces a new entry. A page rendered with no
+ * Caching is keyed on everything the rendered output depends on: the component's digest,
+ * the controller data, the digests of every component reached through `@pwaxImport`, and
+ * the markup fragments the bridge builds the page component from. An edit anywhere in that
+ * set produces a new entry rather than serving the old page — the last two are there
+ * because an import URL carries a view *name*, and `pwax.blade.content` is a view an
+ * application is expected to publish. A page rendered with no
  * data is cached indefinitely (like the compile cache); a page rendered with data is
  * cached only when it is cacheable, and for the TTL `ssr.cache.ttl` or the response
  * declared.

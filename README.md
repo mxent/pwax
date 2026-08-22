@@ -1511,14 +1511,15 @@ When a route you expected to be prerendered comes back with `X-Pwax-SSR: 0`, tur
 
 1. `ComponentResponse::shell()` asks the `Prerenderer` whether to render.
 2. The `Prerenderer` spawns `bin/ssr.mjs` (the same Node-bridge pattern as
-   `pwax:compile`), feeds it the component + controller data as JSON on stdin, and reads
-   `{html, serializedState}` on stdout. The result is cached on the component hash + data
-   digest.
-3. The prerendered HTML is embedded inside `<div id="pwax" data-pwax-prerendered>`, the
-   resolved state is carried in a `pwax-state` JSON island, and the page's own `<style>`
-   block goes into the head — so the markup is styled before any JavaScript runs, and stays
-   styled for a visitor who has none. A prerendered page carries no loading spinner: the
-   content is already there.
+   `pwax:compile`), feeds it the component, the controller data, the markup fragments and
+   the source of every component the page reaches through `@pwaxImport` as JSON on stdin,
+   and reads `{html, serializedState, styles}` on stdout.
+3. The prerendered HTML is embedded inside `<div id="pwax" data-pwax-prerendered>` — as
+   that element's *only* child, since Vue hydrates from its first node — the resolved state
+   is carried in a `pwax-state` JSON island, and the `<style>` block of the page and of each
+   component it imports goes into the head. So the markup is styled before any JavaScript
+   runs, and stays styled for a visitor who has none. A prerendered page carries no loading
+   spinner: the content is already there.
 4. The client runtime reads the `hydrate` flag from the initial payload, resolves the page
    component *before* the application is created, switches from `Vue.createApp` to
    `Vue.createSSRApp`, and hydrates the existing DOM.
@@ -1527,9 +1528,11 @@ When a route you expected to be prerendered comes back with `X-Pwax-SSR: 0`, tur
    Node outage never takes the page down.
 
 Node is started once per uncached page, which costs roughly a tenth of a second before your
-component renders at all. The prerender cache — keyed on the component hash plus a digest of
-the controller data — is what keeps that off the critical path for everyone after the first
-visitor. `ssr.timeout` bounds a prerender that hangs; the response falls back to the SPA
+component renders at all. The prerender cache is what keeps that off the critical path for
+everyone after the first visitor. Its key covers everything the output depends on — the
+component's digest, the controller data, the digests of every imported component, and the
+markup fragments — so editing a sub-component or changing `pwax.blade.content` produces a
+new entry rather than serving the old page. `ssr.timeout` bounds a prerender that hangs; the response falls back to the SPA
 shell rather than holding the worker.
 
 ### Seeding hydration state

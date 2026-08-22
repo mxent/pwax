@@ -600,17 +600,121 @@ async function renderOne() {
         return { ok: false, message: failures[0], errors: { render: failures.join('\n') } };
     }
 
-    let serializedState = data;
+    // Prefer the captured state; fall back to the input data for components that consumed
+    // it purely as props (no `data()` or `setup()`).
+    const { state: serializedState, unseeded } = seedable(captured, data);
 
-    try {
-        // Prefer the captured state; fall back to the input data for components that
-        // consumed it purely as props (no `data()` or `setup()`).
-        serializedState = JSON.parse(JSON.stringify(captured));
-    } catch {
-        serializedState = data;
+    return { ok: true, html, serializedState, unseeded };
+}
+
+/**
+ * Is this value the same after a JSON round trip?
+ *
+ * The state island is JSON, and the client *replaces* a component's own `data()` values
+ * with what it finds there. So a value that JSON cannot carry does not merely lose detail
+ * on the way — it arrives as something else and is used in place of the real thing.
+ *
+ * The case that shows it is `@pwaxImport`. A component held in `data()` is a Vue async
+ * component: a plain object whose meaning is entirely in its `setup` and `__asyncLoader`
+ * functions. `JSON.stringify` drops functions, so the island carried
+ * `{"name":"AsyncComponentWrapper","__asyncResolved":{…}}` — and on hydration
+ * `<component :is="badge">` was handed that object, rendered nothing, and Vue reported a
+ * mismatch against the server's markup, which had rendered the real component. The
+ * sub-component was simply missing from the page, with an error in the console and nothing
+ * pointing at the cause.
+ *
+ * A `Date`, a `Map`, a `Set`, a class instance and a cycle all fail the same way. None of
+ * them is state the client cannot rebuild for itself — `data()` runs on the client too —
+ * so the right answer is to leave the key out and let it.
+ *
+ * `undefined` is the one exception, and is treated as absent rather than unsafe: JSON drops
+ * such a property, the client's own `data()` supplies it again on the merge, and objects
+ * carrying an optional field that happens to be unset are ordinary.
+ */
+function jsonSafe(value, seen = new Set()) {
+    if (value === null) {
+        return true;
     }
 
-    return { ok: true, html, serializedState };
+    const type = typeof value;
+
+    if (type === 'string' || type === 'boolean') {
+        return true;
+    }
+
+    if (type === 'number') {
+        // `NaN` and the infinities serialize to `null`, which is a different value.
+        return Number.isFinite(value);
+    }
+
+    if (type !== 'object') {
+        return false;
+    }
+
+    // A cycle throws in `JSON.stringify`, so it can never round-trip.
+    if (seen.has(value)) {
+        return false;
+    }
+
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+        return value.every((item) => jsonSafe(item, seen));
+    }
+
+    const proto = Object.getPrototypeOf(value);
+
+    // Anything with a prototype of its own — a Date, a Map, a Set, a class instance, a
+    // RegExp — comes back as something else, or as `{}`.
+    if (proto !== Object.prototype && proto !== null) {
+        return false;
+    }
+
+    return Object.values(value).every((item) => item === undefined || jsonSafe(item, seen));
+}
+
+/**
+ * The subset of the captured state the client may safely be seeded with.
+ *
+ * Keys are dropped whole rather than repaired. A partially-restored value is worse than an
+ * absent one: absent means the client's own `data()` result stands, which is the value the
+ * server started from too.
+ *
+ * The names of the dropped keys travel back with the result so the PHP side can say so in
+ * debug mode. Without that the symptom — one sub-component missing, one line in the console
+ * about a hydration mismatch — points nowhere near `data()`.
+ */
+function seedable(captured, fallback) {
+    let source = captured;
+
+    if (!source || typeof source !== 'object' || Array.isArray(source)) {
+        source = fallback && typeof fallback === 'object' ? fallback : {};
+    }
+
+    const state = {};
+    const unseeded = [];
+
+    for (const [key, value] of Object.entries(source)) {
+        if (value === undefined) {
+            continue;
+        }
+
+        if (jsonSafe(value)) {
+            state[key] = value;
+
+            continue;
+        }
+
+        unseeded.push(key);
+    }
+
+    try {
+        // Belt and braces: everything above should already survive this, and a state island
+        // that cannot be written at all is worse than one that seeds nothing.
+        return { state: JSON.parse(JSON.stringify(state)), unseeded };
+    } catch {
+        return { state: {}, unseeded };
+    }
 }
 
 try {

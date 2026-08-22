@@ -373,7 +373,13 @@ class AssetManifest
 
         // The application's own extra scripts. Precached, never critical: whether an
         // analytics tag is reachable is not a reason to leave the app uninstalled.
-        foreach ($this->shell->vendorScripts() as $tag) {
+        //
+        // `applicationScripts()` rather than `vendorScripts()`, so a script that asked for
+        // the head is precached like any other. Read from the positional list, moving one
+        // into the head would have quietly dropped it from the offline install — and the
+        // scripts most likely to ask for the head are the ones whose absence is most
+        // visible, since that is why they asked.
+        foreach ([...$this->shell->vendorScripts(), ...$this->shell->applicationScripts()] as $tag) {
             $src = $tag['src'] ?? null;
 
             if (is_string($src) && $src !== '') {
@@ -863,6 +869,11 @@ class AssetManifest
             (string) json_encode($this->config->get('pwax.vue.plugins', [])),
             (string) json_encode($this->config->get('pwax.vue.directives', [])),
             (string) json_encode($this->config->get('pwax.vue.middleware', [])),
+            // The head is rendered into the shell, so the primary hash already covers it.
+            // It is named here because this fallback is what runs when that render failed,
+            // and a changed title template or sharing image is exactly the sort of edit that
+            // otherwise leaves every installed client on the previous document.
+            (string) json_encode($this->config->get('pwax.head', [])),
             $this->webManifest->hash(),
             (string) $this->hashFile(dirname(__DIR__, 2) . '/dist/pwax.js'),
         ];

@@ -99,8 +99,13 @@ export function registerPush(config) {
  * a write that sat offline longer than `session.lifetime` is *guaranteed* to come back
  * 419 on its first replay. Treating that as a real answer deleted exactly the writes this
  * feature exists to protect: the ones queued for a long time, silently, with no way for
- * the application to find out. The next replay happens from a page that has since
- * refreshed the session, which is the one that succeeds.
+ * the application to find out.
+ *
+ * Keeping the entry is only half of it, and for a while it was the only half: the replay
+ * re-sent the stored headers, so the retry presented the same dead token and got the same
+ * 419, for ever. `freshToken()` below is what makes the retry a different request from the
+ * one that failed — the token is taken from an open page at replay time, so the next
+ * attempt carries the session that page is actually on.
  *
  * 408 and 425 are the server asking for the request again in as many words. 429 is a rate
  * limit, which is temporary by definition — and dropping a queued write because the
@@ -123,7 +128,87 @@ const RETRYABLE = new Set([408, 419, 425, 429]);
 export function registerSync(config, cacheName) {
     const TAG = 'pwax-sync';
 
+    // How long to wait for a page to say what this session's CSRF token is. Short, because
+    // the fallback is the token already stored with the entry and the queue must not stall
+    // behind a tab that is not listening.
+    const TOKEN_TIMEOUT = 1000;
+
     const queue = () => caches.open(cacheName);
+
+    /**
+     * This session's current CSRF token, asked of an open page.
+     *
+     * The token stored with a queued write is the one that was current when it was queued.
+     * That is exactly the token a long-queued write comes back 419 for — and replaying the
+     * stored headers verbatim meant the retry sent the same dead token again, so an entry
+     * that 419'd once 419'd forever. `RETRYABLE` keeping 419 out of the "answered" set is
+     * only half the fix; this is the other half, and without it the entry is immortal and
+     * the "3 changes will send" counter never goes down.
+     *
+     * Null when no page answers — a genuine Background Sync wake with every tab closed.
+     * The stored token is then all there is, which is where this started, so nothing is
+     * worse than before.
+     */
+    async function freshToken() {
+        let clients = [];
+
+        try {
+            clients = await self.clients.matchAll({ type: 'window' });
+        } catch {
+            return null;
+        }
+
+        for (const client of clients) {
+            const token = await new Promise((resolve) => {
+                const channel = new MessageChannel();
+                const done = setTimeout(() => resolve(null), TOKEN_TIMEOUT);
+
+                channel.port1.onmessage = (event) => {
+                    clearTimeout(done);
+                    resolve(event.data?.token || null);
+                };
+
+                try {
+                    client.postMessage({ type: 'PWAX_SYNC_TOKEN' }, [channel.port2]);
+                } catch {
+                    clearTimeout(done);
+                    resolve(null);
+                }
+            });
+
+            if (token) {
+                return token;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The stored headers, with a stale CSRF token swapped for the current one.
+     *
+     * Only replaced, never added: an entry queued by a session that had no token gets none
+     * now either, and a caller who set their own header keeps it. The comparison is
+     * case-insensitive because the headers came from a plain object somebody may have
+     * spelled differently.
+     */
+    function withToken(headers, token) {
+        if (!token || !headers) {
+            return headers;
+        }
+
+        const updated = { ...headers };
+        let replaced = false;
+
+        for (const name of Object.keys(updated)) {
+            if (name.toLowerCase() === 'x-csrf-token') {
+                updated[name] = token;
+                replaced = true;
+            }
+        }
+
+        return replaced ? updated : headers;
+    }
 
     self.addEventListener('sync', (event) => {
         if (event.tag !== TAG) {
@@ -159,7 +244,18 @@ export function registerSync(config, cacheName) {
 
         const cache = await queue();
 
-        for (const key of await cache.keys()) {
+        const keys = await cache.keys();
+
+        if (keys.length === 0) {
+            return;
+        }
+
+        // Asked once for the whole drain rather than per entry: every entry in the queue
+        // belongs to the same session, and a round trip to a page for each of fifty queued
+        // writes is fifty round trips for one answer.
+        const token = await freshToken();
+
+        for (const key of keys) {
             const stored = await cache.match(key);
 
             if (!stored) {
@@ -186,7 +282,7 @@ export function registerSync(config, cacheName) {
             try {
                 const response = await fetch(url, {
                     method,
-                    headers,
+                    headers: withToken(headers, token),
                     body: body ?? undefined,
                     credentials: 'same-origin',
                 });

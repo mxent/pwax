@@ -102,6 +102,54 @@ class ShellTest extends TestCase
     }
 
     /**
+     * A script that asked for the head goes in the head, and nowhere else.
+     *
+     * The default position — the end of the body, behind Vue, Vue Router and Pinia — is
+     * right for almost everything and wrong for the two kinds of script that have to run
+     * before the first paint: a CSS engine that generates its stylesheet by scanning the
+     * DOM, and a script that sets a theme class to prevent a flash of its own.
+     */
+    public function test_a_script_can_ask_for_the_head(): void
+    {
+        config()->set('pwax.scripts', [
+            ['src' => 'https://example.test/theme.js', 'head' => true],
+            'https://example.test/analytics.js',
+        ]);
+
+        $head = array_column($this->shell()->headScripts(), 'src');
+        $foot = array_column($this->shell()->vendorScripts(), 'src');
+
+        $this->assertSame(['https://example.test/theme.js'], $head);
+        $this->assertContains('https://example.test/analytics.js', $foot);
+        $this->assertNotContains('https://example.test/theme.js', $foot);
+    }
+
+    public function test_the_head_flag_is_not_rendered_as_an_attribute(): void
+    {
+        config()->set('pwax.scripts', [['src' => '/js/theme.js', 'head' => true, 'defer' => true]]);
+
+        $rendered = (string) $this->shell()->attributes($this->shell()->headScripts()[0]);
+
+        // `attributes()` renders `true` as a boolean attribute, so left in place this would
+        // put a stray `head` on every one of these tags.
+        $this->assertStringNotContainsString('head', $rendered);
+        $this->assertStringContainsString('src="/js/theme.js"', $rendered);
+        $this->assertStringContainsString('defer', $rendered);
+    }
+
+    public function test_the_document_puts_a_head_script_before_the_body(): void
+    {
+        config()->set('pwax.scripts', [['src' => '/js/theme.js', 'head' => true]]);
+
+        $this->app['router']->middleware('web')->get('/headed', fn () => pwaxRender('pages.home'));
+
+        $html = (string) $this->get('/headed')->getContent();
+
+        $this->assertGreaterThan(0, strpos($html, '<script src="/js/theme.js"></script>'));
+        $this->assertLessThan(strpos($html, '</head>'), strpos($html, '/js/theme.js'));
+    }
+
+    /**
      * The service worker needs the framework separated from the application's own extra
      * scripts: the framework failing to install means the app will not start, an
      * analytics tag failing means nothing at all.
@@ -305,5 +353,44 @@ class ShellTest extends TestCase
         config()->set('app.debug', true);
 
         $this->assertSame('/', $this->shell()->runtimeConfig()['home']);
+    }
+
+    /**
+     * The shell wires up two stacks, and both are public API.
+     *
+     * `pwax-foot` was wired up and documented nowhere, which is the same thing as not
+     * existing: an application that found it had no promise it would keep working, and
+     * AGENTS.md said outright that it was not there. It renders after the vendor scripts,
+     * which is the whole reason to want it — that is where a script needing Vue to have
+     * evaluated has to go.
+     *
+     * Pushed from views rendered inside the shell render, which is the only place a push
+     * survives: Blade flushes its stacks when the outermost render finishes, so a
+     * `View::startPush()` in a controller is gone before the shell asks for it.
+     */
+    public function test_the_shell_renders_both_of_its_stacks(): void
+    {
+        config()->set('pwax.blade.head', 'stacks.head');
+        config()->set('pwax.blade.foot', 'stacks.foot');
+
+        $this->app['router']->middleware('web')->get('/stacked', fn () => pwaxRender('pages.home'));
+
+        $html = (string) $this->get('/stacked')->getContent();
+
+        $this->assertStringContainsString('<meta name="from-the-head-stack" content="1">', $html);
+        $this->assertStringContainsString('<script id="from-the-foot-stack"></script>', $html);
+
+        // Position, not just presence. The point of the foot stack is that Vue has already
+        // evaluated by the time the pushed content runs; the point of the head stack is
+        // that it is in the head at all.
+        $this->assertGreaterThan(
+            strrpos($html, 'vue.global.prod.js'),
+            strpos($html, 'from-the-foot-stack'),
+        );
+
+        $this->assertLessThan(
+            strpos($html, '</head>'),
+            strpos($html, 'from-the-head-stack'),
+        );
     }
 }

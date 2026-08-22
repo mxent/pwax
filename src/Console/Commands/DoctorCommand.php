@@ -68,6 +68,8 @@ class DoctorCommand extends Command
         $this->checkWorkerSourceMap($config);
         $this->checkPushSubscriptionsTable($config);
         $this->checkSsr($config);
+        $this->checkRuntimeStyling($config);
+        $this->checkHead($config);
 
         $this->newLine();
 
@@ -1427,6 +1429,130 @@ class DoctorCommand extends Command
             'SSR fallback is "spa" (a Node failure serves the SPA shell)',
             sprintf('SSR fallback is "%s" — a Node failure will return a 500. Set ssr.fallback to "spa" for production.', $fallback),
         );
+    }
+
+    /**
+     * A CSS engine that runs in the browser, on a site that prerenders.
+     *
+     * The Tailwind Play CDN and its like generate a stylesheet by scanning the DOM *after*
+     * they load, in the browser. Nothing on the server knows what CSS those class names
+     * need, so a prerendered page ships with its markup and none of its styles: a crawler
+     * that does not run JavaScript sees an unstyled document, and everyone else sees the
+     * page painted bare and restyled a moment later.
+     *
+     * Worth naming because the local symptom is almost nothing. On a fast connection the
+     * unstyled window is a few milliseconds and nobody catches it; across the network, with
+     * a third-party origin to resolve and a hundred kilobytes to fetch and parse before the
+     * scan even starts, it is the first thing a visitor sees.
+     *
+     * Only warned about when SSR is on. Without it the page has no markup to be unstyled —
+     * the mount point is empty until the runtime fills it, by which time the engine has run.
+     */
+    private function checkRuntimeStyling(Config $config): void
+    {
+        if (! $config->get('pwax.ssr.enabled', false)) {
+            return;
+        }
+
+        // Matched on the part of the URL that names the tool, so a version or a mirror does
+        // not slip past. Not exhaustive, and not meant to be: these are the ones that turn
+        // up in a Laravel application.
+        $engines = [
+            'cdn.tailwindcss.com' => 'the Tailwind Play CDN',
+            '@tailwindcss/browser' => 'Tailwind\'s browser build',
+            'tailwindcss/browser' => 'Tailwind\'s browser build',
+            '@unocss/runtime' => 'the UnoCSS runtime',
+            'unocss/runtime' => 'the UnoCSS runtime',
+            '@twind/' => 'Twind',
+            'twind.style' => 'Twind',
+        ];
+
+        foreach ((array) $config->get('pwax.scripts', []) as $script) {
+            $src = is_array($script) ? ($script['src'] ?? null) : $script;
+
+            if (! is_string($src) || $src === '') {
+                continue;
+            }
+
+            foreach ($engines as $needle => $name) {
+                if (! str_contains($src, $needle)) {
+                    continue;
+                }
+
+                $this->warn_(sprintf(
+                    'SSR is on and pwax.scripts loads %s, which builds its stylesheet by reading '
+                    . 'the DOM in the browser. The prerendered HTML therefore carries no styles: a '
+                    . 'crawler without JavaScript sees an unstyled page, and everyone else sees it '
+                    . 'painted bare first. Build your CSS to a file and list it in pwax.styles.',
+                    $name
+                ));
+
+                return;
+            }
+        }
+    }
+
+    /**
+     * The document-head settings that are silently wrong rather than broken.
+     *
+     * Every check here concerns a tag nobody in the team ever looks at. A missing social
+     * card is discovered when someone shares a link; a `noindex` left on after launch is
+     * discovered when the traffic does not arrive; `hreflang` pointing at a relative path
+     * is discovered never, because the crawler simply ignores it. None of them produce an
+     * error, a warning in the console, or a visible difference in the browser — which is
+     * exactly the category `pwax:doctor` exists for.
+     *
+     * The keys checked here are also how a `config/pwax.php` published before they existed
+     * learns that they do: an application that never sets `head.image` is told once, in the
+     * same run that tells it about everything else.
+     */
+    private function checkHead(Config $config): void
+    {
+        // Counted rather than tracked by hand, so the summary line below cannot fall out of
+        // step with the checks when another one is added.
+        $before = $this->warnings;
+
+        $robots = $config->get('pwax.head.robots');
+
+        // Said out loud because it applies to every page at once and reads, in a config
+        // file, exactly like a value someone left behind after testing.
+        if (is_string($robots) && str_contains(strtolower($robots), 'noindex')) {
+            $this->warn_(sprintf(
+                'head.robots is "%s" — every page carries it. Correct for staging, and the '
+                . 'reason a launched site has no traffic if it survives the deploy.',
+                $robots
+            ));
+        }
+
+        $image = $config->get('pwax.head.image');
+
+        if (! is_string($image) || $image === '') {
+            $this->warn_(
+                'head.image is not set. A link to this app unfurls with no image on every '
+                . 'platform that reads Open Graph. Point it at a 1200x630 PNG.'
+            );
+        }
+
+        foreach ((array) $config->get('pwax.head.alternates', []) as $hreflang => $href) {
+            if (! is_string($href) || $href === '') {
+                $this->warn_(sprintf('head.alternates["%s"] has no URL.', (string) $hreflang));
+            }
+        }
+
+        $jsonLd = $config->get('pwax.head.json_ld');
+
+        // `@context` is what makes the rest of the document mean anything; without it a
+        // consumer has a bag of strings rather than a description of a thing.
+        if (is_array($jsonLd) && $jsonLd !== [] && ! array_is_list($jsonLd) && ! isset($jsonLd['@context'])) {
+            $this->warn_(
+                'head.json_ld declares no @context. Add "@context" => "https://schema.org" '
+                . 'or the structured data is ignored.'
+            );
+        }
+
+        if ($this->warnings === $before) {
+            $this->ok('Document head is configured for sharing and indexing');
+        }
     }
 
     /**

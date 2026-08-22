@@ -24,6 +24,11 @@ class Shell
     /** The bundle's digest once resolved; `?string` covers both "unreadable" and "haven't checked yet". */
     private ?string $runtimeVersion = null;
 
+    /** The resolved CSP nonce. Null is a legitimate answer, so the flag below is what says "resolved". */
+    private ?string $nonce = null;
+
+    private bool $nonceResolved = false;
+
     public function __construct(
         private readonly Config $config,
         private readonly Pwax $pwax,
@@ -138,17 +143,93 @@ class Shell
      * Vue Router and Pinia are IIFE builds that read the global `Vue`, so Vue has to be
      * evaluated first. None of them are modules, so they cannot be deferred.
      *
+     * Application scripts that asked for the head are not here — see {@see headScripts()}.
+     *
      * @return list<array<string, string|bool>>
      */
     public function vendorScripts(): array
     {
         $tags = $this->frameworkScripts();
 
-        foreach ((array) $this->config->get('pwax.scripts', []) as $script) {
-            $tags[] = is_array($script) ? $script : ['src' => (string) $script];
+        foreach ($this->configuredScripts(head: false) as $script) {
+            $tags[] = $script;
         }
 
         $tags[] = ['src' => $this->runtimeUrl()];
+
+        return $tags;
+    }
+
+    /**
+     * Application scripts that asked to be in `<head>` rather than at the end of `<body>`.
+     *
+     *     'scripts' => [
+     *         ['src' => '/js/theme.js', 'head' => true],
+     *     ],
+     *
+     * The default position is the end of the body, behind Vue, Vue Router and Pinia, and
+     * that is right for almost everything: a script there cannot block the first paint.
+     *
+     * Two kinds of script cannot live there, and both are ordinary:
+     *
+     *   - A CSS engine that runs in the browser — the Tailwind Play CDN and its like
+     *     generate a stylesheet by scanning the DOM after they load. Behind the framework,
+     *     the page paints unstyled and is restyled a moment later; on a prerendered page,
+     *     which has its markup in the document from the first byte, that flash is the whole
+     *     content of the page.
+     *   - A script that has to run before the first paint to prevent a flash of its own —
+     *     reading a stored theme and setting a class on `<html>` is the usual one.
+     *
+     * `pwax.blade.head` could always do this, but it costs a Blade view for what is one
+     * tag. Being in the head means being render-blocking, which is the point and also the
+     * cost: everything here delays the first paint, so put nothing here that does not have
+     * to be.
+     *
+     * @return list<array<string, string|bool>>
+     */
+    public function headScripts(): array
+    {
+        return $this->configuredScripts(head: true);
+    }
+
+    /**
+     * Every script the application configured, wherever it goes.
+     *
+     * The service worker precaches from this rather than from the two positional lists,
+     * so moving a script into the head cannot quietly drop it from the offline install.
+     *
+     * @return list<array<string, string|bool>>
+     */
+    public function applicationScripts(): array
+    {
+        return [...$this->configuredScripts(head: true), ...$this->configuredScripts(head: false)];
+    }
+
+    /**
+     * `pwax.scripts`, normalised and split by where the tag goes.
+     *
+     * `head` is a placement instruction, not an attribute, so it is stripped here — left in
+     * place, `attributes()` would render it as a boolean attribute and every one of these
+     * tags would carry a stray `head` in the markup.
+     *
+     * @return list<array<string, string|bool>>
+     */
+    private function configuredScripts(bool $head): array
+    {
+        $tags = [];
+
+        foreach ((array) $this->config->get('pwax.scripts', []) as $script) {
+            /** @var array<string, string|bool> $tag */
+            $tag = is_array($script) ? $script : ['src' => (string) $script];
+
+            if ((bool) ($tag['head'] ?? false) !== $head) {
+                continue;
+            }
+
+            unset($tag['head']);
+
+            $tags[] = $tag;
+        }
 
         return $tags;
     }
@@ -318,13 +399,20 @@ class Shell
      * A hint, not a load: an unused `modulepreload` costs a warning in the console and
      * nothing else, and every URL here is one the page is about to ask for anyway.
      *
+     * The keys are `pwax.vue.*`, the same ones {@see runtimeConfig()} reads. They were
+     * `pwax.plugins` and `pwax.directives` before 5.0 moved the group under `vue`, and this
+     * method kept reading the old names — which no longer exist, so `extensions()` was
+     * handed an empty array and the second of the two sources above quietly emitted
+     * nothing. The failure is invisible from the outside: a missing resource hint costs a
+     * round trip and never an error.
+     *
      * @return list<string>
      */
     public function modulePreloads(?Component $component = null): array
     {
         $urls = [];
 
-        foreach (['pwax.plugins', 'pwax.directives'] as $key) {
+        foreach (['pwax.vue.plugins', 'pwax.vue.directives'] as $key) {
             foreach ($this->extensions($key) as $entry) {
                 if (($entry['type'] ?? '') === 'module' && isset($entry['url'])) {
                     $urls[] = $entry['url'];
@@ -465,16 +553,33 @@ class Shell
 
     /**
      * The CSP nonce for inline blocks, if the application supplies one.
+     *
+     * Resolved once per shell. `pwax.csp.nonce` may be a callable, and one document asks
+     * for the nonce from several places — the head partial, the foot partial, the shell's
+     * own `<noscript>` block, and the runtime config the client stamps on the stylesheets
+     * it attaches. A callable that mints a fresh value per call would give each of them a
+     * different nonce, and a `Content-Security-Policy` header names exactly one: every
+     * block but whichever the header happened to match would be refused.
+     *
+     * Memoised on the instance rather than statically: the manifest builder renders the
+     * shell through `withoutRequest()`, and a process-wide memo would hand a visitor's
+     * nonce to that build and from there into the manifest hash.
      */
     public function nonce(): ?string
     {
+        if ($this->nonceResolved) {
+            return $this->nonce;
+        }
+
         $nonce = $this->config->get('pwax.csp.nonce');
 
         if (is_callable($nonce)) {
             $nonce = $nonce();
         }
 
-        return is_string($nonce) && $nonce !== '' ? $nonce : null;
+        $this->nonceResolved = true;
+
+        return $this->nonce = is_string($nonce) && $nonce !== '' ? $nonce : null;
     }
 
     /**

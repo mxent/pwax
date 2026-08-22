@@ -259,6 +259,8 @@ class PwaxServiceProvider extends ServiceProvider
 
         $this->app->singleton(HeadMeta::class, fn ($app): HeadMeta => new HeadMeta(
             $app->make(Config::class),
+            $app->make('url'),
+            $app,
         ));
 
         // Bound rather than shared: it renders the offline view, which reads the current

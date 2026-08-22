@@ -140,4 +140,40 @@ class ContentNegotiationTest extends TestCase
 
         $this->assertStringContainsString('nonce="from-callable"', $this->get('/home')->getContent());
     }
+
+    public function test_a_callable_nonce_is_resolved_once_for_the_whole_document(): void
+    {
+        // The head partial, the foot partial, the shell's own <noscript> block and the
+        // runtime config all ask for the nonce. A `Content-Security-Policy` header names
+        // exactly one, so a callable minting a fresh value per call would have every block
+        // but one refused — and the failure is a page that renders unstyled with a console
+        // full of violations, which reads as a broken application rather than a config bug.
+        $calls = 0;
+
+        config()->set('pwax.csp.nonce', function () use (&$calls): string {
+            $calls++;
+
+            return 'nonce-' . $calls;
+        });
+
+        $content = (string) $this->get('/home')->getContent();
+
+        preg_match_all('/nonce="([^"]+)"/', $content, $matches);
+
+        $this->assertNotSame([], $matches[1], 'the document carried no nonce at all');
+        $this->assertSame([$matches[1][0]], array_values(array_unique($matches[1])));
+    }
+
+    public function test_the_noscript_block_that_hides_the_preloader_carries_the_nonce(): void
+    {
+        // This rule lifts an opaque, full-viewport cover off the "enable JavaScript"
+        // message underneath it. Refused, the only visitor who ever reaches this markup is
+        // left looking at a spinner that will never stop.
+        config()->set('pwax.csp.nonce', 'n0nce-value');
+
+        $this->assertStringContainsString(
+            '<style nonce="n0nce-value">.pwax-preloader{display:none}</style>',
+            (string) $this->get('/home')->getContent()
+        );
+    }
 }

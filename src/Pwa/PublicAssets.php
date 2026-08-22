@@ -186,10 +186,33 @@ class PublicAssets
                 continue;
             }
 
+            $path = $file->getPathname();
+
+            // A symlink whose target is gone. Finder reports one as a *file* — it is not a
+            // directory, so nothing else fits — and `getSize()` then stats a path that is
+            // not there and throws. `public/storage` is the everyday case: `storage:link`
+            // puts it there and it dangles on a fresh clone, after a deploy that moved the
+            // target, or in a container whose storage volume is not mounted yet.
+            //
+            // The blast radius was the whole progressive web app. The throw escaped
+            // `AssetManifest::build()`, so `/sw.json` answered 500 and `/sw.js` answered
+            // `// pwax: service worker error`: nothing installed, nothing updated, nothing
+            // worked offline, because of one broken link in a directory the application
+            // barely thinks about.
+            if (! is_file($path)) {
+                continue;
+            }
+
+            $bytes = @filesize($path);
+
+            if ($bytes === false) {
+                continue;
+            }
+
             $found[$url] = [
                 'url' => $url,
-                'path' => $file->getPathname(),
-                'bytes' => max(0, (int) $file->getSize()),
+                'path' => $path,
+                'bytes' => max(0, $bytes),
             ];
         }
 

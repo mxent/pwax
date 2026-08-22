@@ -60,7 +60,24 @@ class Prerenderer
     private const MAX_IMPORTS = 100;
 
     /**
-     * A per-request memo, so a response that reads its own prerender twice pays once.
+     * How many prerenders the memo keeps.
+     *
+     * The memo exists so that a response reading its own prerender twice pays for it once,
+     * which needs a capacity of one. A handful more costs nothing and covers a request that
+     * renders several pages — a sitemap build, a test walking every route in one process.
+     */
+    private const MEMO_SIZE = 8;
+
+    /**
+     * A short memo, so a response that reads its own prerender twice pays once.
+     *
+     * Bounded because this service is a singleton and the entries are whole rendered pages.
+     * Under `php artisan serve` the container is torn down after every request and an
+     * unbounded memo is invisible; under Octane, FrankenPHP or Swoole the worker outlives
+     * the request and the memo would grow for as long as the process did — one HTML
+     * document plus its serialized state per distinct page, never released. That is the
+     * deployment SSR is most likely to be running in, since it is the one where not paying
+     * for a PHP bootstrap per request matters.
      *
      * @var array<string, array{html: string, state: string, styles: array<string, string>}>
      */
@@ -375,12 +392,26 @@ class Prerenderer
     }
 
     /**
+     * Memoise a prerender, evicting the oldest entry once the memo is full.
+     *
+     * Insertion order, not recency: re-remembering an existing key would otherwise leave it
+     * in its original position and let a page that is read on every request age out from
+     * under itself. Deleting first and re-inserting moves it to the back.
+     *
      * @param  array{html: string, state: string, styles: array<string, string>}  $result
      * @return array{html: string, state: string, styles: array<string, string>}
      */
     private function remember(string $key, array $result): array
     {
-        return $this->memo[$key] = $result;
+        unset($this->memo[$key]);
+
+        $this->memo[$key] = $result;
+
+        while (count($this->memo) > self::MEMO_SIZE) {
+            array_shift($this->memo);
+        }
+
+        return $result;
     }
 
     /**
@@ -466,6 +497,8 @@ class Prerenderer
             JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT,
         );
 
+        $this->reportUnseeded($decoded['unseeded'] ?? []);
+
         // The imported components' stylesheets travel out with the HTML so the shell can
         // put them in the document. The browser attaches them as each module loads, which is
         // fine for a client-rendered page and not for a prerendered one: the sub-component's
@@ -482,6 +515,37 @@ class Prerenderer
         }
 
         return ['html' => $html, 'state' => $state, 'styles' => $styles];
+    }
+
+    /**
+     * Name the `data()` keys the bridge could not put in the state island.
+     *
+     * The island is JSON and the client *replaces* a component's own `data()` values with
+     * what it finds there, so a value JSON cannot carry — a component held in `data()`, a
+     * Date, a Map — would arrive as something else and be used in place of the real thing.
+     * The bridge leaves those keys out and the client's own `data()` stands, which is
+     * correct and needs no announcing in production.
+     *
+     * It is worth announcing while developing. The one case that reaches a page is a
+     * component from `@pwaxImport`: seeded, it rendered nothing and Vue reported a
+     * hydration mismatch, and neither the missing element nor the console line points
+     * anywhere near `data()`. One debug line naming the key is the whole difference.
+     */
+    private function reportUnseeded(mixed $keys): void
+    {
+        if (! is_array($keys) || $keys === []) {
+            return;
+        }
+
+        if (! $this->config->get('app.debug') || ! function_exists('app') || ! app()->bound('log')) {
+            return;
+        }
+
+        Log::debug(sprintf(
+            'pwax: these data() keys were left out of the SSR state island because they are not '
+            . 'JSON — the client keeps its own value for each, which is usually what you want: %s.',
+            implode(', ', array_map(strval(...), array_filter($keys, 'is_scalar')))
+        ));
     }
 
     /**

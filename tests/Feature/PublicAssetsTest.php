@@ -93,6 +93,45 @@ class PublicAssetsTest extends TestCase
     }
 
     /**
+     * A symlink whose target is gone must not take the whole manifest down.
+     *
+     * `php artisan storage:link` puts `public/storage` there, pointing at
+     * `storage/app/public`. On a fresh clone, a deploy that moved the target, or a
+     * container whose storage volume is not mounted yet, that link dangles — and Finder
+     * reports a dangling link as a *file*, because it is not a directory. Calling
+     * `getSize()` on it then throws.
+     *
+     * The blast radius is the whole progressive web app: the throw escapes
+     * `AssetManifest::build()`, `/sw.json` answers 500, `/sw.js` answers
+     * `// pwax: service worker error`, and nothing installs, updates or works offline.
+     * One broken link in a directory the application barely thinks about.
+     */
+    public function test_a_dangling_symlink_is_skipped_rather_than_fatal(): void
+    {
+        symlink($this->public . '/nowhere', $this->public . '/storage');
+
+        $urls = $this->urls(['/**']);
+
+        $this->assertContains('/css/app.css', $urls, 'the walk did not survive the dangling link');
+        $this->assertNotContains('/storage', $urls);
+    }
+
+    public function test_a_dangling_symlink_does_not_break_the_asset_manifest(): void
+    {
+        symlink($this->public . '/nowhere', $this->public . '/storage');
+
+        config()->set('pwax.service_worker.enabled', true);
+        config()->set('pwax.service_worker.asset_groups', [
+            ['name' => 'assets', 'urls' => ['/**']],
+        ]);
+
+        // The endpoint, not just the walker: this is where the failure was visible, as a
+        // service worker that would not build and an application that would not install.
+        $this->get('/sw.json')->assertOk();
+        $this->get('/sw.js')->assertOk()->assertSee('self.__PWAX_SW__', false);
+    }
+
+    /**
      * @param  list<string>  $patterns
      * @return list<string>
      */

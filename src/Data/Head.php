@@ -20,12 +20,18 @@ final class Head implements Arrayable, JsonSerializable
 {
     /**
      * @param  list<array{attribute: string, key: string, content: string}>  $meta
+     * @param  list<array<string, mixed>>  $jsonLd  Structured data, one entry per
+     *                                              `<script type="application/ld+json">`.
+     * @param  list<array{hreflang: string, href: string}>  $alternates  `rel="alternate"`
+     *                                                                   links, one per locale.
      */
     public function __construct(
         public readonly ?string $title = null,
         public readonly ?string $description = null,
         public readonly ?string $canonical = null,
         public readonly array $meta = [],
+        public readonly array $jsonLd = [],
+        public readonly array $alternates = [],
     ) {}
 
     public function isEmpty(): bool
@@ -33,7 +39,9 @@ final class Head implements Arrayable, JsonSerializable
         return $this->title === null
             && $this->description === null
             && $this->canonical === null
-            && $this->meta === [];
+            && $this->meta === []
+            && $this->jsonLd === []
+            && $this->alternates === [];
     }
 
     /**
@@ -46,6 +54,8 @@ final class Head implements Arrayable, JsonSerializable
             'description' => $this->description,
             'canonical' => $this->canonical,
             'meta' => $this->meta,
+            'jsonLd' => $this->jsonLd,
+            'alternates' => $this->alternates,
         ], static fn (mixed $value): bool => $value !== null && $value !== []);
     }
 

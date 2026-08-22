@@ -32,6 +32,10 @@ declare namespace Pwax {
         description?: string;
         canonical?: string;
         meta?: Array<{ attribute: 'name' | 'property'; key: string; content: string }>;
+        /** Structured data, one entry per `<script type="application/ld+json">`. */
+        jsonLd?: Array<Record<string, unknown>>;
+        /** `rel="alternate"` links to this page in other languages. */
+        alternates?: Array<{ hreflang: string; href: string }>;
     }
 
     interface Config {

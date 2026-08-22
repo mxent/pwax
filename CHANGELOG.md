@@ -205,7 +205,143 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the `push_subscriptions` table exists when VAPID is configured. Each is a check
   that previously failed silently or in a place the developer was not looking.
 
+- **The rest of the page-metadata surface.** `title()`, `description()`, `canonical()`,
+  `meta()` and `property()` were the whole of what a page could say about itself, which
+  leaves out most of what a page has to say. `ComponentResponse` gains four methods, each
+  with an application-wide default under `pwax.head`:
+  - `image($url)` — sets `og:image` and `twitter:image` together, because a page that has
+    one and not the other is a page whose link preview depends on which service is
+    unfurling it. Default: `head.image`.
+  - `robots($directives)` — `<meta name="robots">`, with `head.robots` as the place a
+    staging deployment says `noindex, nofollow` once rather than on every route. It is
+    applied whether or not Open Graph derivation is on, so turning derivation off cannot
+    silently start indexing that deployment.
+  - `jsonLd($schema)` — a `<script type="application/ld+json">` block, repeatable for a page
+    that makes several claims. Default: `head.json_ld`. A page that calls it *replaces* the
+    default rather than adding to it: an `Article` and an `Organization` are two claims
+    about two different things, and emitting both against one URL says the page is both.
+  - `alternate($hreflang, $href)` — `<link rel="alternate" hreflang>`, so a localised page
+    is not competing with its own translations in the index. Default: `head.alternates`,
+    which takes the map spelling (`['fr' => '/fr']`).
+
+  All four are rendered into the document — so a prerendered page carries them for the
+  crawler that does not run JavaScript — and all four travel in the payload, so a
+  client-side navigation replaces them. That last part is why they belong here rather than
+  in `@stack('pwax-head')`: a hand-written `ld+json` block in the stack is rendered once and
+  never replaced, so from the second page onwards it describes a page the visitor has left.
+  Stale structured data is not a missing rich result, it is a wrong one.
+
+- **`og:locale`, derived from the application locale.** In Open Graph's underscored form,
+  so a localised application declares its locale once rather than in three places that can
+  disagree. Overridable with `head.locale`.
+
+- **URLs in Open Graph tags are made absolute.** `og:image`, `og:url`, `twitter:image` and
+  the rest are resolved against `app.url` when given a site-relative path. A scraper reading
+  the tag does not necessarily have the document to resolve one against, and the failure is
+  a link preview with no image rather than an error — so nobody finds out until someone
+  shares a link.
+
+- **A script can ask for the `<head>`.** `['src' => '…', 'head' => true]` in `pwax.scripts`
+  renders the tag in the head instead of at the end of the body. The default position is
+  right for almost everything — a script there cannot hold up the first paint — and wrong
+  for the two kinds that have to run before it: a CSS engine that builds its stylesheet by
+  reading the DOM, and a script that sets a theme class to prevent a flash of its own.
+  `pwax.blade.head` could always do this; it cost a Blade view for one tag. `head` is a
+  placement instruction, not an attribute, and is not rendered as one. Head scripts are
+  precached like any other, so moving one cannot drop it from the offline install.
+
+- **`pwax:doctor` names a browser-side CSS engine under SSR.** The Tailwind Play CDN,
+  `@tailwindcss/browser`, the UnoCSS runtime and Twind all generate their stylesheet by
+  reading the DOM in the browser, so a prerendered page ships its markup and none of its
+  styles: a crawler without JavaScript sees an unstyled document and everyone else sees the
+  page painted bare first. Worth naming because the local symptom is a few milliseconds
+  nobody catches.
+
+- **A workbench demo application, so `testbench serve` serves something.** CONTRIBUTING.md
+  has asked contributors to verify four things by hand in a real browser for some time, and
+  the command it names could not do it: without a `testbench.yaml` registering the provider,
+  `php vendor/bin/testbench serve` starts a bare Laravel skeleton with no `pwax:*` commands,
+  no `__pwax__` routes and nothing to look at. `testbench.yaml` and `workbench/` are that
+  application — two pages with scoped styles, a component pulled in with `@pwaxImport` and
+  held in `data()`, a route that redirects, SSR on, the service worker on and icons real
+  enough that a browser offers to install it. The SSR state island bug below was found in
+  it, in a browser, after both test suites had gone green.
+
+- **`pwax:doctor` checks the document head.** No sharing image configured; a `head.robots`
+  that would `noindex` the whole site; `head.json_ld` with no `@context`; an alternate with
+  no URL. Every one of them concerns a tag nobody on the team ever looks at.
+
 ### Fixed
+
+- **A dangling symlink under `public/` took the whole progressive web app down.**
+  `php artisan storage:link` puts `public/storage` there, pointing at `storage/app/public`;
+  on a fresh clone, after a deploy that moved the target, or in a container whose storage
+  volume is not mounted yet, that link dangles. Finder reports a dangling link as a *file* —
+  it is not a directory, so nothing else fits — and `SplFileInfo::getSize()` then stats a
+  path that is not there and throws. The throw escaped `AssetManifest::build()`, so
+  `/sw.json` answered 500 and `/sw.js` answered `// pwax: service worker error`: nothing
+  installed, nothing updated, nothing worked offline, because of one broken link in a
+  directory the application barely thinks about. Unreadable entries are skipped now.
+
+- **The SSR state island shipped values that JSON cannot carry, and the client used them.**
+  `bin/ssr.mjs` serialized the captured `data()` through `JSON.parse(JSON.stringify(…))`,
+  and the client *replaces* a component's own values with what it finds in the island — so
+  a value the round trip changed did not merely lose detail on the way, it arrived as
+  something else and was used in place of the real thing. The case that reaches a page is a
+  component from `@pwaxImport`: an async component is a plain object whose meaning is
+  entirely in its `setup` and `__asyncLoader` functions, `JSON.stringify` drops those, and
+  the island carried `{"name":"AsyncComponentWrapper","__asyncResolved":{…}}`. Hydration
+  handed that to `<component :is="badge">`, which rendered nothing, and Vue reported a
+  mismatch against a server rendering that had the real component in it — one missing
+  element and one console line, neither pointing anywhere near `data()`. A `Date`, a `Map`,
+  a `Set`, a class instance and a cycle all failed the same way.
+
+  Such keys are now left out of the island entirely and the client's own `data()` keeps
+  sole charge of them, which is correct: none of them is state the client cannot rebuild.
+  With `APP_DEBUG` on, the log names them. Found by driving a prerendered page in a real
+  browser — the PHP suite and jsdom both saw markup that looked right.
+
+- **`sync.enqueue()` accepted a cross-origin URL and queued the CSRF token for it.** The
+  headers stored with a queued write are the ones the runtime sends, this session's CSRF
+  token among them, and the worker replays them verbatim from a context the page cannot
+  see — so a URL on another origin, whether a typo or a third-party API somebody meant to
+  call, handed that token away. `push.js` refuses exactly this for `pwax.push.endpoint`,
+  in the same words; the queue had no such guard. It now returns `false` and says why.
+
+- **A queued write that met a 419 could never succeed.** `RETRYABLE` keeps 419 out of the
+  set of statuses that count as the server answering, precisely so a write that sat offline
+  past `session.lifetime` is not deleted — but the replay re-sent the *stored* headers, so
+  the retry presented the same dead token and got the same 419, for ever. The entry was
+  immortal, the write never landed, and the "3 changes will send when you are back online"
+  counter never moved. The worker now asks an open page for the session's current token
+  before it drains the queue (once per drain, not once per entry) and swaps it into each
+  entry's headers. With no page open — a genuine Background Sync wake — the stored token is
+  still used, which is where this started, so nothing is worse than before.
+
+- **Resource hints for configured plugins and directives were never emitted.**
+  `Shell::modulePreloads()` read `pwax.plugins` and `pwax.directives`; the group moved under
+  `pwax.vue.*` in 5.0, so those keys no longer exist and the reader was handed an empty
+  array. The entries lost were the most load-bearing on the list — the runtime `await`s
+  plugins and directives *before* it mounts, so each was a serial round trip on the critical
+  path with no hint at all. Nothing failed: a missing resource hint costs a round trip and
+  never an error, and the test that should have caught it set the old key too. It now
+  asserts that the hints and the runtime config read the same place, whatever it is called
+  next.
+
+- **The `<noscript>` rule that hides the preloader carried no CSP nonce.** Under a strict
+  `style-src 'nonce-…'` it was refused — and that one rule lifts an opaque, full-viewport
+  cover off the "enable JavaScript" message beneath it, so the only visitor who ever reaches
+  that markup was left looking at a spinner that would never stop. `Shell::nonce()` also
+  resolved the value afresh for each of its callers, so a `csp.nonce` callable minting one
+  per call gave the head, the foot, the shell and the runtime config four different nonces
+  where the header names exactly one; it is memoised per shell now.
+
+- **The SSR prerender memo grew for the life of the worker.** `Prerenderer` is a singleton
+  and its memo was documented as per-request. It is per *worker*: under `php artisan serve`
+  the container is torn down after every request and the growth is invisible, but under
+  Octane, FrankenPHP or Swoole it accumulated a rendered HTML document plus its serialized
+  state per distinct page for as long as the process lived — which is the deployment SSR is
+  most likely to be running in. It is bounded now, evicting oldest-first.
 
 - **A prerendered page whose mount element holds anything else is repaired, and says so.**
   Vue hydrates from `container.firstChild`, and its recovery from a mismatch there is to
@@ -293,6 +429,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   components with an unscoped `<style>` block.
 
 ### Changed
+
+- **`head.twitter_card` defaults to `null` and follows the image.** A card declaring
+  `summary_large_image` with no image renders as a bare summary anyway, and a `summary`
+  beside a 1200x630 image throws most of that artwork away — so left null the card follows
+  the one fact that decides which of the two is right. A `config/pwax.php` published before
+  this carries a literal `'summary'` and keeps exactly the tag it had; set the key
+  explicitly to pin one spelling for every page.
 
 - **`plugins`, `directives` and the client-side middleware now live under `pwax.vue.*`.**
   The two configs that shared the word "middleware" — `pwax.middleware` (the Laravel

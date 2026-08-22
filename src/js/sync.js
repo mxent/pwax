@@ -14,7 +14,22 @@
 const QUEUE_PREFIX = '/__pwax__/sync/';
 
 /**
- * @param {{ cachePrefix?: string }} config
+ * The freshest CSRF token this document has.
+ *
+ * The meta tag rather than the boot-time config: a login redirects and the new document
+ * carries the new token, while `config.csrf` is whatever was current when the runtime
+ * started. The worker asks for this before it replays anything, because the token stored
+ * with a queued write is the one that was current when it was queued — see
+ * `registerSync()` in `sw/push.js`.
+ */
+function currentToken(config) {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+
+    return meta?.getAttribute('content') || config.csrf || null;
+}
+
+/**
+ * @param {{ cachePrefix?: string, csrf?: string|null }} config
  * @param {{ headers: (extra?: object) => object }} http
  */
 export function createSyncApi(config, http) {
@@ -25,6 +40,43 @@ export function createSyncApi(config, http) {
     /** Ask the worker to drain the queue, one way or another. */
     const kick = () => {
         controller()?.postMessage({ type: 'PWAX_SYNC_REGISTER' });
+    };
+
+    // Answer the worker when it asks what this session's token is. Registered once, at
+    // construction, because a Background Sync wake can reach a page that has been open for
+    // hours and is not otherwise doing anything.
+    //
+    // Guarded on the method rather than on the property: `navigator.serviceWorker` exists
+    // in every browser that has a worker at all, but not everything that stands in for it
+    // is an EventTarget, and throwing here would take the whole queue API down with it.
+    if (typeof navigator.serviceWorker?.addEventListener === 'function') {
+        navigator.serviceWorker.addEventListener('message', (event) => {
+            if (!event.data || event.data.type !== 'PWAX_SYNC_TOKEN') {
+                return;
+            }
+
+            event.ports?.[0]?.postMessage({
+                type: 'PWAX_SYNC_TOKEN',
+                token: currentToken(config),
+            });
+        });
+    }
+
+    /**
+     * Is this URL on our own origin?
+     *
+     * It has to be. The headers stored with a queued write include this session's CSRF
+     * token, and the worker replays them verbatim — so a cross-origin URL here, whether a
+     * typo or a third-party API somebody meant to call, hands that token to another origin
+     * from a context the page cannot see. `push.js` refuses the same thing for
+     * `pwax.push.endpoint`, for the same reason and in the same words.
+     */
+    const isSameOrigin = (url) => {
+        try {
+            return new URL(url, window.location.origin).origin === window.location.origin;
+        } catch {
+            return false;
+        }
     };
 
     return {
@@ -45,6 +97,16 @@ export function createSyncApi(config, http) {
          */
         async enqueue(url, { method = 'POST', headers = {}, body = null } = {}) {
             if (!('caches' in window)) {
+                return false;
+            }
+
+            if (!isSameOrigin(url)) {
+                console.error(
+                    `pwax: sync.enqueue() only accepts URLs on this origin, got "${url}". ` +
+                        "Nothing was queued — replaying it would send this session's CSRF " +
+                        'token to another origin.'
+                );
+
                 return false;
             }
 

@@ -122,6 +122,47 @@
 @endforeach
 
 {{--
+    The page's translations. Marked managed like the tags above: a `hreflang` set left over
+    from the previous route claims that page's translations are this one's, which is a
+    worse answer than none — a search engine acting on it serves the wrong URL to the wrong
+    language.
+--}}
+@foreach ($pwaxHead->alternates as $pwaxAlternate)
+    <link rel="alternate" hreflang="{{ $pwaxAlternate['hreflang'] }}" href="{{ $pwaxAlternate['href'] }}" data-pwax-head>
+@endforeach
+
+{{--
+    Structured data, one block per claim.
+
+    Encoded with the same `JSON_HEX_*` flags as the runtime's JSON islands, which makes a
+    `</script>` sequence unrepresentable: this is the one place in the head where a value
+    from the database is written as markup rather than as an attribute, so the escaping has
+    to hold against content nobody reviewed.
+
+    It carries the nonce even though the block is data rather than code. A browser applies
+    `script-src` to a `<script>` element by its tag, not by its `type`, so under a strict
+    policy an un-nonced `application/ld+json` block is refused — silently, and only in
+    production, where the policy is on and nobody is looking at the console.
+--}}
+@foreach ($pwaxHead->jsonLd as $pwaxSchema)
+    @php
+        /*
+         * `false` rather than a throw when the data will not encode — a string that is not
+         * valid UTF-8, a stray resource, a NAN. An empty <script type="application/ld+json">
+         * is invalid structured data, so a block that cannot be filled is better not written:
+         * the page is otherwise fine and there is nothing here worth taking it down for.
+         */
+        $pwaxSchemaJson = json_encode(
+            $pwaxSchema,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
+        );
+    @endphp
+    @if ($pwaxSchemaJson !== false)
+        <script type="application/ld+json" data-pwax-head{!! $nonceAttr !!}>{!! $pwaxSchemaJson !!}</script>
+    @endif
+@endforeach
+
+{{--
     Absent on the offline shell, which is rendered with no session on purpose so that
     nothing user-specific is precached. The runtime treats a missing token as "send no
     CSRF header", and a 419 on the first write reloads the page to pick up a real one.
@@ -497,6 +538,18 @@
 
 @foreach ($shell->stylesheets() as $style)
     <link rel="stylesheet" {{ $shell->attributes($style) }}>
+@endforeach
+
+{{--
+    Application scripts that asked for the head with `['src' => '…', 'head' => true]`.
+
+    Last in the head and render-blocking, which is the point: a CSS engine that generates
+    its stylesheet in the browser, or a script that sets a theme class before the first
+    paint, cannot do its job from the end of the body behind the framework. Everything here
+    delays the first paint, so the default position is still the foot.
+--}}
+@foreach ($shell->headScripts() as $pwaxHeadScript)
+    <script {{ $shell->attributes($pwaxHeadScript) }}></script>
 @endforeach
 
 @if (config('pwax.blade.head'))

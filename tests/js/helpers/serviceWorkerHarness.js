@@ -304,8 +304,14 @@ export function createWorker(options) {
     const sandbox = {
         self,
         caches,
-        fetch: async (input) => {
-            const request = toRequest(input);
+        // `init` is honoured, not dropped. The sync queue's replay is the one call in the
+        // worker that passes its headers this way, and a harness that ignored them could
+        // not tell a replay carrying a refreshed CSRF token from one carrying a dead
+        // token — which is the whole difference between a queue that drains and one that
+        // retries the same 419 forever.
+        fetch: async (input, init) => {
+            const request =
+                typeof input === 'string' ? new SWRequest(input, init || {}) : toRequest(input);
             const url = urlOf(request);
 
             fetches.push(url);
@@ -336,6 +342,9 @@ export function createWorker(options) {
         // the moment a test configured one, which read as the worker failing to answer.
         setTimeout,
         clearTimeout,
+        // The worker asks an open page for the current CSRF token over a port before it
+        // replays anything queued, so a test needs a real channel to answer on.
+        MessageChannel,
         // Every level is recorded: the worker distinguishes a failure (warn) from a
         // deliberate skip (info), and a harness that dropped one of them could not tell
         // an alarming install from a correct one.

@@ -124,15 +124,27 @@ describe('clicking a notification', () => {
 });
 
 describe('replaying queued writes', () => {
-    async function queued(caches, body) {
+    async function queued(caches, body, headers = {}) {
         const cache = await caches.open('pwax-sync');
 
         await cache.put(
             `/__pwax__/sync/${Math.random()}`,
             new Response(
-                JSON.stringify({ url: 'https://app.test/notes', method: 'POST', headers: {}, body })
+                JSON.stringify({ url: 'https://app.test/notes', method: 'POST', headers, body })
             )
         );
+    }
+
+    /** A page that answers the worker's request for the session's current CSRF token. */
+    function tokenClient(token) {
+        return {
+            url: 'https://app.test/',
+            postMessage: (message, transfer) => {
+                if (message?.type === 'PWAX_SYNC_TOKEN') {
+                    transfer[0].postMessage({ type: 'PWAX_SYNC_TOKEN', token });
+                }
+            },
+        };
     }
 
     it('registers a background sync when one is available', async () => {
@@ -225,6 +237,105 @@ describe('replaying queued writes', () => {
         await w.dispatch('message', { data: { type: 'PWAX_SYNC_REGISTER' } });
 
         await expect((await caches.open('pwax-sync')).keys()).resolves.toHaveLength(1);
+    });
+
+    /**
+     * The 419 story only works if the token moves.
+     *
+     * An entry carries the CSRF token that was current when it was queued, and `RETRYABLE`
+     * deliberately keeps 419 out of the "the server answered" set so a long-queued write is
+     * not deleted. But the replay used to re-send the *stored* headers, so the retry
+     * presented the same dead token and got the same 419 — for ever. The entry was
+     * immortal, the write never landed, and the "3 changes will send" counter never moved.
+     */
+    it('replays with the token the page has now, not the one it was queued with', async () => {
+        const caches = new FakeCaches();
+        await queued(caches, '{"text":"one"}', { 'X-CSRF-TOKEN': 'the-dead-one' });
+
+        const w = createWorker({
+            manifest: manifest(),
+            caches,
+            backgroundSync: false,
+            clients: [tokenClient('the-current-one')],
+            routes: () => new Response('{}'),
+        });
+
+        await w.dispatch('message', { data: { type: 'PWAX_SYNC_REGISTER' } });
+
+        const replayed = w.requests.at(-1);
+
+        expect(replayed.headers.get('X-CSRF-TOKEN')).toBe('the-current-one');
+        await expect((await caches.open('pwax-sync')).keys()).resolves.toHaveLength(0);
+    });
+
+    it('sends the stored token when no page is open to ask', async () => {
+        const caches = new FakeCaches();
+        await queued(caches, '{"text":"one"}', { 'X-CSRF-TOKEN': 'the-stored-one' });
+
+        // A genuine Background Sync wake with every tab closed. The stored token is all
+        // there is, which is where this started — so nothing is worse than before.
+        const w = createWorker({
+            manifest: manifest(),
+            caches,
+            backgroundSync: false,
+            clients: [],
+            routes: () => new Response('{}'),
+        });
+
+        await w.dispatch('message', { data: { type: 'PWAX_SYNC_REGISTER' } });
+
+        expect(w.requests.at(-1).headers.get('X-CSRF-TOKEN')).toBe('the-stored-one');
+    });
+
+    it('does not add a token to an entry that never had one', async () => {
+        const caches = new FakeCaches();
+        await queued(caches, '{"text":"one"}', { 'Content-Type': 'application/json' });
+
+        const w = createWorker({
+            manifest: manifest(),
+            caches,
+            backgroundSync: false,
+            clients: [tokenClient('the-current-one')],
+            routes: () => new Response('{}'),
+        });
+
+        await w.dispatch('message', { data: { type: 'PWAX_SYNC_REGISTER' } });
+
+        // Replaced, never added. An entry queued by a session that had no token is a
+        // request the application meant to send without one.
+        expect(w.requests.at(-1).headers.get('X-CSRF-TOKEN')).toBeNull();
+    });
+
+    it('asks one page for the token however many writes are waiting', async () => {
+        const caches = new FakeCaches();
+
+        for (let i = 0; i < 5; i++) {
+            await queued(caches, `{"text":"${i}"}`, { 'X-CSRF-TOKEN': 'old' });
+        }
+
+        let asked = 0;
+        const client = tokenClient('fresh');
+        const counted = {
+            ...client,
+            postMessage: (message, transfer) => {
+                asked++;
+                client.postMessage(message, transfer);
+            },
+        };
+
+        const w = createWorker({
+            manifest: manifest(),
+            caches,
+            backgroundSync: false,
+            clients: [counted],
+            routes: () => new Response('{}'),
+        });
+
+        await w.dispatch('message', { data: { type: 'PWAX_SYNC_REGISTER' } });
+
+        // Every entry in the queue belongs to the same session. Five round trips to a page
+        // for one answer is five chances for the drain to stall behind a busy tab.
+        expect(asked).toBe(1);
     });
 
     it('drops an entry it cannot read rather than blocking the queue behind it', async () => {

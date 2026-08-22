@@ -68,6 +68,8 @@ table in JavaScript.
 - [Frontend assets](#frontend-assets)
 - [Performance](#performance)
 - [Precompiling templates](#precompiling-templates)
+- [SEO and page metadata](#seo-and-page-metadata)
+- [Server-side rendering for SEO](#server-side-rendering-for-seo)
 - [Security](#security)
 - [Configuration reference](#configuration-reference)
 - [Artisan commands](#artisan-commands)
@@ -728,6 +730,16 @@ prompt, and spending it is the application's decision.
 `sync.enqueue()` queues nothing automatically. Intercepting failed writes would replay a
 payment as readily as a draft, and only the application knows which of its requests repeat
 safely.
+
+It takes URLs on your own origin only, and returns `false` for anything else. What is
+stored alongside the request is the headers the runtime sends, this session's CSRF token
+among them, and the worker replays them from a context the page cannot see — so a
+cross-origin URL there would hand that token to somebody else. Call a third-party API from
+the page, where you control the headers.
+
+The token itself is refreshed at replay time from whatever page is open, not sent as it was
+when the write was queued. That is what makes a write that sat offline past
+`session.lifetime` succeed on its retry rather than meeting the same 419 for ever.
 
 ### Being opened by the operating system
 
@@ -1422,6 +1434,164 @@ browser. `assets.node` sets the Node binary if it is not on `PATH`;
 `assets.render_functions` moves the store, which is worth doing if you build the artifact
 in CI and ship it with the release.
 
+## SEO and page metadata
+
+Everything a page says about itself — its title, its description, its social card, its
+structured data — is declared on the response and travels twice: as tags in the document a
+full page load receives, and inside the JSON payload the runtime applies on a client-side
+navigation.
+
+Both halves matter. A browser replaces the whole head on a real navigation; a router does
+not. A title that moves with the route and a canonical URL that stays behind is worse than
+setting neither, because the wrong answer outlives the missing one — and nothing on screen
+shows it. It surfaces in a link preview or a crawler, weeks later.
+
+```php
+Route::get('/posts/{post}', fn (Post $post) => pwaxRender('pages.post', compact('post'))
+    ->title($post->title)
+    ->description($post->excerpt)
+    ->canonical(route('posts.show', $post))
+    ->image($post->cover_url)
+    ->robots($post->draft ? 'noindex' : 'index, follow')
+    ->alternate('fr', route('posts.show', [$post, 'locale' => 'fr']))
+    ->jsonLd([
+        '@context' => 'https://schema.org',
+        '@type' => 'Article',
+        'headline' => $post->title,
+        'datePublished' => $post->published_at->toIso8601String(),
+    ]));
+```
+
+| Method | Emits |
+| --- | --- |
+| `title($text)` | `<title>`, `og:title`, `twitter:title` |
+| `description($text)` | `<meta name="description">`, `og:description`, `twitter:description` |
+| `canonical($url)` | `<link rel="canonical">`, `og:url` |
+| `image($url)` | `og:image`, `twitter:image`, and the Twitter card that suits it |
+| `robots($directives)` | `<meta name="robots">` |
+| `alternate($hreflang, $url)` | `<link rel="alternate" hreflang="…">` |
+| `jsonLd($schema)` | `<script type="application/ld+json">` |
+| `meta($name, $content)` | `<meta name="…">` |
+| `property($property, $content)` | `<meta property="…">` |
+
+`meta()` and `property()` also take an array, so several tags can be set in one call:
+
+```php
+->meta(['author' => 'Ada Lovelace', 'rating' => 'general'])
+```
+
+### Defaults for every page
+
+Each of these has an application-wide fallback in `config/pwax.php`, which is where a
+value that is the same on every route belongs:
+
+```php
+'head' => [
+    'title' => null,               // falls back to manifest.name
+    'title_template' => ':title · Acme',
+    'description' => null,         // falls back to manifest.description
+    'image' => '/img/og.png',      // the sharing card for pages that name none
+    'robots' => null,              // 'noindex, nofollow' on staging
+    'locale' => null,              // og:locale; defaults to the app locale
+    'alternates' => [],            // ['en' => '/', 'fr' => '/fr']
+    'json_ld' => null,             // usually the site's own Organization
+    'open_graph' => true,
+    'open_graph_type' => 'website',
+    'twitter_card' => null,        // follows the image
+],
+```
+
+The title template is applied only to a page's own title: `':title · Acme'` against a
+fallback of `'Acme'` would otherwise render `Acme · Acme`.
+
+### What is derived, and what is not
+
+Open Graph and Twitter tags are derived from the values above, and derivation never
+overwrites — a page that sets `og:title` by hand keeps it, and nothing is invented from a
+value that does not exist. Turn the whole of it off with `'open_graph' => false`.
+
+Two derivations are worth knowing about:
+
+- **`twitter:card` follows the image.** Left null it is `summary_large_image` when a page
+  has an image and `summary` when it does not, because a large card with no image renders
+  as a bare summary anyway and a small one beside a 1200×630 image throws the artwork away.
+  Set it explicitly to pin one spelling for every page.
+- **URLs in Open Graph tags are made absolute.** A scraper reading `og:image` does not
+  necessarily have the document to resolve a relative path against, so `->image('/img/og.png')`
+  is emitted against your `app.url`. Anything already carrying a scheme is left as written.
+
+`robots` is deliberately not part of that: it is applied whether or not Open Graph
+derivation is on, so an application that turns derivation off does not silently start
+indexing a staging deployment.
+
+### Structured data
+
+`jsonLd()` is what a search engine reads to show a rich result — a recipe's rating, an
+article's author and date, a product's price, the breadcrumb trail above a result. Call it
+more than once for a page that makes several claims and each becomes its own block, which
+is what Google's documentation asks for:
+
+```php
+->jsonLd(['@context' => 'https://schema.org', '@type' => 'Article', 'headline' => $post->title])
+->jsonLd(['@context' => 'https://schema.org', '@type' => 'BreadcrumbList', 'itemListElement' => $crumbs])
+```
+
+A page that calls `jsonLd()` **replaces** `head.json_ld` rather than adding to it. An
+`Article` and an `Organization` are two claims about two different things, and emitting
+both against one URL says the page is both. Put the site's own identity in
+`@stack('pwax-head')` if you want it on every page alongside the page's own — that is a
+document-level concern and outlives the navigation.
+
+The block is written with the same escaping as the runtime's JSON islands, so a value from
+your database cannot close it, and it carries your CSP nonce: a browser applies
+`script-src` to a `<script>` element by its tag rather than by its `type`, so an un-nonced
+`ld+json` block is refused under a strict policy.
+
+### Translations
+
+`alternate()` is how a search engine is told that two URLs are the same page in different
+languages rather than duplicates competing with each other. The reciprocity rule means
+every locale must name every other one, including itself:
+
+```php
+->alternate('en', route('posts.show', $post))
+->alternate('fr', route('posts.show', [$post, 'locale' => 'fr']))
+->alternate('x-default', route('posts.show', $post))
+```
+
+For a site whose translations differ only by a prefix, `head.alternates` sets the same
+links for every page.
+
+### What this does and does not do
+
+These tags describe the document. They do not put the page's *content* in it — that is
+still compiled in the browser from a JSON island, so a crawler that does not run
+JavaScript sees the shell. Tags are enough for link unfurling and for crawlers that do run
+JavaScript; for the ones that do not, turn on
+[server-side rendering](#server-side-rendering-for-seo), which emits the same metadata
+alongside real prerendered HTML.
+
+### Anything else in the head
+
+`@stack('pwax-head')` takes arbitrary content and is left alone on a navigation:
+
+```blade
+@push('pwax-head')
+    <meta name="google-site-verification" content="…">
+@endpush
+```
+
+Only tags the package emitted carry `data-pwax-head`, and only those are replaced when the
+route changes.
+
+There is a matching `@stack('pwax-foot')`, rendered after the vendor scripts at the end of
+`<body>` — the place for a script that needs Vue to have evaluated. Those are the two
+stacks the shell wires up; a push to any other name is silently dropped.
+
+Push from a Blade view that renders as part of the page — one of the `blade.*` overrides,
+or your own published shell. Blade discards its stacks when the outermost render finishes,
+so a `View::startPush()` from a controller is gone before the shell asks for it.
+
 ## Server-side rendering for SEO
 
 By default the first paint of a Pwax route is an SPA shell: the page's markup is compiled
@@ -1566,6 +1736,82 @@ discards the prerender and draws the page again. Your `data()` still runs — a 
 rely on what it does as much as on what it returns — it just does not get to overrule what
 was already rendered. Every subsequent navigation is an ordinary client-side render, with
 `data()` in sole charge.
+
+**Only values a JSON round trip leaves unchanged are seeded.** The island is JSON, so a
+`data()` key holding a component from `@pwaxImport`, a `Date`, a `Map`, a class instance or
+a cycle is left out of it and your `data()` keeps sole charge of that key — which is the
+right answer, because none of them is state the client cannot rebuild for itself:
+
+```blade
+<script>
+    const badge = @pwaxImport('components.badge');
+
+    export default {
+        data() {
+            // `badge` is not seeded — the client builds its own. `label` is.
+            return { badge, label: 'Live' };
+        },
+    };
+</script>
+```
+
+With `APP_DEBUG` on, the log names any key that was left out. Serializing them instead
+would be worse than skipping them: a component survives `JSON.stringify` as a lookalike
+with its functions gone, and `<component :is>` handed that renders nothing at all.
+
+### Styling a prerendered page
+
+A prerendered page has its markup in the document from the first byte. Whatever styles that
+markup needs have to be in the document too, or the page paints bare and is restyled a
+moment later — and a crawler that does not run JavaScript never sees it styled at all.
+
+Three sources are already in the prerendered HTML, and need nothing from you:
+
+| In the document | How it gets there |
+| --- | --- |
+| A component's `<style>` / `<style scoped>` | Inlined into `<head>`, keyed so the runtime adopts it rather than adding a second copy |
+| The stylesheets of components it pulls in with `@pwaxImport` | Inlined the same way |
+| `pwax.styles` | `<link rel="stylesheet">` in `<head>` |
+
+One source is not, and cannot be: **CSS that only exists after browser JavaScript has run.**
+The Tailwind Play CDN, `@tailwindcss/browser`, the UnoCSS runtime and Twind all work the
+same way — they load in the browser, read the DOM, work out which utility classes are
+present, and inject a `<style>`. Nothing on the server knows what CSS those class names
+need, so the prerendered HTML carries the markup and none of the styles.
+
+With SSR on, `php artisan pwax:doctor` says so if it finds one of them in `pwax.scripts`.
+
+**Build your CSS to a file.** For Tailwind that means the CLI or the Vite plugin rather than
+the Play CDN — which Tailwind's own documentation says is not for production anyway. Point
+its content globs at your component views, since they are where the class names live:
+
+```js
+// tailwind.config.js — or `@source` directives in v4
+content: [
+    './resources/views/**/*.blade.php',
+],
+```
+
+```php
+// config/pwax.php
+'styles' => ['/css/app.css'],
+```
+
+That stylesheet is linked in the head of every page, prerendered or not, and the service
+worker precaches it so the app is styled offline too.
+
+**If you must keep a browser-side engine,** put it in the head so it runs before the first
+paint rather than behind Vue, Vue Router and Pinia:
+
+```php
+'scripts' => [
+    ['src' => 'https://cdn.tailwindcss.com', 'head' => true],
+],
+```
+
+That removes the flash for visitors who run JavaScript — measured on the demo app, first
+paint goes from unstyled to styled — but it cannot help the crawler or the visitor who does
+not. Only a real stylesheet can.
 
 ### What can and cannot be prerendered
 
@@ -1809,6 +2055,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `assets.versions` | see config | Pinned Vue / Router / Pinia versions |
 | `assets.pinia` | `true` | Load Pinia at all |
 | `styles`, `scripts` | `[]` | Extra tags; string or attribute array |
+| `scripts[].head` | `false` | Render this script in `<head>` rather than at the end of `<body>` |
 | `vue.plugins`, `vue.directives`, `vue.middleware` | `[]` | Vue extensions |
 | `minify.enabled` | production only | Minify component sources |
 | `minify.store`, `minify.ttl` | `null` | Cache for minified output |
@@ -1827,6 +2074,13 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `head.description`, `.icon` | `null` | Fall back to the manifest's |
 | `head.base` | `null` | `<base href>`; off because it rewrites every relative URL |
 | `head.color_scheme`, `.theme_color_dark` | `null` | Dark-mode head hints |
+| `head.image` | `null` | `og:image` / `twitter:image` for pages that name none |
+| `head.robots` | `null` | Default `robots` directive for every page |
+| `head.locale` | `null` | `og:locale`; falls back to the application locale |
+| `head.alternates` | `[]` | `hreflang` links for every page, as `['fr' => '/fr']` |
+| `head.json_ld` | `null` | Structured data for pages that declare none |
+| `head.open_graph`, `.open_graph_type` | `true`, `'website'` | Derive Open Graph tags, and `og:type` |
+| `head.twitter_card` | `null` | `twitter:card`; follows the image when left null |
 
 ### Server-side rendering
 

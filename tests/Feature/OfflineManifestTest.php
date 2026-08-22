@@ -83,6 +83,18 @@ class OfflineManifestTest extends TestCase
         $this->assertNotContains('/js/analytics.js', $this->get('/sw.json')->json('critical'));
     }
 
+    public function test_a_head_script_is_precached_like_any_other(): void
+    {
+        // The manifest read the *positional* list, so moving a script into the head would
+        // have quietly dropped it from the offline install — and the scripts most likely to
+        // ask for the head are the ones whose absence is most visible, since that is why
+        // they asked. A theme script missing offline is a page that boots in the wrong
+        // colours; a CSS engine missing offline is a page with no styles at all.
+        config()->set('pwax.scripts', [['src' => '/js/theme.js', 'head' => true]]);
+
+        $this->assertContains('/js/theme.js', $this->urls());
+    }
+
     public function test_the_asset_manifest_lists_every_component(): void
     {
         $urls = $this->urls();

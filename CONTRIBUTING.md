@@ -110,13 +110,15 @@ adds `tests/fixtures/views` to the view finder — put new component fixtures th
 
 ```bash
 php vendor/bin/testbench vendor:publish --tag=pwax-assets --force   # once
+php vendor/bin/testbench workbench:sync-skeleton                    # once, for the icons
 php vendor/bin/testbench serve
 ```
 
 `testbench.yaml` registers the provider and `workbench/` holds the demo it serves: two
 pages with scoped styles, a component pulled in with `@pwaxImport` and held in `data()`,
 a route that redirects, SSR on and the service worker on. Between them they cover the
-checks below.
+checks below. `php vendor/bin/testbench pwax:doctor` reports two warnings against it and
+no problems; both warnings are deliberate.
 
 Worth doing by hand for anything touching the runtime or the shell, because the test
 suites cannot see any of it — Vitest runs in jsdom, which hydrates nothing, and the PHP

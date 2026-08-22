@@ -32,6 +32,19 @@ export function createComponentLoader({ styles, nonce = null }) {
         const module = await importModule(url);
         const meta = styleMetadata(module);
 
+        // Acquired and never released, which is deliberate and is the one place the style
+        // manager's reference counting does not balance.
+        //
+        // `importModule` caches the module and `component()` memoises the async component,
+        // so this function runs at most once per URL per session: there is no second
+        // acquire to pair a release with. Releasing on unmount instead would mean
+        // re-inserting the stylesheet on every remount — a `v-if` toggling an imported
+        // component would flash it unstyled each time it came back, and that is a far more
+        // visible failure than a `<style>` element outliving its last user.
+        //
+        // The residue is bounded by the number of distinct components a session imports,
+        // and each one's rules are scoped to that component unless its author deliberately
+        // wrote an unscoped `<style>`.
         styles.acquire(url, meta.style, { nonce });
 
         // Loaded after the module evaluates rather than before, because a component's

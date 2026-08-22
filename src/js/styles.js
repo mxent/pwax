@@ -9,7 +9,13 @@
  * with the number of components the session had ever touched.
  *
  * Counting references fixes the cause: a stylesheet is inserted when its first user
- * appears and removed when its last user goes away, and nothing else is ever touched.
+ * appears and removed when its last user releases it, and nothing else is ever touched.
+ *
+ * "Releases it" rather than "goes away", because the two are not the same for every key.
+ * A page's own stylesheet is released on the navigation away from it — `page.js` owns that
+ * key and gives it back. A component loaded through `@pwaxImport` is not: its module is
+ * cached for the session, so `load()` runs once and acquires once, and nothing releases it.
+ * See the note in `components.js` for why that is the choice rather than an oversight.
  */
 
 export function createStyleManager(doc = document) {

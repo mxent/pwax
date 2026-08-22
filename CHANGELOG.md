@@ -247,8 +247,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `php vendor/bin/testbench serve` starts a bare Laravel skeleton with no `pwax:*` commands,
   no `__pwax__` routes and nothing to look at. `testbench.yaml` and `workbench/` are that
   application — two pages with scoped styles, a component pulled in with `@pwaxImport` and
-  held in `data()`, a route that redirects, SSR on and the service worker on. The SSR state
-  island bug above was found in it, in a browser, after both test suites had gone green.
+  held in `data()`, a route that redirects, SSR on, the service worker on and icons real
+  enough that a browser offers to install it. The SSR state island bug below was found in
+  it, in a browser, after both test suites had gone green.
 
 - **`pwax:doctor` checks the document head.** No sharing image configured; a `head.robots`
   that would `noindex` the whole site; `head.json_ld` with no `@context`; an alternate with

@@ -27,3 +27,12 @@ workbench:
     config: true
     web: true
     views: true
+  # The demo's own icons and sharing card, linked into the skeleton's public directory.
+  # Without a 192 and a 512 no browser offers to install the app, and "installable" is the
+  # claim hardest to check by reading code. Solid squares, generated rather than designed —
+  # they exist to be the right size. The screenshots `pwax:doctor` also asks for are
+  # deliberately absent: a solid rectangle is not a screenshot, and the warning is worth
+  # seeing once.
+  sync:
+    - from: ./workbench/public/img
+      to: public/img

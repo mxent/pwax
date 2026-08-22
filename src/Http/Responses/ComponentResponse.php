@@ -43,6 +43,12 @@ class ComponentResponse implements Responsable
     /** @var list<array{attribute: string, key: string, content: string}> */
     private array $meta = [];
 
+    /** @var list<array<string, mixed>> */
+    private array $jsonLd = [];
+
+    /** @var list<array{hreflang: string, href: string}> */
+    private array $alternates = [];
+
     private bool $storable = true;
 
     /**
@@ -219,6 +225,99 @@ class ComponentResponse implements Responsable
     }
 
     /**
+     * The social sharing image for this page.
+     *
+     * Sets `og:image` and `twitter:image` together, because a page that has one and not the
+     * other is a page whose link preview depends on which service is unfurling it. A
+     * site-relative path is made absolute — a scraper reading Open Graph does not
+     * necessarily have the document to resolve one against, and the failure is a preview
+     * with no image rather than an error.
+     *
+     *     ->image($post->cover_url)
+     *
+     * `pwax.head.image` is the application-wide fallback for every page that names none.
+     * With an image present and `pwax.head.twitter_card` left at its default, the card
+     * becomes `summary_large_image`.
+     */
+    public function image(string $url): self
+    {
+        return $this->property('og:image', $url)->meta('twitter:image', $url);
+    }
+
+    /**
+     * The `robots` directive for this page.
+     *
+     *     ->robots('noindex, nofollow')
+     *
+     * Sugar for `->meta('robots', …)`, which is what it emits. It is here because it is the
+     * one meta tag whose spelling has consequences and whose name people misremember, and
+     * because `pwax.head.robots` gives a staging deployment a single place to say the same
+     * thing for every page at once.
+     */
+    public function robots(string $directives): self
+    {
+        return $this->meta('robots', $directives);
+    }
+
+    /**
+     * Structured data for this page, as a `<script type="application/ld+json">` block.
+     *
+     * This is what a search engine reads to show a rich result — a recipe's rating, an
+     * article's author and date, a product's price, the breadcrumb trail above a result.
+     * There is no way to express it in a `<meta>` tag, which is why it needs a method of
+     * its own rather than being another line in `meta()`.
+     *
+     *     ->jsonLd([
+     *         '@context' => 'https://schema.org',
+     *         '@type' => 'Article',
+     *         'headline' => $post->title,
+     *         'datePublished' => $post->published_at->toIso8601String(),
+     *     ])
+     *
+     * Call it more than once for a page that makes several claims — an `Article` and the
+     * `BreadcrumbList` above it — and each becomes its own block, which is what Google's
+     * documentation asks for.
+     *
+     * Like everything else here it travels in the payload as well as the document, so a
+     * client-side navigation replaces the previous page's structured data rather than
+     * leaving it to describe a page the visitor has left. That is the failure this is worth
+     * having at all: stale structured data is not a missing rich result, it is a wrong one.
+     *
+     * @param  array<string, mixed>  $schema
+     */
+    public function jsonLd(array $schema): self
+    {
+        if ($schema !== []) {
+            $this->jsonLd[] = $schema;
+        }
+
+        return $this;
+    }
+
+    /**
+     * A `rel="alternate"` link to this page in another language.
+     *
+     *     ->alternate('fr', route('posts.show', [$post, 'locale' => 'fr']))
+     *     ->alternate('x-default', route('posts.show', $post))
+     *
+     * A localised page that does not declare these is competing with its own translations
+     * in the index. `hreflang` is how a search engine is told they are the same page rather
+     * than duplicates of each other — and the reciprocity rule means every locale must
+     * name every other one, including itself, which is why this is a repeatable call.
+     *
+     * `pwax.head.alternates` sets the same links for every page, for a site whose
+     * translations differ only by a prefix.
+     */
+    public function alternate(string $hreflang, string $href): self
+    {
+        if ($hreflang !== '' && $href !== '') {
+            $this->alternates[] = ['hreflang' => $hreflang, 'href' => $href];
+        }
+
+        return $this;
+    }
+
+    /**
      * @param  array<string, string|null>  $tags
      */
     private function tag(string $attribute, array $tags): self
@@ -247,6 +346,8 @@ class ComponentResponse implements Responsable
             description: $this->description,
             canonical: $this->canonical,
             meta: $this->meta,
+            jsonLd: $this->jsonLd,
+            alternates: $this->alternates,
         ));
     }
 

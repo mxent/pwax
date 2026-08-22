@@ -24,6 +24,12 @@
      * @var \Mxent\Pwax\Support\Shell $pwaxShell
      */
     $pwaxShell ??= app(\Mxent\Pwax\Support\Shell::class);
+
+    // The CSP nonce for this document's inline blocks, resolved once. `pwax.csp.nonce`
+    // may be a callable, and an application that returns a fresh value per call would
+    // otherwise stamp a different nonce on each block and have every one of them refused.
+    $pwaxNonce = $pwaxShell->nonce();
+    $pwaxNonceAttr = $pwaxNonce ? ' nonce="' . e($pwaxNonce) . '"' : '';
 @endphp
 <!DOCTYPE html>
 {{--
@@ -117,8 +123,16 @@
             is a spinner that never stops.
         --}}
         <noscript>
-            {{-- The preloader is a spinner waiting for a runtime that will never boot. --}}
-            <style>.pwax-preloader{display:none}</style>
+            {{--
+                The preloader is a spinner waiting for a runtime that will never boot.
+
+                Carries the nonce like every other inline block the package emits. Without
+                it, an application running a strict `style-src 'nonce-…'` had this one rule
+                refused — and the rule's whole job is to lift an opaque, full-viewport cover
+                off the message below it. The visitor who has JavaScript off, which is the
+                only visitor who ever reaches this markup, was left looking at a spinner.
+            --}}
+            <style{!! $pwaxNonceAttr !!}>.pwax-preloader{display:none}</style>
             <div class="pwax-screen" role="alert">
                 <div class="pwax-screen__panel">
                     <p class="pwax-screen__code">JavaScript</p>

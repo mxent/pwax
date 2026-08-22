@@ -135,4 +135,88 @@ describe('applying a page head', () => {
         // client-side navigation at the wrong document.
         expect(tag('link[rel="canonical"]')).toBeNull();
     });
+    it('renders structured data as its own block', () => {
+        applyHead({
+            jsonLd: [{ '@type': 'Article', headline: 'Hello' }, { '@type': 'BreadcrumbList' }],
+        });
+
+        const blocks = document.head.querySelectorAll('script[type="application/ld+json"]');
+
+        expect(blocks).toHaveLength(2);
+        expect(JSON.parse(blocks[0].textContent)).toEqual({
+            '@type': 'Article',
+            headline: 'Hello',
+        });
+    });
+
+    it("replaces the previous page's structured data", () => {
+        applyHead({ jsonLd: [{ '@type': 'Article', headline: 'First' }] });
+        applyHead({ jsonLd: [{ '@type': 'Article', headline: 'Second' }] });
+
+        const blocks = document.head.querySelectorAll('script[type="application/ld+json"]');
+
+        // Stale structured data is not a missing rich result, it is a wrong one: a search
+        // engine told this page is an article it is not.
+        expect(blocks).toHaveLength(1);
+        expect(JSON.parse(blocks[0].textContent).headline).toBe('Second');
+    });
+
+    it('drops structured data the next page does not set', () => {
+        applyHead({ jsonLd: [{ '@type': 'Article' }] });
+        applyHead({ title: 'A page that claims nothing' });
+
+        expect(tag('script[type="application/ld+json"]')).toBeNull();
+    });
+
+    it('stamps the nonce on a structured data block', () => {
+        applyHead({ jsonLd: [{ '@type': 'Article' }] }, { nonce: 'n0nce-value' });
+
+        // A browser applies `script-src` to a `<script>` by its tag rather than its `type`,
+        // so without this the block is refused under a strict policy.
+        expect(tag('script[type="application/ld+json"]').getAttribute('nonce')).toBe('n0nce-value');
+    });
+
+    it('writes structured data as text rather than as markup', () => {
+        applyHead({ jsonLd: [{ headline: '</script><img onerror="alert(1)">' }] });
+
+        const block = tag('script[type="application/ld+json"]');
+
+        // `textContent`, so the sequence cannot end the element it is inside.
+        expect(document.head.querySelectorAll('img')).toHaveLength(0);
+        expect(JSON.parse(block.textContent).headline).toBe('</script><img onerror="alert(1)">');
+    });
+
+    it('renders and replaces alternate language links', () => {
+        applyHead({
+            alternates: [
+                { hreflang: 'en', href: 'https://example.test/a' },
+                { hreflang: 'fr', href: 'https://example.test/fr/a' },
+            ],
+        });
+
+        expect(document.head.querySelectorAll('link[rel="alternate"]')).toHaveLength(2);
+
+        applyHead({ alternates: [{ hreflang: 'en', href: 'https://example.test/b' }] });
+
+        const links = document.head.querySelectorAll('link[rel="alternate"]');
+
+        // A `hreflang` set left over from the previous route claims that page's
+        // translations are this one's, and a search engine acting on it serves the wrong
+        // URL to the wrong language.
+        expect(links).toHaveLength(1);
+        expect(links[0].getAttribute('href')).toBe('https://example.test/b');
+    });
+
+    it('leaves an unmanaged ld+json block from the application alone', () => {
+        document.head.innerHTML =
+            '<script type="application/ld+json">{"@type":"Organization"}</script>';
+
+        applyHead({ jsonLd: [{ '@type': 'Article' }] });
+
+        const blocks = document.head.querySelectorAll('script[type="application/ld+json"]');
+
+        // The site's own identity is pushed into @stack('pwax-head') and outlives the
+        // navigation; only the page's claim is replaced.
+        expect(blocks).toHaveLength(2);
+    });
 });

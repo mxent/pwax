@@ -193,7 +193,7 @@ export async function resolveInitialPage({ payload, styles, config, ssrState = n
         document.title = payload.title;
     }
 
-    applyHead(payload.head);
+    applyHead(payload.head, { nonce: config.nonce });
 
     // Last, so that a throw anywhere above leaves nothing acquired. The caller falls back
     // to a client-side mount on failure, and that path acquires this same key itself —
@@ -469,7 +469,7 @@ export function createPageComponent({
                         document.title = payload.title;
                     }
 
-                    applyHead(payload.head);
+                    applyHead(payload.head, { nonce: config.nonce });
 
                     // Finished before the swap, not alongside it. The bar completing is
                     // what says the waiting is over; the fade is what says the page has

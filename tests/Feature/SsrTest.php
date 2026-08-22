@@ -692,6 +692,32 @@ class SsrTest extends TestCase
         return $entries;
     }
 
+    public function test_a_prerendered_page_carries_its_structured_data(): void
+    {
+        $this->requireNode();
+
+        $this->app['router']->middleware('web')->get('/ssr-article', fn () => pwaxRender('pages.home')
+            ->title('Hello world')
+            ->image('/img/cover.png')
+            ->jsonLd(['@context' => 'https://schema.org', '@type' => 'Article', 'headline' => 'Hello world'])
+            ->alternate('fr', 'https://example.test/fr/article'));
+
+        $response = $this->get('/ssr-article');
+
+        $response->assertHeader('X-Pwax-SSR', '1');
+
+        $html = (string) $response->getContent();
+
+        // The prerender exists for the crawler that does not run JavaScript, and that is
+        // exactly the reader for which structured data, a sharing image and `hreflang` are
+        // worth having. Emitting them only into the payload would put them where that
+        // reader cannot see them.
+        $this->assertStringContainsString('"@type":"Article"', $html);
+        $this->assertStringContainsString('property="og:image" content="http://localhost/img/cover.png"', $html);
+        $this->assertStringContainsString('name="twitter:card" content="summary_large_image"', $html);
+        $this->assertStringContainsString('<link rel="alternate" hreflang="fr"', $html);
+    }
+
     public function test_the_doctor_reports_a_working_bridge(): void
     {
         $this->requireNode();

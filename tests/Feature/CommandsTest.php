@@ -495,6 +495,55 @@ class CommandsTest extends TestCase
      * and applied by every other test in this file rather than scattered through the
      * suite, so a doctor change that adds a new check only has to update one place.
      */
+    public function test_the_doctor_command_warns_when_no_sharing_image_is_configured(): void
+    {
+        $this->manifest_clean();
+
+        // Not an error — the app works. It is just that every link to it unfurls as a bare
+        // title on every platform that reads Open Graph, and nobody on the team ever sees
+        // that because nobody shares links to their own staging app.
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('head.image')
+            ->assertSuccessful();
+    }
+
+    public function test_the_doctor_command_warns_when_every_page_is_noindex(): void
+    {
+        $this->manifest_clean();
+
+        config()->set('pwax.head.image', 'https://example.test/og.png');
+        config()->set('pwax.head.robots', 'noindex, nofollow');
+
+        // Correct for staging, and the reason a launched site has no traffic if it survives
+        // the deploy. There is no symptom to notice: the pages render exactly as before.
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('head.robots')
+            ->assertSuccessful();
+    }
+
+    public function test_the_doctor_command_warns_about_structured_data_with_no_context(): void
+    {
+        $this->manifest_clean();
+
+        config()->set('pwax.head.image', 'https://example.test/og.png');
+        config()->set('pwax.head.json_ld', ['@type' => 'Organization', 'name' => 'Acme']);
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('@context')
+            ->assertSuccessful();
+    }
+
+    public function test_the_doctor_command_is_quiet_about_a_head_that_is_set_up(): void
+    {
+        $this->manifest_clean();
+
+        config()->set('pwax.head.image', 'https://example.test/og.png');
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('Document head is configured')
+            ->assertSuccessful();
+    }
+
     private function manifest_clean(): void
     {
         config()->set('pwax.manifest.icons', [

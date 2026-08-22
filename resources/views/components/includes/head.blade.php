@@ -122,6 +122,33 @@
 @endforeach
 
 {{--
+    The page's translations. Marked managed like the tags above: a `hreflang` set left over
+    from the previous route claims that page's translations are this one's, which is a
+    worse answer than none — a search engine acting on it serves the wrong URL to the wrong
+    language.
+--}}
+@foreach ($pwaxHead->alternates as $pwaxAlternate)
+    <link rel="alternate" hreflang="{{ $pwaxAlternate['hreflang'] }}" href="{{ $pwaxAlternate['href'] }}" data-pwax-head>
+@endforeach
+
+{{--
+    Structured data, one block per claim.
+
+    Encoded with the same `JSON_HEX_*` flags as the runtime's JSON islands, which makes a
+    `</script>` sequence unrepresentable: this is the one place in the head where a value
+    from the database is written as markup rather than as an attribute, so the escaping has
+    to hold against content nobody reviewed.
+
+    It carries the nonce even though the block is data rather than code. A browser applies
+    `script-src` to a `<script>` element by its tag, not by its `type`, so under a strict
+    policy an un-nonced `application/ld+json` block is refused — silently, and only in
+    production, where the policy is on and nobody is looking at the console.
+--}}
+@foreach ($pwaxHead->jsonLd as $pwaxSchema)
+    <script type="application/ld+json" data-pwax-head{!! $nonceAttr !!}>{!! json_encode($pwaxSchema, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) !!}</script>
+@endforeach
+
+{{--
     Absent on the offline shell, which is rendered with no session on purpose so that
     nothing user-specific is precached. The runtime treats a missing token as "send no
     CSRF header", and a 419 on the first write reloads the page to pick up a real one.

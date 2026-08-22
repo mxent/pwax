@@ -689,8 +689,31 @@ return [
     |                  emitted only where a value for it already exists, and a page that
     |                  set one by hand keeps its own.
     | open_graph_type  `og:type`. 'website' unless your app is something else.
-    | twitter_card     `twitter:card`. 'summary_large_image' if you set an og:image
-    |                  wide enough to deserve it.
+    | twitter_card     `twitter:card`. Left null it follows the image: a card declaring
+    |                  'summary_large_image' with no image renders as a bare 'summary'
+    |                  anyway, and a 'summary' alongside a 1200x630 image throws most of
+    |                  that artwork away. Set it to pin one spelling for every page.
+    | image            The social sharing card for pages that name none of their own —
+    |                  `og:image` and `twitter:image`. A site-relative path is made
+    |                  absolute: a scraper reading Open Graph does not necessarily have
+    |                  the document to resolve one against, and the failure is a link
+    |                  preview with no image rather than an error. 1200x630 is the size
+    |                  every platform crops well.
+    | robots           The default `robots` directive for every page that does not set
+    |                  its own. This is where a staging deployment says 'noindex,
+    |                  nofollow' once instead of on every route.
+    | locale           `og:locale`, in Open Graph's underscored form. Defaults to the
+    |                  application locale, so a localised app declares this once.
+    | alternates       `rel="alternate"` links for every page, as
+    |                  ['en' => 'https://example.com', 'fr' => 'https://example.com/fr'].
+    |                  Use 'x-default' for the fallback. A localised page that declares
+    |                  none is competing with its own translations in the index.
+    | json_ld          Structured data for every page that declares none — normally the
+    |                  site's own identity, an Organization or a WebSite. One array, or
+    |                  a list of them. A page that calls `->jsonLd()` replaces this
+    |                  rather than adding to it: an Article and an Organization are two
+    |                  claims about two different things, and emitting both against one
+    |                  URL says the page is both.
     |
     | Per page, on the response:
     |
@@ -698,8 +721,15 @@ return [
     |         ->title($post->title)
     |         ->description($post->excerpt)
     |         ->canonical(route('posts.show', $post))
-    |         ->property('og:image', $post->image_url)
-    |         ->meta('robots', $post->draft ? 'noindex' : null);
+    |         ->image($post->cover_url)
+    |         ->robots($post->draft ? 'noindex' : 'index, follow')
+    |         ->alternate('fr', route('posts.show', [$post, 'locale' => 'fr']))
+    |         ->jsonLd([
+    |             '@context' => 'https://schema.org',
+    |             '@type' => 'Article',
+    |             'headline' => $post->title,
+    |             'datePublished' => $post->published_at->toIso8601String(),
+    |         ]);
     |
     | Those travel in the payload as well as the document, so a client-side navigation
     | updates them too. A browser replaces the head on a real navigation and a router
@@ -722,7 +752,12 @@ return [
         'theme_color_dark' => null,
         'open_graph' => true,
         'open_graph_type' => 'website',
-        'twitter_card' => 'summary',
+        'twitter_card' => null,
+        'image' => null,
+        'robots' => null,
+        'locale' => null,
+        'alternates' => [],
+        'json_ld' => null,
     ],
 
     'manifest' => [

@@ -24,6 +24,11 @@ class Shell
     /** The bundle's digest once resolved; `?string` covers both "unreadable" and "haven't checked yet". */
     private ?string $runtimeVersion = null;
 
+    /** The resolved CSP nonce. Null is a legitimate answer, so the flag below is what says "resolved". */
+    private ?string $nonce = null;
+
+    private bool $nonceResolved = false;
+
     public function __construct(
         private readonly Config $config,
         private readonly Pwax $pwax,
@@ -318,13 +323,20 @@ class Shell
      * A hint, not a load: an unused `modulepreload` costs a warning in the console and
      * nothing else, and every URL here is one the page is about to ask for anyway.
      *
+     * The keys are `pwax.vue.*`, the same ones {@see runtimeConfig()} reads. They were
+     * `pwax.plugins` and `pwax.directives` before 5.0 moved the group under `vue`, and this
+     * method kept reading the old names — which no longer exist, so `extensions()` was
+     * handed an empty array and the second of the two sources above quietly emitted
+     * nothing. The failure is invisible from the outside: a missing resource hint costs a
+     * round trip and never an error.
+     *
      * @return list<string>
      */
     public function modulePreloads(?Component $component = null): array
     {
         $urls = [];
 
-        foreach (['pwax.plugins', 'pwax.directives'] as $key) {
+        foreach (['pwax.vue.plugins', 'pwax.vue.directives'] as $key) {
             foreach ($this->extensions($key) as $entry) {
                 if (($entry['type'] ?? '') === 'module' && isset($entry['url'])) {
                     $urls[] = $entry['url'];
@@ -465,16 +477,33 @@ class Shell
 
     /**
      * The CSP nonce for inline blocks, if the application supplies one.
+     *
+     * Resolved once per shell. `pwax.csp.nonce` may be a callable, and one document asks
+     * for the nonce from several places — the head partial, the foot partial, the shell's
+     * own `<noscript>` block, and the runtime config the client stamps on the stylesheets
+     * it attaches. A callable that mints a fresh value per call would give each of them a
+     * different nonce, and a `Content-Security-Policy` header names exactly one: every
+     * block but whichever the header happened to match would be refused.
+     *
+     * Memoised on the instance rather than statically: the manifest builder renders the
+     * shell through `withoutRequest()`, and a process-wide memo would hand a visitor's
+     * nonce to that build and from there into the manifest hash.
      */
     public function nonce(): ?string
     {
+        if ($this->nonceResolved) {
+            return $this->nonce;
+        }
+
         $nonce = $this->config->get('pwax.csp.nonce');
 
         if (is_callable($nonce)) {
             $nonce = $nonce();
         }
 
-        return is_string($nonce) && $nonce !== '' ? $nonce : null;
+        $this->nonceResolved = true;
+
+        return $this->nonce = is_string($nonce) && $nonce !== '' ? $nonce : null;
     }
 
     /**

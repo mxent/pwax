@@ -18,9 +18,12 @@ const MANAGED = 'data-pwax-head';
  * Apply a page's metadata, removing whatever the previous page left behind.
  *
  * @param {{title?: string, description?: string, canonical?: string,
- *          meta?: Array<{attribute: string, key: string, content: string}>}|null|undefined} head
+ *          meta?: Array<{attribute: string, key: string, content: string}>,
+ *          jsonLd?: Array<object>,
+ *          alternates?: Array<{hreflang: string, href: string}>}|null|undefined} head
+ * @param {{nonce?: string|null}} [options]
  */
-export function applyHead(head) {
+export function applyHead(head, options = {}) {
     if (!head) {
         return;
     }
@@ -31,7 +34,7 @@ export function applyHead(head) {
 
     description(head.description);
     canonical(head.canonical);
-    managed(head.meta || []);
+    managed(head.meta || [], head.alternates || [], head.jsonLd || [], options.nonce || null);
 }
 
 /**
@@ -94,10 +97,18 @@ function canonical(href) {
  * diff would have to reason about a page that dropped a tag the previous one set — which is
  * the case that goes wrong.
  *
+ * Three kinds of element are managed, and the sweep is by attribute rather than by tag name
+ * so that adding a fourth needs nothing here: `<meta>` for the page's description and its
+ * Open Graph and Twitter tags, `<link rel="alternate">` for its translations, and
+ * `<script type="application/ld+json">` for its structured data.
+ *
  * @param {Array<{attribute: string, key: string, content: string}>} meta
+ * @param {Array<{hreflang: string, href: string}>} alternates
+ * @param {Array<object>} jsonLd
+ * @param {string|null} nonce
  */
-function managed(meta) {
-    for (const tag of document.head.querySelectorAll(`meta[${MANAGED}]`)) {
+function managed(meta, alternates, jsonLd, nonce) {
+    for (const tag of document.head.querySelectorAll(`[${MANAGED}]`)) {
         tag.remove();
     }
 
@@ -112,5 +123,42 @@ function managed(meta) {
         tag.setAttribute('content', content);
         tag.setAttribute(MANAGED, '');
         document.head.appendChild(tag);
+    }
+
+    for (const { hreflang, href } of alternates) {
+        if (!hreflang || !href) {
+            continue;
+        }
+
+        const link = document.createElement('link');
+
+        link.setAttribute('rel', 'alternate');
+        link.setAttribute('hreflang', hreflang);
+        link.setAttribute('href', href);
+        link.setAttribute(MANAGED, '');
+        document.head.appendChild(link);
+    }
+
+    for (const schema of jsonLd) {
+        if (!schema) {
+            continue;
+        }
+
+        const script = document.createElement('script');
+
+        script.setAttribute('type', 'application/ld+json');
+        script.setAttribute(MANAGED, '');
+
+        if (nonce) {
+            // A browser applies `script-src` to a `<script>` element by its tag rather than
+            // by its `type`, so a block created without the document's nonce is refused
+            // under a strict policy — which is production, where nobody is watching the
+            // console. `textContent`, not `innerHTML`: this never parses as markup, so a
+            // `</script>` inside the data cannot end the element.
+            script.setAttribute('nonce', nonce);
+        }
+
+        script.textContent = JSON.stringify(schema);
+        document.head.appendChild(script);
     }
 }

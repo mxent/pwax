@@ -62,7 +62,33 @@ class HeadMetaTest extends TestCase
         $this->assertStringContainsString('property="og:url" content="https://example.test/post"', $html);
         $this->assertStringContainsString('property="og:site_name" content="Acme"', $html);
         $this->assertStringContainsString('property="og:type" content="website"', $html);
-        $this->assertStringContainsString('name="twitter:card" content="summary"', $html);
+    }
+
+    public function test_the_twitter_card_follows_the_image(): void
+    {
+        // `/post` declares an og:image. A 'summary' card alongside a 1200x630 image throws
+        // most of that artwork away, and 'summary_large_image' with no image renders as a
+        // bare summary anyway — so with `head.twitter_card` left null the card follows the
+        // one fact that decides which of the two is right.
+        $this->assertStringContainsString(
+            'name="twitter:card" content="summary_large_image"',
+            (string) $this->get('/post')->getContent()
+        );
+
+        $this->assertStringContainsString(
+            'name="twitter:card" content="summary"',
+            (string) $this->get('/plain')->getContent()
+        );
+    }
+
+    public function test_a_configured_twitter_card_wins_over_the_derived_one(): void
+    {
+        config()->set('pwax.head.twitter_card', 'summary');
+
+        $this->assertStringContainsString(
+            'name="twitter:card" content="summary"',
+            (string) $this->get('/post')->getContent()
+        );
     }
 
     public function test_a_declared_tag_is_not_overwritten_by_a_derived_one(): void
@@ -178,6 +204,210 @@ class HeadMetaTest extends TestCase
 
         $this->assertSame('Acme', $this->payload('/plain')['title']);
         $this->assertSame('Hello world · Acme', $this->payload('/post')['title']);
+    }
+
+    public function test_a_page_image_is_emitted_for_both_open_graph_and_twitter(): void
+    {
+        $this->app['router']->middleware('web')->get('/card', fn () => pwaxRender('pages.home')
+            ->image('https://cdn.example.test/cover.png'));
+
+        $html = (string) $this->get('/card')->getContent();
+
+        // Both, because a page that has one and not the other is a page whose link preview
+        // depends on which service is unfurling it.
+        $this->assertStringContainsString('property="og:image" content="https://cdn.example.test/cover.png"', $html);
+        $this->assertStringContainsString('name="twitter:image" content="https://cdn.example.test/cover.png"', $html);
+    }
+
+    public function test_a_site_relative_image_is_made_absolute(): void
+    {
+        config()->set('pwax.head.image', '/img/og.png');
+
+        // A scraper reading Open Graph does not necessarily have the document to resolve a
+        // relative URL against, and the failure is a preview with no image rather than an
+        // error — so nobody finds out until someone shares a link.
+        $this->assertStringContainsString(
+            'property="og:image" content="http://localhost/img/og.png"',
+            (string) $this->get('/plain')->getContent()
+        );
+    }
+
+    public function test_an_absolute_image_is_left_exactly_as_written(): void
+    {
+        config()->set('pwax.head.image', 'https://cdn.example.test/og.png');
+
+        $this->assertStringContainsString(
+            'property="og:image" content="https://cdn.example.test/og.png"',
+            (string) $this->get('/plain')->getContent()
+        );
+    }
+
+    public function test_the_page_image_wins_over_the_configured_one(): void
+    {
+        config()->set('pwax.head.image', 'https://cdn.example.test/default.png');
+
+        $this->app['router']->middleware('web')->get('/card', fn () => pwaxRender('pages.home')
+            ->image('https://cdn.example.test/own.png'));
+
+        $html = (string) $this->get('/card')->getContent();
+
+        $this->assertStringContainsString('content="https://cdn.example.test/own.png"', $html);
+        $this->assertStringNotContainsString('default.png', $html);
+    }
+
+    public function test_a_configured_robots_directive_applies_to_every_page(): void
+    {
+        // The reason this is a config key and not just a per-route call: a staging
+        // deployment says it once rather than on every route, and a route added later
+        // cannot forget.
+        config()->set('pwax.head.robots', 'noindex, nofollow');
+
+        $this->assertStringContainsString(
+            'name="robots" content="noindex, nofollow"',
+            (string) $this->get('/plain')->getContent()
+        );
+    }
+
+    public function test_a_page_robots_directive_wins_over_the_configured_one(): void
+    {
+        config()->set('pwax.head.robots', 'noindex');
+
+        $this->app['router']->middleware('web')->get('/indexed', fn () => pwaxRender('pages.home')
+            ->robots('index, follow'));
+
+        $html = (string) $this->get('/indexed')->getContent();
+
+        $this->assertStringContainsString('name="robots" content="index, follow"', $html);
+        $this->assertStringNotContainsString('content="noindex"', $html);
+    }
+
+    public function test_robots_survives_open_graph_being_switched_off(): void
+    {
+        // It is not an Open Graph tag and is not derived from one. Losing it with the rest
+        // would mean an application that turns derivation off silently starts indexing a
+        // staging deployment.
+        config()->set('pwax.head.open_graph', false);
+        config()->set('pwax.head.robots', 'noindex');
+
+        $this->assertStringContainsString(
+            'name="robots" content="noindex"',
+            (string) $this->get('/plain')->getContent()
+        );
+    }
+
+    public function test_the_open_graph_locale_follows_the_application(): void
+    {
+        $this->app->setLocale('fr_CA');
+
+        // Open Graph asks for `fr_CA`, HTML for `fr-CA`. The normalisation is the whole
+        // reason this is derived rather than left to the application to remember.
+        $this->assertStringContainsString(
+            'property="og:locale" content="fr_CA"',
+            (string) $this->get('/plain')->getContent()
+        );
+    }
+
+    public function test_structured_data_is_rendered_as_its_own_block(): void
+    {
+        $this->app['router']->middleware('web')->get('/article', fn () => pwaxRender('pages.home')
+            ->jsonLd(['@context' => 'https://schema.org', '@type' => 'Article', 'headline' => 'Hello'])
+            ->jsonLd(['@context' => 'https://schema.org', '@type' => 'BreadcrumbList']));
+
+        $html = (string) $this->get('/article')->getContent();
+
+        // One block per claim, which is what Google's documentation asks for.
+        $this->assertSame(2, substr_count($html, '<script type="application/ld+json"'));
+        $this->assertStringContainsString('"@type":"Article"', $html);
+        $this->assertStringContainsString('"@type":"BreadcrumbList"', $html);
+    }
+
+    public function test_structured_data_cannot_close_its_own_script_block(): void
+    {
+        $this->app['router']->middleware('web')->get('/injected', fn () => pwaxRender('pages.home')
+            ->jsonLd(['headline' => '</script><script>alert(1)</script>']));
+
+        $html = (string) $this->get('/injected')->getContent();
+
+        // This is the one place in the head where a value from the database is written as
+        // markup rather than as an attribute, so the escaping has to hold against content
+        // nobody reviewed.
+        $this->assertStringNotContainsString('<script>alert(1)</script>', $html);
+        $this->assertStringContainsString('\u003C/script\u003E', $html);
+    }
+
+    public function test_structured_data_carries_the_nonce(): void
+    {
+        config()->set('pwax.csp.nonce', 'n0nce-value');
+
+        $this->app['router']->middleware('web')->get('/article', fn () => pwaxRender('pages.home')
+            ->jsonLd(['@type' => 'Article']));
+
+        // A browser applies `script-src` to a `<script>` by its tag, not its `type`, so an
+        // un-nonced ld+json block is refused under a strict policy — silently, and only in
+        // production.
+        $this->assertStringContainsString(
+            '<script type="application/ld+json" data-pwax-head nonce="n0nce-value">',
+            (string) $this->get('/article')->getContent()
+        );
+    }
+
+    public function test_a_page_replaces_the_configured_structured_data_rather_than_adding_to_it(): void
+    {
+        config()->set('pwax.head.json_ld', ['@type' => 'Organization', 'name' => 'Acme']);
+
+        $this->app['router']->middleware('web')->get('/article', fn () => pwaxRender('pages.home')
+            ->jsonLd(['@type' => 'Article']));
+
+        $html = (string) $this->get('/article')->getContent();
+
+        // Emitting both against one URL says the page is an Article and an Organization.
+        $this->assertStringContainsString('"@type":"Article"', $html);
+        $this->assertStringNotContainsString('Organization', $html);
+
+        // The site-wide default still reaches a page that claims nothing of its own.
+        $this->assertStringContainsString('Organization', (string) $this->get('/plain')->getContent());
+    }
+
+    public function test_alternate_links_are_emitted_for_every_locale(): void
+    {
+        $this->app['router']->middleware('web')->get('/localised', fn () => pwaxRender('pages.home')
+            ->alternate('en', 'https://example.test/post')
+            ->alternate('fr', 'https://example.test/fr/post')
+            ->alternate('x-default', 'https://example.test/post'));
+
+        $html = (string) $this->get('/localised')->getContent();
+
+        $this->assertStringContainsString('<link rel="alternate" hreflang="fr" href="https://example.test/fr/post"', $html);
+        $this->assertStringContainsString('<link rel="alternate" hreflang="x-default" href="https://example.test/post"', $html);
+    }
+
+    public function test_configured_alternates_accept_the_map_spelling(): void
+    {
+        config()->set('pwax.head.alternates', ['en' => 'https://example.test', 'fr' => '/fr']);
+
+        $html = (string) $this->get('/plain')->getContent();
+
+        $this->assertStringContainsString('hreflang="en" href="https://example.test"', $html);
+
+        // Relative, so made absolute for the same reason the image is.
+        $this->assertStringContainsString('hreflang="fr" href="http://localhost/fr"', $html);
+    }
+
+    public function test_the_payload_carries_the_structured_data_and_the_alternates(): void
+    {
+        $this->app['router']->middleware('web')->get('/article', fn () => pwaxRender('pages.home')
+            ->jsonLd(['@type' => 'Article'])
+            ->alternate('fr', 'https://example.test/fr'));
+
+        $payload = $this->payload('/article');
+
+        // Stale structured data is not a missing rich result, it is a wrong one — so it has
+        // to travel with the navigation like everything else in the head does.
+        $this->assertSame([['@type' => 'Article']], $payload['head']['jsonLd']);
+        $this->assertSame(
+            [['hreflang' => 'fr', 'href' => 'https://example.test/fr']],
+            $payload['head']['alternates']
+        );
     }
 
     public function test_managed_tags_are_marked_so_the_runtime_can_replace_them(): void

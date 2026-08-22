@@ -3,6 +3,7 @@
 namespace Mxent\Pwax\Tests\Feature;
 
 use Mxent\Pwax\Facades\Pwax;
+use Mxent\Pwax\Support\Shell;
 use Mxent\Pwax\Tests\TestCase;
 
 /**
@@ -76,7 +77,7 @@ class ModulePreloadTest extends TestCase
 
     public function test_configured_plugins_and_directives_are_preloaded(): void
     {
-        config()->set('pwax.plugins', ['store' => "@pwaxImport('components.modal')"]);
+        config()->set('pwax.vue.plugins', ['store' => "@pwaxImport('components.modal')"]);
 
         $html = (string) $this->get('/plain')->getContent();
 
@@ -87,17 +88,58 @@ class ModulePreloadTest extends TestCase
         );
     }
 
+    public function test_configured_directives_are_preloaded(): void
+    {
+        config()->set('pwax.vue.directives', ['focus' => "@pwaxImport('components.modal')"]);
+
+        $html = (string) $this->get('/plain')->getContent();
+
+        $this->assertStringContainsString(
+            '<link rel="modulepreload" href="' . Pwax::url('components.modal') . '">',
+            $html
+        );
+    }
+
+    public function test_the_hints_read_the_same_config_keys_the_runtime_does(): void
+    {
+        // The two disagreed for a whole major version: the runtime config moved to
+        // `pwax.vue.*` and the hints kept reading `pwax.plugins` and `pwax.directives`,
+        // which no longer exist. Nothing failed — a missing resource hint is a lost round
+        // trip and never an error — and the test that should have caught it set the old
+        // key too, so it passed against a reader that no longer had one.
+        //
+        // Asserted through configuration rather than by naming the keys again here: this
+        // fails whenever the two sides stop reading the same place, whatever it is called
+        // next.
+        config()->set('pwax.vue.plugins', ['store' => "@pwaxImport('components.modal')"]);
+        config()->set('pwax.vue.directives', ['focus' => "@pwaxImport('components.badge')"]);
+
+        $shell = app(Shell::class);
+        $config = $shell->runtimeConfig();
+
+        $awaited = [];
+
+        foreach ([...$config['plugins'], ...$config['directives']] as $entry) {
+            if (($entry['type'] ?? '') === 'module') {
+                $awaited[] = $entry['url'];
+            }
+        }
+
+        $this->assertNotSame([], $awaited, 'the runtime was given no modules to await');
+        $this->assertSame($awaited, array_values(array_intersect($shell->modulePreloads(), $awaited)));
+    }
+
     public function test_a_global_plugin_path_is_not_preloaded(): void
     {
         // Not a module — a dotted lookup on `window`. There is nothing to fetch.
-        config()->set('pwax.plugins', ['store' => 'MyApp.store']);
+        config()->set('pwax.vue.plugins', ['store' => 'MyApp.store']);
 
         $this->get('/plain')->assertDontSee('rel="modulepreload"', false);
     }
 
     public function test_a_page_is_hinted_only_once_for_a_module_it_shares_with_a_plugin(): void
     {
-        config()->set('pwax.plugins', ['modal' => "@pwaxImport('components.modal')"]);
+        config()->set('pwax.vue.plugins', ['modal' => "@pwaxImport('components.modal')"]);
 
         $html = (string) $this->get('/imports')->getContent();
 

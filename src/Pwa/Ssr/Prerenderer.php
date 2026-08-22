@@ -60,7 +60,24 @@ class Prerenderer
     private const MAX_IMPORTS = 100;
 
     /**
-     * A per-request memo, so a response that reads its own prerender twice pays once.
+     * How many prerenders the memo keeps.
+     *
+     * The memo exists so that a response reading its own prerender twice pays for it once,
+     * which needs a capacity of one. A handful more costs nothing and covers a request that
+     * renders several pages — a sitemap build, a test walking every route in one process.
+     */
+    private const MEMO_SIZE = 8;
+
+    /**
+     * A short memo, so a response that reads its own prerender twice pays once.
+     *
+     * Bounded because this service is a singleton and the entries are whole rendered pages.
+     * Under `php artisan serve` the container is torn down after every request and an
+     * unbounded memo is invisible; under Octane, FrankenPHP or Swoole the worker outlives
+     * the request and the memo would grow for as long as the process did — one HTML
+     * document plus its serialized state per distinct page, never released. That is the
+     * deployment SSR is most likely to be running in, since it is the one where not paying
+     * for a PHP bootstrap per request matters.
      *
      * @var array<string, array{html: string, state: string, styles: array<string, string>}>
      */
@@ -375,12 +392,26 @@ class Prerenderer
     }
 
     /**
+     * Memoise a prerender, evicting the oldest entry once the memo is full.
+     *
+     * Insertion order, not recency: re-remembering an existing key would otherwise leave it
+     * in its original position and let a page that is read on every request age out from
+     * under itself. Deleting first and re-inserting moves it to the back.
+     *
      * @param  array{html: string, state: string, styles: array<string, string>}  $result
      * @return array{html: string, state: string, styles: array<string, string>}
      */
     private function remember(string $key, array $result): array
     {
-        return $this->memo[$key] = $result;
+        unset($this->memo[$key]);
+
+        $this->memo[$key] = $result;
+
+        while (count($this->memo) > self::MEMO_SIZE) {
+            array_shift($this->memo);
+        }
+
+        return $result;
     }
 
     /**

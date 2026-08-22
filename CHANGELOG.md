@@ -241,6 +241,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a link preview with no image rather than an error — so nobody finds out until someone
   shares a link.
 
+- **Documented what the prerender does and does not run.** Two sections in the SSR chapter:
+  where to put a fetch so its result is in the prerendered HTML (`async setup()` is awaited;
+  `mounted()` is browser-only in this and every other SSR framework; passing the data
+  through `pwaxRender()` is better than either), and the fact that no SSR framework executes
+  third-party scripts — Angular's Domino "doesn't execute scripts nor does it download
+  external resources" by design, and `@vue/server-renderer` does not either. Prerendering
+  renders your component tree; it is not a headless browser. Also noted are the two costs of
+  moving a fetch into `setup()`: it runs again during hydration, and a same-origin call
+  deadlocks a single-process `php artisan serve` until the prerender times out.
+
 - **A script can ask for the `<head>`.** `['src' => '…', 'head' => true]` in `pwax.scripts`
   renders the tag in the head instead of at the end of the body. The default position is
   right for almost everything — a script there cannot hold up the first paint — and wrong

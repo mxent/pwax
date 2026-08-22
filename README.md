@@ -1813,6 +1813,66 @@ That removes the flash for visitors who run JavaScript — measured on the demo 
 paint goes from unstyled to styled — but it cannot help the crawler or the visitor who does
 not. Only a real stylesheet can.
 
+### Fetching data for the prerender
+
+A page that loads its content from an API has to load it *on the server* for that content
+to be in the prerendered HTML. Where you put the call decides whether it is:
+
+```blade
+<script>
+    export default {
+        // Awaited by the renderer. The items are in the HTML the server sends.
+        async setup() {
+            const response = await fetch(url('/api/items'));
+
+            return { items: (await response.json()).items };
+        },
+    };
+</script>
+```
+
+```blade
+<script>
+    export default {
+        data() {
+            return { items: [] };
+        },
+        // Never runs on the server, in this or any other SSR framework. The page is
+        // prerendered; the list in it is empty.
+        async mounted() {
+            this.items = await this.load();
+        },
+    };
+</script>
+```
+
+`async setup()` — or `setup()` returning a promise, or `<Suspense>` — is the hook the
+renderer awaits. `mounted()` is browser-only by definition, so anything it fetches arrives
+after hydration and is invisible to a crawler that does not run JavaScript.
+
+Two things to know before you move a fetch into `setup()`:
+
+**It runs twice.** Once in Node during the prerender, once in the browser during hydration.
+The server's result is in the `pwax-state` island, and the client still calls `setup()` —
+so the request is made again. For a cached endpoint that is cheap; for an expensive one it
+is worth reaching for `window.pwax.ssrState` and skipping the call when the value is
+already there.
+
+**A same-origin call is a request your own server has to answer while it is still answering
+this one.** Under `php artisan serve` that is a single PHP process by default, and the
+prerender deadlocks until it times out and falls back to the SPA. Set
+`PHP_CLI_SERVER_WORKERS=4`, or run the demo behind a real server, or — better — read the
+data in the controller and pass it to `pwaxRender()`, which needs no HTTP call at all:
+
+```php
+Route::get('/items', fn () => pwaxRender('pages.items', ['items' => Item::all()])
+    ->prerenderable());
+```
+
+That last shape is the one to prefer. The data is already in the Blade view, so it is in
+the compiled component, so it is in the prerendered HTML — with no second fetch, no
+deadlock, and no state to transfer.
+
 ### What can and cannot be prerendered
 
 The bridge renders your component in Node, so anything that needs a browser is not
@@ -1831,6 +1891,19 @@ available while it runs. That boundary is worth knowing before you turn SSR on:
 and it answers truthfully — the bridge does not declare a `window`. Code that needs a
 browser belongs in `mounted()`, which runs only in the browser; a page that cannot avoid it
 belongs behind `->spaOnly()`.
+
+That is a deliberate difference from Angular, which ships a server-side DOM
+([Domino](https://github.com/angular/domino)) so that component code touching `document`
+mostly works during SSR. Pwax does not, because a `window` that exists makes
+`typeof window === 'undefined'` return the wrong answer — silently, with plausible values
+and markup the browser then disagrees with. Here the component fails the prerender, says
+which API it reached for, and the route serves the SPA shell.
+
+**No SSR framework runs your third-party scripts.** Domino "doesn't execute scripts nor
+does it download external resources", by design; `@vue/server-renderer` does not either.
+An analytics tag, a chat widget, or a CSS engine that builds its stylesheet in the browser
+is markup in the server's output and nothing more — it runs when the browser reaches it.
+Prerendering renders *your component tree*; it is not a headless browser.
 
 Nothing here fails quietly. A component that reaches for a browser API, a component or
 directive that cannot be resolved, and an import that cannot be loaded each fail the

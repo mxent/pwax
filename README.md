@@ -1774,44 +1774,10 @@ Three sources are already in the prerendered HTML, and need nothing from you:
 | `pwax.styles` | `<link rel="stylesheet">` in `<head>` |
 
 One source is not, and cannot be: **CSS that only exists after browser JavaScript has run.**
-The Tailwind Play CDN, `@tailwindcss/browser`, the UnoCSS runtime and Twind all work the
-same way — they load in the browser, read the DOM, work out which utility classes are
-present, and inject a `<style>`. Nothing on the server knows what CSS those class names
-need, so the prerendered HTML carries the markup and none of the styles.
-
-With SSR on, `php artisan pwax:doctor` says so if it finds one of them in `pwax.scripts`.
-
-**Build your CSS to a file.** For Tailwind that means the CLI or the Vite plugin rather than
-the Play CDN — which Tailwind's own documentation says is not for production anyway. Point
-its content globs at your component views, since they are where the class names live:
-
-```js
-// tailwind.config.js — or `@source` directives in v4
-content: [
-    './resources/views/**/*.blade.php',
-],
-```
-
-```php
-// config/pwax.php
-'styles' => ['/css/app.css'],
-```
-
-That stylesheet is linked in the head of every page, prerendered or not, and the service
-worker precaches it so the app is styled offline too.
-
-**If you must keep a browser-side engine,** put it in the head so it runs before the first
-paint rather than behind Vue, Vue Router and Pinia:
-
-```php
-'scripts' => [
-    ['src' => 'https://cdn.tailwindcss.com', 'head' => true],
-],
-```
-
-That removes the flash for visitors who run JavaScript — measured on the demo app, first
-paint goes from unstyled to styled — but it cannot help the crawler or the visitor who does
-not. Only a real stylesheet can.
+Browser-side CSS engines — a CDN runtime, a JS-in-CSS library — load in the browser, read the
+DOM, work out which utility classes are present, and inject a `<style>`. Nothing on the server
+knows what CSS those class names need, so the prerendered HTML carries the markup and none of
+the styles. **Build your CSS to a file** and link it via `pwax.styles` instead.
 
 ### What can and cannot be prerendered
 
@@ -1822,15 +1788,15 @@ available while it runs. That boundary is worth knowing before you turn SSR on:
 | --- | --- |
 | `@pwaxImport`, including named exports and components that import each other | Application-wide plugins and directives from `pwax.vue.*` — they are browser modules |
 | `data()`, `computed`, `setup()` (including `async setup()`) | Browser APIs during render: `document`, `window`, `localStorage`, `navigator` |
-| `<style scoped>`, the page's own stylesheet and its imports' | `mounted()` and anything after it — as in any SSR, it does not run on the server |
+| `<style scoped>`, the page's own stylesheet and its imports' | Browser APIs in `mounted()` under the standard path — see settle mode below |
 | `<Transition>`, `<KeepAlive>`, `<Suspense>`, `v-html`, slots | `<Teleport>`, when it actually renders something — its content belongs outside the mount element, and the target is a selector the shell cannot know in advance |
 | Native custom elements (`<my-widget>`) — rendered as-is, exactly as the browser does | Anything an application-level plugin registers, since the plugin is not loaded |
 | `pwax:compile`'s precompiled render functions | Anything reading the DOM to decide what to render |
 
 `typeof window === 'undefined'` is how a component asks whether it is being prerendered,
 and it answers truthfully — the bridge does not declare a `window`. Code that needs a
-browser belongs in `mounted()`, which runs only in the browser; a page that cannot avoid it
-belongs behind `->spaOnly()`.
+browser belongs in `mounted()`, which runs only in the browser under the standard path;
+a page that cannot avoid it belongs behind `->spaOnly()`.
 
 Nothing here fails quietly. A component that reaches for a browser API, a component or
 directive that cannot be resolved, and an import that cannot be loaded each fail the
@@ -1840,21 +1806,27 @@ moment the browser hydrates it.
 
 ### Settle mode: post-mount rendering
 
-The standard SSR pass is a single synchronous render (`renderToString`), which captures the
-initial markup but nothing that happens after `mounted()`: a Tailwind CDN script injecting
+The standard SSR pass is a single synchronous render (`renderToString`), which captures
+the initial markup but nothing that happens after `mounted()`: a script injecting
 `<style>` tags, a `fetch` that populates a list, a `setTimeout` that reveals content. The
 browser renders all of that; the crawler sees none of it.
 
 Settle mode fixes this. When `ssr.settle` is true, the bridge mounts the app to a jsdom
-document, lets lifecycle hooks run, and waits for async work to settle before serialising
-the final DOM. The result includes everything the browser's first paint would — injected
-styles, fetched data, any DOM mutation that completes within the settle window.
+document, lets lifecycle hooks run, and **waits for the app to become stable** — all
+pending microtasks, timers and async work drained — before serialising the final DOM.
+The result includes everything the browser's first paint would: injected styles, fetched
+data, any DOM mutation that completes before the app settles.
+
+There is no fixed delay to configure. The bridge polls until the document is quiet, in
+the same way Angular's `ApplicationRef.isStable` waits for the app to settle rather than
+sleeping for a fixed duration. The `ssr.timeout` is the hard ceiling — a page that never
+settles (a polling interval, a reconnect loop) is abandoned there, and whatever has
+rendered is serialised.
 
 ```php
 'ssr' => [
     'enabled' => true,
-    'settle' => true,           // wait for post-mount behaviour
-    'settle_delay' => 100,      // ms to wait for async work
+    'settle' => true,           // wait for the app to become stable
 ],
 ```
 
@@ -1864,16 +1836,16 @@ Install the optional peer dependency:
 npm install --save-dev jsdom
 ```
 
-**The client does not hydrate settled HTML.** The settled DOM may carry content the
-synchronous virtual DOM does not (the fetched list, the injected styles), so
-`createSSRApp`'s node-by-node comparison would bail out and re-render anyway. Instead the
-client re-renders from scratch — the prerendered HTML was for the crawler, and the swap is
+**The client does not hydrate settled HTML.** The DOM may carry content the synchronous
+virtual DOM does not (the fetched list, the injected styles), so `createSSRApp`'s
+node-by-node comparison would bail out and re-render anyway. Instead the client
+re-renders from scratch — the prerendered HTML was for the crawler, and the swap is
 invisible to a visitor whose page has already painted. This is the same trade Angular
-Universal makes when hydration is not available, and it is the right one for content that
-is not knowable synchronously.
+Universal makes when hydration is not available, and it is the right one for content
+that is not knowable synchronously.
 
-Styles injected into `<head>` during the settle (Tailwind CDN, libraries that inject styles
-at mount time) are captured and inlined in the document's `<head>` with a `data-pwax-settle`
+Styles injected into `<head>` during the render (libraries that inject styles at mount
+time) are captured and inlined in the document's `<head>` with a `data-pwax-settle`
 marker, so they are visible to crawlers and present before the client re-renders.
 
 ### Observability
@@ -2133,8 +2105,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `ssr.cache.ttl` | `null` | Seconds to keep an entry (`null` = forever for data-free pages) |
 | `ssr.timeout` | `5` | Seconds before abandoning the Node pass and falling back |
 | `ssr.fallback` | `'spa'` | `'spa'` (serve the SPA shell on failure) or `'error'` (return 500) |
-| `ssr.settle` | `false` | Wait for post-mount behaviour (Tailwind CDN styles, async data) before serialising |
-| `ssr.settle_delay` | `100` | Milliseconds to wait for async work to settle |
+| `ssr.settle` | `false` | Wait for post-mount async work (styles, data fetches, DOM mutations) to complete before serialising |
 
 ### Service worker
 

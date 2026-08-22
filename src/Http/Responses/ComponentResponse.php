@@ -569,10 +569,10 @@ class ComponentResponse implements Responsable
                 // see. Sending it in both places shipped every prerendered page's state
                 // twice for a copy nothing ever read.
                 //
-                // When the bridge used settle mode (jsdom mount + wait for post-mount
-                // behaviour), it returns `hydrate: false` because the settled DOM may
-                // carry content the synchronous virtual DOM does not — injected Tailwind
-                // styles, fetched data — and `createSSRApp`'s node-by-node comparison would
+                // When the bridge used settle mode (jsdom mount + wait for the app to
+                // become stable), it returns `hydrate: false` because the rendered DOM may
+                // carry content the synchronous virtual DOM does not — injected styles,
+                // fetched data — and `createSSRApp`'s node-by-node comparison would
                 // bail out and re-render anyway. The prerendered HTML is for the crawler;
                 // the client re-renders for interactivity, replacing the prerendered DOM.
                 $payload['hydrate'] = $result['hydrate'];
@@ -596,9 +596,9 @@ class ComponentResponse implements Responsable
             'pwaxState' => $state,
             'pwaxSsr' => $ssr,
             'pwaxImportStyles' => $importStyles,
-            // Styles injected into `<head>` during a settle-mode prerender (Tailwind CDN,
-            // libraries that inject styles at mount time). The shell inlines these in the
-            // real `<head>`, so they are visible to crawlers and present before the client
+            // Styles injected into `<head>` during a settle-mode prerender (libraries
+            // that inject styles at mount time). The shell inlines these in the real
+            // `<head>`, so they are visible to crawlers and present before the client
             // re-renders. Empty for the standard `renderToString` path.
             'pwaxHeadStyles' => $headStyles,
         ])->render();

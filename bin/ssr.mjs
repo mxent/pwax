@@ -529,15 +529,15 @@ async function renderOne() {
     };
 
     /*
-     * The settle path: mount to a jsdom document, let lifecycle hooks run, wait for async
-     * work, and serialise the final DOM.
+     * The settle path: mount to a jsdom document, let lifecycle hooks run, wait for
+     * the app to become stable, and serialise the final DOM.
      *
-     * This is what captures the things `renderToString` cannot: a Tailwind CDN script
-     * injecting `<style>` tags in `mounted()`, a `fetch` that populates a list, any DOM
-     * mutation that completes within the settle window. The result is the full page as the
+     * This is what captures the things `renderToString` cannot: a script injecting
+     * `<style>` tags in `mounted()`, a `fetch` that populates a list, any DOM
+     * mutation that happens after the initial render. The result is the full page as the
      * browser's first paint would show it — complete for crawlers and no-JS visitors.
      *
-     * The client does *not* hydrate this HTML: the settled DOM may carry content the
+     * The client does *not* hydrate this HTML: the DOM may carry content the
      * synchronous virtual DOM does not (the fetched list, the injected styles), so
      * `createSSRApp`'s node-by-node comparison would bail out and re-render anyway.
      * Instead the client re-renders from scratch — slower for it, but the prerendered HTML
@@ -605,6 +605,54 @@ async function renderOne() {
  * @param {Record<string, any>} data  The controller data.
  * @returns {Promise<{ok: boolean, html?: string, serializedState?: any, unseeded?: string[], hydrate?: boolean}>}
  */
+
+/**
+ * Wait for the app to become stable, the way Angular's `ApplicationRef.isStable` does.
+ *
+ * After the initial mount, `mounted()` hooks fire, promises resolve, timers are
+ * scheduled. Each of those may mutate the DOM. A fixed delay guesses how long they will
+ * take; polling until the document is quiet does not.
+ *
+ * The strategy: snapshot the DOM, flush microtasks, wait a short round for timers, then
+ * snapshot again. If the two snapshots agree, the app is stable and we stop. If not,
+ * something is still changing the DOM, so we loop. The `ceiling` is the hard limit: a
+ * page that never settles (a `setInterval`, a reconnect loop) is abandoned at the
+ * timeout, and whatever has rendered is serialised.
+ *
+ * The round length is short — 10 ms — because a round only needs to be long enough for a
+ * `setTimeout(0)` callback to fire. A page that schedules `setTimeout(500)` for a
+ * debounced input will settle in one round once that timer fires, which the ceiling
+ * allows for.
+ *
+ * @param {Window} window  The jsdom window.
+ * @param {number} ceiling  Hard ceiling in milliseconds.
+ */
+async function waitForStable(window, ceiling) {
+    const round = 10;
+    const start = Date.now();
+    let previous = window.document.getElementById('pwax').innerHTML;
+
+    for (;;) {
+        // Flush microtasks (promise chains from mounted/setup).
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        // Wait a round for any timers scheduled in the previous flush.
+        await new Promise((resolve) => setTimeout(resolve, round));
+
+        const current = window.document.getElementById('pwax').innerHTML;
+
+        if (current === previous) {
+            return;
+        }
+
+        previous = current;
+
+        if (Date.now() - start >= ceiling) {
+            return;
+        }
+    }
+}
+
 async function renderWithDom(options, templates, contentTemplate, failures, captured, data) {
     const url = typeof input.url === 'string' ? input.url : '';
     let JSDOM;
@@ -618,7 +666,12 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
         );
     }
 
-    const delay = Math.max(0, Math.min(5000, Number(input.settleDelay) || 100));
+    // The ceiling for the stability poll, in milliseconds. Derived from `ssr.timeout`
+    // (seconds) with a floor of 1 second so a short timeout still leaves room for a
+    // render round. The bridge polls until the document is quiet rather than sleeping
+    // for a fixed duration, in the same way Angular's `ApplicationRef.isStable` waits
+    // for the app to settle. The ceiling is the safety net, not the strategy.
+    const ceiling = Math.max(1000, Math.min(30000, (Number(input.timeout) || 5) * 1000));
 
     // A document whose body mirrors the shell's mount element, so the app mounts into the
     // same container it will in the browser. `pretendToBeVisual` enables `requestAnimationFrame`,
@@ -791,32 +844,42 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
 
         app.mount(doc.getElementById('pwax'));
 
-        // Let microtasks and timers settle. Two `await` turns flush the microtask queue
-        // (promise chains from `mounted()` and `setup()`), then a `setTimeout` covers
-        // `mounted()` callbacks that defer with `setTimeout(0)` — a common pattern for
-        // "after the DOM is ready" work.
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        /*
+         * Wait for the app to become stable before serialising the DOM.
+         *
+         * Angular's `ApplicationRef.isStable` is the model: the server render waits for
+         * the app to settle — all pending microtasks, timers and async work drained —
+         * rather than sleeping for a fixed duration. A fixed delay guesses how long a
+         * `fetch` or a style-injecting script will take; polling until quiet does not.
+         *
+         * The poll flushes microtasks with `await`, then checks whether the document
+         * is still mutating. If it is, it waits another round and checks again. The
+         * `ceiling` is the safety net: a page that never settles (a polling interval, a
+         * reconnect loop) is abandoned at the timeout, and whatever has rendered so far
+         * is serialised — which is the same outcome a fixed delay produces, just without
+         * the guesswork about how long to wait.
+         */
+        await waitForStable(window, ceiling);
 
         if (failures.length) {
             return { ok: false, message: failures[0], errors: { render: failures.join('\n') } };
         }
 
         // Serialise the mount element's content. This is what the browser's first paint
-        // would show: the initial render plus everything `mounted()` added — Tailwind
+        // would show: the initial render plus everything `mounted()` added — injected
         // styles, fetched data, DOM mutations.
         const html = window.document.getElementById('pwax').innerHTML;
 
         if (!html || html.trim() === '') {
-            failures.push('pwax: the settled page produced no content.');
+            failures.push('pwax: the page produced no content after settling.');
 
             return { ok: false, message: failures[0] };
         }
 
-        // Capture any `<style>` tags injected into `<head>` during the settle — the
-        // Tailwind CDN JS does this, as do any libraries that inject styles at mount
-        // time. These travel back to PHP so the shell can put them in the real `<head>`,
-        // where they are visible to crawlers and present before the client re-renders.
+        // Capture any `<style>` tags injected into `<head>` during the render —
+        // libraries that inject styles at mount time do this. These travel back to PHP
+        // so the shell can put them in the real `<head>`, where they are visible to
+        // crawlers and present before the client re-renders.
         const headStyles = [];
 
         for (const style of window.document.head.querySelectorAll('style')) {

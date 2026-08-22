@@ -270,10 +270,10 @@
 @endforeach
 
 {{--
-    Styles injected into `<head>` during a settle-mode prerender — the Tailwind CDN
-    script does this, as do libraries that inject styles at mount time. Inlining them
-    here means they are visible to crawlers and present before the client re-renders.
-    Marked `data-pwax-settle` so the runtime can adopt or replace them on re-render.
+    Styles injected into `<head>` during a settle-mode prerender — libraries that
+    inject styles at mount time do this. Inlining them here means they are visible
+    to crawlers and present before the client re-renders. Marked `data-pwax-settle`
+    so the runtime can adopt or replace them on re-render.
 --}}
 @foreach ($headStyles as $pwaxHeadStyle)
     <style data-pwax-settle{!! $nonceAttr !!}>{!! $pwaxHeadStyle !!}</style>

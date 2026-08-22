@@ -451,10 +451,10 @@ describe('bin/ssr.mjs settle mode (post-mount rendering)', () => {
     it('captures data populated in mounted()', () => {
         // The standard renderToString path produces an empty list — mounted() has not
         // run. Settle mode mounts to a jsdom document, lets mounted() fire, and waits
-        // for the DOM to update.
+        // for the app to become stable.
         const result = render({
             settle: true,
-            settleDelay: 50,
+            timeout: 5,
             component: {
                 template:
                     '<div><ul><li v-for="item in items" :key="item">{{ item }}</li></ul></div>',
@@ -474,11 +474,11 @@ describe('bin/ssr.mjs settle mode (post-mount rendering)', () => {
     });
 
     it('captures styles injected into <head> during mounted()', () => {
-        // The Tailwind CDN JS injects a <style> tag into <head> at mount time. The
-        // settle path captures those and returns them as headStyles.
+        // A library that injects a <style> tag into <head> at mount time.
+        // The settle path captures those and returns them as headStyles.
         const result = render({
             settle: true,
-            settleDelay: 50,
+            timeout: 5,
             component: {
                 template: '<div class="home"><h1>{{ title }}</h1></div>',
                 script: 'export default { data() { return { title: "Home" }; }, mounted() { const s = document.createElement("style"); s.textContent = ".home { color: red; }"; document.head.appendChild(s); } };',
@@ -497,7 +497,7 @@ describe('bin/ssr.mjs settle mode (post-mount rendering)', () => {
     it('does not hydrate (returns hydrate: false)', () => {
         const result = render({
             settle: true,
-            settleDelay: 10,
+            timeout: 5,
             component: {
                 template: '<div>{{ msg }}</div>',
                 script: 'export default { data() { return { msg: "Hi" }; } };',

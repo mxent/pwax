@@ -278,11 +278,15 @@ class Prerenderer
             // inside the module, and dereferencing `window` in Node throws before anything
             // renders.
             'imports' => $imports,
-            // Whether to wait for post-mount behaviour (Tailwind CDN styles, async data
-            // fetches, DOM mutations) before serialising. When true, the bridge mounts to a
-            // jsdom document, lets lifecycle hooks run, and waits for async work to settle.
+            // Whether to wait for post-mount async work (styles injected at mount time,
+            // data fetched then rendered, any DOM mutation after the initial render)
+            // before serialising. When true, the bridge mounts to a jsdom document, lets
+            // lifecycle hooks run, and waits for the app to become stable before
+            // serialising the final DOM.
             'settle' => (bool) $this->config->get('pwax.ssr.settle', false),
-            'settleDelay' => (int) $this->config->get('pwax.ssr.settle_delay', 100),
+            // The hard ceiling for the stability poll, in seconds. The bridge polls until
+            // the document is quiet; this is the safety net, not the strategy.
+            'timeout' => (float) $this->config->get('pwax.ssr.timeout', 5),
         ];
     }
 
@@ -399,7 +403,7 @@ class Prerenderer
             . ':' . hash('xxh128', json_encode($data) ?: '')
             . ':' . hash('xxh128', implode(',', $digests))
             . ':' . hash('xxh128', implode("\0", $templates))
-            . ':' . ($this->config->get('pwax.ssr.settle', false) ? 's' . (int) $this->config->get('pwax.ssr.settle_delay', 100) : 'n');
+            . ':' . ($this->config->get('pwax.ssr.settle', false) ? 's' : 'n');
     }
 
     /**
@@ -530,8 +534,8 @@ class Prerenderer
             'state' => $state,
             'styles' => $styles,
             'hydrate' => $decoded['hydrate'] ?? true,
-            // Styles injected into `<head>` during a settle-mode prerender (Tailwind CDN,
-            // libraries that inject styles at mount time). The shell inlines these in the
+            // Styles injected into `<head>` during a settle-mode prerender (libraries
+            // that inject styles at mount time). The shell inlines these in the
             // real `<head>` so they are visible to crawlers and present before the client
             // re-renders.
             'headStyles' => array_values(array_filter(

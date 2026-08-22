@@ -136,34 +136,33 @@ return [
         'fallback' => 'spa',
 
         /*
-        | Wait for post-mount behaviour before serialising the HTML.
+        | Wait for post-mount async work to complete before serialising the HTML.
         |
         | Off by default. The standard render is a single synchronous pass — Vue's
         | `renderToString` — which captures the initial markup but nothing that happens
-        | after `mounted()`: a Tailwind CDN script injecting `<style>` tags, a `fetch`
-        | that populates a list, a `setTimeout` that reveals content. The browser renders
+        | after `mounted()`: a script that injects `<style>` tags, a `fetch` that
+        | populates a list, a `setTimeout` that reveals content. The browser renders
         | all of that; the crawler sees none of it.
         |
         | Turning this on switches the bridge to a DOM-based render: the app is mounted to
-        | a jsdom document, lifecycle hooks run, and the bridge waits for async work to
-        | settle before serialising the final DOM. The result includes everything the
-        | browser's first paint would — injected styles, fetched data, any DOM mutation
-        | that completes within the settle window.
+        | a jsdom document, lifecycle hooks run, and the bridge waits for the app to become
+        | stable — all pending microtasks, timers and async work drained — before
+        | serialising the final DOM. The result includes everything the browser's first
+        | paint would, whatever its source.
         |
-        | `settle_delay` is how many milliseconds to wait for that work. The default is
-        | generous enough for a Tailwind CDN scan or a single API call, and short enough
-        | not to dominate the response time. The Node `timeout` above is the hard ceiling.
+        | There is no fixed delay. The bridge polls until the document is quiet, in the
+        | same way Angular's `ApplicationRef.isStable` waits for the app to settle rather
+        | than sleeping for a fixed duration. The Node `timeout` above is the hard ceiling.
         |
         | Requires `jsdom` as a dev dependency:
         |
         |   npm install --save-dev jsdom
         |
         | A page that fetches data at request time — from the database, an API — should be
-        | declared `->cacheable()` so the settled HTML is cached and the fetch does not run
+        | declared `->cacheable()` so the rendered HTML is cached and the fetch does not run
         | on every request.
         */
         'settle' => false,
-        'settle_delay' => 100,
     ],
 
     /*

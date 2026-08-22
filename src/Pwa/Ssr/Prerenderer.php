@@ -79,7 +79,7 @@ class Prerenderer
      * deployment SSR is most likely to be running in, since it is the one where not paying
      * for a PHP bootstrap per request matters.
      *
-     * @var array<string, array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}>
+     * @var array<string, array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>, bodyHtml: list<string>}>
      */
     private array $memo = [];
 
@@ -161,7 +161,7 @@ class Prerenderer
      * Prerender the response's component, returning HTML + serialized state or null on
      * any failure (so the caller falls back to the SPA shell).
      *
-     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}|null
+     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>, bodyHtml: list<string>}|null
      */
     public function render(ComponentResponse $response, Request $request, ?Component $component = null): ?array
     {
@@ -204,6 +204,7 @@ class Prerenderer
                     // so `remember()` receives a complete array shape.
                     $cached['hydrate'] ??= true;
                     $cached['headStyles'] ??= [];
+                    $cached['bodyHtml'] ??= [];
 
                     return $this->remember($key, $cached);
                 }
@@ -254,6 +255,11 @@ class Prerenderer
         return [
             'version' => (string) $this->config->get('pwax.assets.versions.vue', ''),
             'url' => $request->getRequestUri(),
+            // The scheme and host this request came in on. Settle mode gives the jsdom
+            // document this as its location, so `window.location` matches the page the
+            // browser would be on and a relative `fetch('/api/items')` in `mounted()`
+            // resolves to this application rather than to nothing.
+            'origin' => $request->getSchemeAndHttpHost(),
             // The payload the *browser* receives for this page, not the bare component.
             // The difference is the precompiled render function: `Pwax::payload()` prepends
             // it to the inline script for a non-addressable page, so the client renders
@@ -413,8 +419,8 @@ class Prerenderer
      * in its original position and let a page that is read on every request age out from
      * under itself. Deleting first and re-inserting moves it to the back.
      *
-     * @param  array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}  $result
-     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}
+     * @param  array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>, bodyHtml: list<string>}  $result
+     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>, bodyHtml: list<string>}
      */
     private function remember(string $key, array $result): array
     {
@@ -435,7 +441,7 @@ class Prerenderer
      * @param  array<string, mixed>  $data
      * @param  array<string, array<string, mixed>>  $imports
      * @param  array<string, string>  $templates
-     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}|null
+     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>, bodyHtml: list<string>}|null
      */
     private function invoke(Component $component, array $data, Request $request, array $imports, array $templates): ?array
     {
@@ -540,6 +546,14 @@ class Prerenderer
             // re-renders.
             'headStyles' => array_values(array_filter(
                 (array) ($decoded['headStyles'] ?? []),
+                fn ($s) => is_string($s) && $s !== ''
+            )),
+            // Markup the application added to `<body>` outside the mount element during a
+            // settle-mode prerender — a toast container, a modal portal, a cookie banner.
+            // It is part of the page the browser paints, so it belongs in the document a
+            // crawler reads; it goes beside the mount element rather than inside it.
+            'bodyHtml' => array_values(array_filter(
+                (array) ($decoded['bodyHtml'] ?? []),
                 fn ($s) => is_string($s) && $s !== ''
             )),
         ];

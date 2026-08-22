@@ -36,6 +36,7 @@
  * browser.
  */
 
+import { writeSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pageTemplate } from '../src/js/pageTemplate.mjs';
 
@@ -60,11 +61,62 @@ const require = createRequire(import.meta.url);
  */
 process.env.NODE_ENV = 'development';
 
-const write = (payload) => process.stdout.write(JSON.stringify(payload));
+/**
+ * Write the whole payload to stdout before returning.
+ *
+ * `process.stdout.write` on a pipe is asynchronous, so exiting straight after it can
+ * truncate the JSON — which the PHP side reports as "the SSR bridge did not return JSON".
+ * Deferring the exit to the write callback fixes that but breaks the other caller: `fail()`
+ * has to stop the script where it stands, and an exit scheduled for later lets the next
+ * line run and throw over the top of the message it just wrote. A synchronous write to the
+ * descriptor satisfies both.
+ *
+ * The loop is for partial writes, which a pipe is allowed to do, and `EAGAIN`, which it
+ * returns when its buffer is momentarily full.
+ *
+ * @param {string} text
+ */
+function emit(text) {
+    const buffer = Buffer.from(text, 'utf8');
+    let written = 0;
+
+    while (written < buffer.length) {
+        try {
+            written += writeSync(1, buffer, written, buffer.length - written);
+        } catch (error) {
+            if (error && error.code === 'EAGAIN') {
+                continue;
+            }
+
+            throw error;
+        }
+    }
+}
+
+/**
+ * Write the result and end the process.
+ *
+ * The exit is not housekeeping. This is a one-shot bridge, but the application it rendered
+ * may have left the event loop with work on it — a `setInterval` for a clock or a poller is
+ * the ordinary case — and Node will not exit while that is scheduled. The JSON was already
+ * on stdout, and the PHP side still waited out the whole `ssr.timeout`, killed the process,
+ * and served the SPA shell: a page that had rendered perfectly well, thrown away, at the
+ * cost of the full timeout. `dom.window.close()` does not help, because a timer the
+ * component scheduled through the global scope is Node's, not jsdom's.
+ *
+ * Exit is deferred to the write callback rather than called straight after `write`, because
+ * stdout on a pipe is asynchronous — exiting immediately can truncate the JSON, which the
+ * PHP side reports as "the SSR bridge did not return JSON".
+ */
+const finish = (payload) => {
+    emit(JSON.stringify(payload));
+    process.exit(0);
+};
+
+const write = finish;
 
 const fail = (message, extra = {}) => {
-    write({ ok: false, message, ...extra });
-    process.exit(0);
+    finish({ ok: false, message, ...extra });
 };
 
 const read = () =>
@@ -607,42 +659,256 @@ async function renderOne() {
  */
 
 /**
- * Wait for the app to become stable, the way Angular's `ApplicationRef.isStable` does.
+ * Count the asynchronous work the application still has outstanding.
  *
- * After the initial mount, `mounted()` hooks fire, promises resolve, timers are
- * scheduled. Each of those may mutate the DOM. A fixed delay guesses how long they will
- * take; polling until the document is quiet does not.
+ * This is the part a DOM diff cannot do. "Nothing changed in the last round" is not
+ * "nothing is pending": a `fetch` in `mounted()` has not touched the DOM yet a
+ * millisecond after it was issued, so a renderer that watches only the DOM calls the page
+ * stable before the request has even left. Measured against the previous implementation,
+ * anything slower than about ten milliseconds — which is every real HTTP call — was
+ * dropped, and the bridge still reported success.
  *
- * The strategy: snapshot the DOM, flush microtasks, wait a short round for timers, then
- * snapshot again. If the two snapshots agree, the app is stable and we stop. If not,
- * something is still changing the DOM, so we loop. The `ceiling` is the hard limit: a
- * page that never settles (a `setInterval`, a reconnect loop) is abandoned at the
- * timeout, and whatever has rendered is serialised.
+ * Angular's `ApplicationRef.isStable` does not watch the DOM either; Zone.js counts
+ * pending macrotasks and the app is stable when the count reaches zero. This is the same
+ * idea with a much smaller net: the two ways application code starts work that will later
+ * change the DOM.
  *
- * The round length is short — 10 ms — because a round only needs to be long enough for a
- * `setTimeout(0)` callback to fire. A page that schedules `setTimeout(500)` for a
- * debounced input will settle in one round once that timer fires, which the ceiling
- * allows for.
+ *   - `setTimeout`, because a component that reveals content on a tick uses one, and
+ *     because `await`ing anything scheduled on a timer goes through it.
+ *   - `fetch` and `XMLHttpRequest`, because that is how the data arrives.
+ *
+ * `setInterval` is deliberately *not* counted. A repeating timer is never "done", so
+ * counting it would hold every page with a clock or a poller until the ceiling, and the
+ * DOM-quiet check below already handles those correctly.
+ *
+ * Both the Node globals and the jsdom window are patched: component code reaches
+ * `setTimeout` and `fetch` through the global scope, but a library may hold `window`.
  *
  * @param {Window} window  The jsdom window.
+ * @param {number} ceiling  Milliseconds after which nothing new is worth waiting for.
+ */
+/**
+ * Bindings Vue sets as DOM properties rather than as attributes.
+ *
+ * `innerHTML` is the one that matters — it is what `v-html` compiles to — and the rest are
+ * the properties whose attribute form does not track the live value.
+ */
+const DOM_PROPS = new Set(['innerHTML', 'textContent', 'value', 'checked', 'selected', 'muted']);
+
+const setTimeoutOriginal = globalThis.setTimeout;
+
+/**
+ * Sleep on the timer this module captured at import time.
+ *
+ * `trackActivity` replaces `globalThis.setTimeout` for the duration of a settle render, so
+ * the poll below has to hold the original — scheduling its own rounds through the patched
+ * one would count them as outstanding application work and the app would never be stable.
+ *
+ * @param {number} ms
+ */
+function sleep(ms) {
+    return new Promise((resolve) => setTimeoutOriginal(resolve, ms));
+}
+
+function trackActivity(window, ceiling) {
+    let pending = 0;
+    const restore = [];
+    const started = Date.now();
+
+    /**
+     * Resolve a request URL the way the browser would.
+     *
+     * `fetch('/api/items')` is what an application writes, and in a browser it resolves
+     * against the document. Node's `fetch` has no document to resolve against and throws
+     * `Failed to parse URL from /api/items` — so the ordinary shape of the ordinary case,
+     * a list fetched in `mounted()`, failed the whole prerender.
+     *
+     * Only bare strings are touched. A `Request` or a `URL` already carries an absolute
+     * URL, because constructing either from a relative one would itself have thrown.
+     */
+    const absolute = (resource) => {
+        if (typeof resource !== 'string') {
+            return resource;
+        }
+
+        try {
+            return new URL(resource, window.location.href).href;
+        } catch {
+            return resource;
+        }
+    };
+
+    const targets = window === globalThis ? [globalThis] : [globalThis, window];
+
+    for (const target of targets) {
+        const originalSetTimeout = target.setTimeout;
+        const originalClearTimeout = target.clearTimeout;
+
+        if (typeof originalSetTimeout === 'function') {
+            const live = new Set();
+
+            target.setTimeout = function pwaxSetTimeout(handler, delay, ...args) {
+                // A timer that cannot fire before the ceiling is not worth holding the
+                // render for — it would only ever end in the timeout.
+                const remaining = ceiling - (Date.now() - started);
+                const counted = typeof handler === 'function' && (Number(delay) || 0) <= remaining;
+
+                const handle = originalSetTimeout.call(
+                    this,
+                    (...called) => {
+                        if (live.delete(handle)) {
+                            pending -= 1;
+                        }
+
+                        if (typeof handler === 'function') {
+                            handler(...called);
+                        }
+                    },
+                    delay,
+                    ...args
+                );
+
+                if (counted) {
+                    live.add(handle);
+                    pending += 1;
+                }
+
+                return handle;
+            };
+
+            target.clearTimeout = function pwaxClearTimeout(handle) {
+                if (live.delete(handle)) {
+                    pending -= 1;
+                }
+
+                return originalClearTimeout.call(this, handle);
+            };
+
+            restore.push(() => {
+                target.setTimeout = originalSetTimeout;
+                target.clearTimeout = originalClearTimeout;
+            });
+        }
+
+        const originalFetch = target.fetch;
+
+        if (typeof originalFetch === 'function') {
+            target.fetch = function pwaxFetch(resource, ...rest) {
+                pending += 1;
+
+                return Promise.resolve(
+                    originalFetch.call(this, absolute(resource), ...rest)
+                ).finally(() => {
+                    // One tick of grace: the caller almost always chains `.json()`, and
+                    // releasing the count in the same microtask would let the poll declare
+                    // the app stable before the body is read and rendered.
+                    pending += 1;
+                    queueMicrotask(() => {
+                        pending -= 2;
+                    });
+                });
+            };
+
+            restore.push(() => {
+                target.fetch = originalFetch;
+            });
+        }
+    }
+
+    const XHR = window.XMLHttpRequest;
+
+    if (typeof XHR === 'function' && typeof XHR.prototype?.send === 'function') {
+        const originalSend = XHR.prototype.send;
+
+        XHR.prototype.send = function pwaxSend(...args) {
+            pending += 1;
+
+            let settled = false;
+            const release = () => {
+                if (!settled) {
+                    settled = true;
+                    pending -= 1;
+                }
+            };
+
+            this.addEventListener('loadend', release);
+            // `loadend` fires for success, error and abort alike, but a listener added on a
+            // request that never completes would hold the count — the ceiling covers that.
+
+            try {
+                return originalSend.apply(this, args);
+            } catch (error) {
+                release();
+                throw error;
+            }
+        };
+
+        restore.push(() => {
+            XHR.prototype.send = originalSend;
+        });
+    }
+
+    return {
+        get pending() {
+            return pending;
+        },
+        restore() {
+            for (const undo of restore) {
+                undo();
+            }
+        },
+    };
+}
+
+/**
+ * Wait for the app to become stable, the way Angular's `ApplicationRef.isStable` does.
+ *
+ * Two conditions, and both are needed. The activity counter says whether anything the
+ * application started is still outstanding; the DOM comparison says whether the result of
+ * that work has been rendered yet. Waiting on the counter alone would serialise in the
+ * microtask between a response arriving and Vue flushing it to the DOM; waiting on the DOM
+ * alone — which is what this did — returns before the work has begun.
+ *
+ * The DOM has to be unchanged across two consecutive rounds, not one. A single quiet round
+ * is satisfied by the gap between two renders of a component that updates in stages.
+ *
+ * The whole document is compared, not just the mount element. A page that appends a toast
+ * container to `<body>` or injects a `<style>` into `<head>` from `mounted()` is doing
+ * exactly what this mode exists to capture, and watching only `#pwax` declared those pages
+ * stable while the work was still in flight.
+ *
+ * `ceiling` is the safety net rather than the strategy: a page that never settles — a
+ * polling interval, a reconnect loop — is abandoned there and whatever has rendered is
+ * serialised.
+ *
+ * @param {Window} window  The jsdom window.
+ * @param {{pending: number}} activity  The counter from {@see trackActivity}.
  * @param {number} ceiling  Hard ceiling in milliseconds.
  */
-async function waitForStable(window, ceiling) {
+async function waitForStable(window, activity, ceiling) {
     const round = 10;
     const start = Date.now();
-    let previous = window.document.getElementById('pwax').innerHTML;
+    const snapshot = () => window.document.documentElement.outerHTML;
+
+    let previous = snapshot();
+    let quiet = 0;
 
     for (;;) {
-        // Flush microtasks (promise chains from mounted/setup).
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        // Flush microtasks (promise chains from mounted/setup), then wait a round for any
+        // timer scheduled during that flush.
+        await sleep(0);
+        await sleep(round);
 
-        // Wait a round for any timers scheduled in the previous flush.
-        await new Promise((resolve) => setTimeout(resolve, round));
+        const current = snapshot();
 
-        const current = window.document.getElementById('pwax').innerHTML;
+        if (current === previous && activity.pending <= 0) {
+            quiet += 1;
 
-        if (current === previous) {
-            return;
+            if (quiet >= 2) {
+                return;
+            }
+        } else {
+            quiet = 0;
         }
 
         previous = current;
@@ -650,6 +916,30 @@ async function waitForStable(window, ceiling) {
         if (Date.now() - start >= ceiling) {
             return;
         }
+    }
+}
+
+/**
+ * The absolute URL to give the jsdom document.
+ *
+ * `input.url` is the request URI — `/about`, `/posts?page=2` — because that is what the
+ * router-link and `currentPath` comparisons below need. jsdom needs an *absolute* URL, and
+ * throws `Invalid URL: /about` when handed a path, which failed every settle render in
+ * production while the tests, which send no `url` at all, stayed green.
+ *
+ * `input.origin` is the scheme and host of the request being served, so `window.location`
+ * matches the page the browser would be on. Falling back to `http://localhost` keeps a
+ * payload without one working.
+ */
+function documentUrl() {
+    const origin =
+        typeof input.origin === 'string' && input.origin !== '' ? input.origin : 'http://localhost';
+    const path = typeof input.url === 'string' && input.url !== '' ? input.url : '/';
+
+    try {
+        return new URL(path, origin).href;
+    } catch {
+        return 'http://localhost/';
     }
 }
 
@@ -671,14 +961,25 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
     // render round. The bridge polls until the document is quiet rather than sleeping
     // for a fixed duration, in the same way Angular's `ApplicationRef.isStable` waits
     // for the app to settle. The ceiling is the safety net, not the strategy.
-    const ceiling = Math.max(1000, Math.min(30000, (Number(input.timeout) || 5) * 1000));
+    // Four-fifths of the Node timeout, not all of it. `ssr.timeout` is also what Symfony's
+    // `Process` waits before killing this script, so a ceiling equal to it meant a page that
+    // used the whole budget was killed at the very moment it finished settling — with the
+    // HTML rendered, nothing written, and the SPA served instead.
+    const budget = Math.max(1000, Math.min(30000, (Number(input.timeout) || 5) * 1000));
+
+    // Measured against what is *left* of the budget, not against the whole of it. Node
+    // spends a few hundred milliseconds starting and importing Vue before this line runs,
+    // and `Process` has been counting since before that — so a ceiling of the full budget
+    // put the poll's deadline past the moment PHP kills the script.
+    const elapsed = process.uptime() * 1000;
+    const ceiling = Math.max(500, Math.floor(budget * 0.8) - elapsed);
 
     // A document whose body mirrors the shell's mount element, so the app mounts into the
     // same container it will in the browser. `pretendToBeVisual` enables `requestAnimationFrame`,
     // which some components and libraries reach for in `mounted()`.
     const dom = new JSDOM(
         '<!DOCTYPE html><html><head></head><body><div id="pwax"></div></body></html>',
-        { pretendToBeVisual: true, url: input.url || 'http://localhost/' }
+        { pretendToBeVisual: true, url: documentUrl() }
     );
 
     const { window } = dom;
@@ -769,6 +1070,9 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
     globalThis.document = doc;
     globalThis.window = window;
 
+    /** @type {{pending: number, restore: () => void}|null} */
+    let activity = null;
+
     try {
         // Build the app with a renderer that targets the jsdom document. `createRenderer`
         // returns `{ createApp }` just like `Vue.createApp`, but its host functions operate
@@ -779,17 +1083,49 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
             patchProp(el, key, _prev, next) {
                 if (key === 'class') {
                     el.className = next ?? '';
-                } else if (key === 'style' && typeof next === 'object') {
-                    for (const [k, v] of Object.entries(next)) {
-                        el.style[k] = v;
-                    }
-                } else if (key.startsWith('on') && typeof next === 'function') {
-                    el.addEventListener(key.slice(2).toLowerCase(), next);
-                } else if (next === false || next == null) {
-                    el.removeAttribute(key);
-                } else {
-                    el.setAttribute(key, String(next));
+
+                    return;
                 }
+
+                if (key === 'style') {
+                    if (typeof next === 'object' && next !== null) {
+                        for (const [name, value] of Object.entries(next)) {
+                            el.style[name] = value;
+                        }
+                    } else if (next == null) {
+                        el.removeAttribute('style');
+                    } else {
+                        el.setAttribute('style', String(next));
+                    }
+
+                    return;
+                }
+
+                if (key.startsWith('on') && typeof next === 'function') {
+                    el.addEventListener(key.slice(2).toLowerCase(), next);
+
+                    return;
+                }
+
+                // Some bindings are DOM *properties*, and setting them as attributes is
+                // not a near-enough approximation — it is a different thing entirely.
+                // `v-html` compiles to an `innerHTML` binding, so writing it as an
+                // attribute produced `<div innerhtml="&lt;strong&gt;…">`: the markup
+                // escaped into an attribute value, rendering nothing, on a feature the
+                // README lists as working under SSR.
+                if (DOM_PROPS.has(key)) {
+                    el[key] = next ?? '';
+
+                    return;
+                }
+
+                if (next === false || next == null) {
+                    el.removeAttribute(key);
+
+                    return;
+                }
+
+                el.setAttribute(key, next === true ? '' : String(next));
             },
         });
 
@@ -842,6 +1178,10 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
             },
         });
 
+        // Started before the mount, so work scheduled by a `mounted()` hook on the very
+        // first render is counted.
+        activity = trackActivity(window, ceiling);
+
         app.mount(doc.getElementById('pwax'));
 
         /*
@@ -859,7 +1199,7 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
          * is serialised — which is the same outcome a fixed delay produces, just without
          * the guesswork about how long to wait.
          */
-        await waitForStable(window, ceiling);
+        await waitForStable(window, activity, ceiling);
 
         if (failures.length) {
             return { ok: false, message: failures[0], errors: { render: failures.join('\n') } };
@@ -874,6 +1214,19 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
             failures.push('pwax: the page produced no content after settling.');
 
             return { ok: false, message: failures[0] };
+        }
+
+        // Anything the application put in `<body>` outside the mount element. A toast
+        // container, a modal portal, a cookie banner appended in `mounted()` — all of it is
+        // part of the page the browser paints, and serialising only `#pwax` left it out of
+        // the document a crawler reads. Returned separately because it belongs *beside* the
+        // mount element in the shell, not inside it.
+        const bodyHtml = [];
+
+        for (const node of window.document.body.children) {
+            if (node.id !== 'pwax' && node.outerHTML) {
+                bodyHtml.push(node.outerHTML);
+            }
         }
 
         // Capture any `<style>` tags injected into `<head>` during the render —
@@ -895,8 +1248,11 @@ async function renderWithDom(options, templates, contentTemplate, failures, capt
         // synchronous virtual DOM does not, so hydration would bail out anyway.
         // `headStyles` carries any styles injected during the settle, so the shell can
         // inline them in `<head>`.
-        return { ok: true, html, serializedState, unseeded, hydrate: false, headStyles };
+        return { ok: true, html, serializedState, unseeded, hydrate: false, headStyles, bodyHtml };
     } finally {
+        // Before the globals are put back, since the patches live on them.
+        activity?.restore();
+
         globalThis.document = savedDocument;
         globalThis.window = savedWindow;
         globalThis.SVGElement = savedSvgElement;

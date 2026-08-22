@@ -120,6 +120,11 @@ class SsrTest extends TestCase
             $router->get('/ssr-dynamic', fn () => pwaxRender('pages.ssr-dynamic'))
                 ->name('ssr.dynamic');
 
+            // Post-mount work: a settle-mode page whose content, styles and body-level
+            // markup all arrive after `mounted()`.
+            $router->get('/ssr-settle', fn () => pwaxRender('pages.ssr-settle'))
+                ->name('ssr.settle');
+
             // A page that pulls in sub-components with `@pwaxImport`, by default export
             // and by named export.
             $router->get('/ssr-imports', fn () => pwaxRender('pages.ssr-imports'))
@@ -768,6 +773,59 @@ class SsrTest extends TestCase
         $this->assertArrayNotHasKey('badge', $state);
         $this->assertArrayNotHasKey('published', $state);
         $this->assertStringNotContainsString('AsyncComponentWrapper', $html);
+    }
+
+    /**
+     * Settle mode, end to end through the response.
+     *
+     * The bridge's own behaviour is covered in `tests/js/ssr.test.js`; this is the part
+     * only PHP can assert — that what the bridge captured after `mounted()` reaches the
+     * document. Settle mode failed on every real request before this: jsdom was handed
+     * `$request->getRequestUri()` as its URL and threw `Invalid URL: /ssr-settle`, so the
+     * route quietly served the SPA shell. Every JS test omitted `url`, which is the one
+     * field the PHP side always sends.
+     */
+    public function test_settle_mode_captures_what_happens_after_mount(): void
+    {
+        $this->requireNode();
+
+        config()->set('pwax.ssr.settle', true);
+        config()->set('pwax.ssr.timeout', 15);
+
+        $response = $this->get('/ssr-settle');
+
+        $response->assertHeader('X-Pwax-SSR', '1');
+
+        $html = (string) $response->getContent();
+
+        // State set 120ms after mount — past the point a DOM-quiet check called it stable.
+        $this->assertStringContainsString('after mount', $html);
+        $this->assertStringNotContainsString('>before mount<', $html);
+
+        // A style the application injected into <head> during the settle.
+        $this->assertMatchesRegularExpression('/<style[^>]*data-pwax-settle/', $html);
+        $this->assertStringContainsString('rebeccapurple', $html);
+
+        // Markup appended to <body> outside the mount element, kept beside it and marked
+        // so the runtime can clear it before rendering its own copy.
+        $this->assertStringContainsString('data-pwax-settle-body', $html);
+        $this->assertStringContainsString('cookie-banner', $html);
+
+        // `v-html` is a DOM property, not an attribute. Written as one it rendered nothing.
+        $this->assertStringContainsString('<em id="inner">from v-html</em>', $html);
+        $this->assertStringNotContainsString('innerhtml=', $html);
+    }
+
+    public function test_settle_mode_is_off_unless_asked_for(): void
+    {
+        $this->requireNode();
+
+        // The standard path is a single synchronous pass, so post-mount work is absent —
+        // which is correct, and is why settle mode is opt-in.
+        $html = (string) $this->get('/ssr-settle')->getContent();
+
+        $this->assertStringContainsString('before mount', $html);
+        $this->assertStringNotContainsString('data-pwax-settle-body', $html);
     }
 
     public function test_the_doctor_reports_a_working_bridge(): void

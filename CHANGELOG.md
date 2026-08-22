@@ -9,6 +9,55 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Settle mode captures markup added to `<body>` outside the mount element.** A toast
+  container, a modal portal, a cookie banner appended in `mounted()` is part of the page the
+  browser paints, and serialising only `#pwax` left it out of the document a crawler reads.
+  It is rendered beside the mount element with a `data-pwax-settle-body` marker, and the
+  runtime removes those nodes before re-rendering so the application's own copy does not
+  land next to the server's.
+
+### Fixed
+
+- **Settle mode failed on every real request.** jsdom was constructed with `input.url`, and
+  the PHP side sends `$request->getRequestUri()` — a path — where jsdom requires an absolute
+  URL. Every settle render threw `Invalid URL: /about` and the route silently served the SPA
+  shell. None of the settle tests sent a `url` at all, which is the one field PHP always
+  sends, so the suite stayed green. The bridge now resolves the request URI against the
+  request's own scheme and host, which `Prerenderer` sends as `origin`.
+
+- **Settle mode only captured work that finished within about ten milliseconds.** Stability
+  was "the DOM did not change during the last poll round", which cannot distinguish
+  *finished* from *not yet started*: a `fetch` issued in `mounted()` has touched nothing a
+  millisecond later. Measured against the previous implementation, work resolving in 15ms or
+  more was dropped entirely — every real HTTP call — and the bridge still reported success.
+  Stability is now the conjunction of an activity counter (timers, `fetch`,
+  `XMLHttpRequest`, in the shape of Angular's `ApplicationRef.isStable`) and a DOM that has
+  been quiet for two consecutive rounds.
+
+- **A relative `fetch` failed the whole prerender.** `fetch('/api/items')` in `mounted()` —
+  the ordinary shape of the ordinary case — threw `Failed to parse URL from /api/items`,
+  because Node has no document to resolve against. Relative request URLs now resolve against
+  the jsdom document's location, which is the request's own origin.
+
+- **`v-html` rendered nothing under settle mode.** The settle path uses its own `patchProp`,
+  and `innerHTML` is a DOM property rather than an attribute; written as one it produced
+  `<div innerhtml="&lt;em&gt;…">`. `v-html` is listed as working under SSR, and it was — on
+  the standard path only.
+
+- **A page with a `setInterval` was rendered and then thrown away.** The bridge wrote its
+  JSON and did not exit: a timer the component scheduled keeps Node's event loop alive, and
+  `dom.window.close()` does not clear one scheduled through the global scope. The PHP side
+  waited out the whole `ssr.timeout`, killed the process and served the SPA — for a page
+  that had rendered perfectly well. The bridge now writes synchronously and exits.
+
+- **The settle ceiling could outlive the process.** It was derived from `ssr.timeout`, which
+  is also what Symfony's `Process` waits before killing the script — so a page that used its
+  whole budget was killed at the moment it finished settling. The poll's deadline is now a
+  fraction of the budget, measured against what is left of it after Node's startup.
+
+
+### Added
+
 - **SSR settle mode: post-mount rendering.** When `pwax.ssr.settle` is true, the SSR
   bridge mounts the app to a jsdom document, lets lifecycle hooks run, waits for the
   app to become stable — all pending microtasks, timers and async work drained — and

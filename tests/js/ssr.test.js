@@ -511,6 +511,169 @@ describe('bin/ssr.mjs settle mode (post-mount rendering)', () => {
         expect(result.hydrate).toBe(false);
     });
 
+    /**
+     * Every settle test above omits `url`. The PHP side always sends one — it is
+     * `$request->getRequestUri()`, a path like `/about` — and jsdom requires an absolute
+     * URL, so it threw `Invalid URL: /about` on every real request and the route silently
+     * served the SPA. The tests could not see it because they never sent the field.
+     */
+    it('accepts the request URI the PHP side actually sends', () => {
+        const result = render({
+            settle: true,
+            timeout: 5,
+            url: '/about?page=2',
+            origin: 'https://example.test',
+            component: {
+                template: '<div id="p">{{ msg }}</div>',
+                script: 'export default { data() { return { msg: "rendered" }; } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('rendered');
+    });
+
+    it('waits for work that takes longer than a poll round', () => {
+        // The stability check used to be "the DOM did not change in the last 10ms", which
+        // cannot tell finished from not-yet-started: a fetch resolving in 15ms was declared
+        // stable before it had begun, and the bridge reported success with an empty list.
+        const result = render({
+            settle: true,
+            timeout: 5,
+            url: '/slow',
+            component: {
+                template: '<div><ul><li v-for="i in items" :key="i">{{ i }}</li></ul></div>',
+                script: `export default {
+                    data() { return { items: [] }; },
+                    async mounted() {
+                        this.items = await new Promise((r) => setTimeout(() => r(["late"]), 250));
+                    },
+                };`,
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('<li>late</li>');
+    });
+
+    it('resolves a relative fetch against the request origin', () => {
+        // `fetch('/api/items')` is what an application writes. Node has no document to
+        // resolve it against and threw `Failed to parse URL from /api/items`, failing the
+        // whole prerender — on the ordinary shape of the ordinary case.
+        //
+        // Asserted through the error rather than a live server: a relative URL that reaches
+        // Node unresolved cannot even be parsed, so "it tried to connect" is the proof that
+        // it was resolved.
+        const result = render({
+            settle: true,
+            timeout: 5,
+            url: '/list',
+            origin: 'http://127.0.0.1:9',
+            component: {
+                template: '<div id="state">{{ state }}</div>',
+                script: `export default {
+                    data() { return { state: "before" }; },
+                    async mounted() {
+                        try { await fetch('/api/items'); } catch (e) { this.state = 'attempted: ' + e.message; }
+                    },
+                };`,
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('attempted:');
+        expect(result.html).not.toContain('Failed to parse URL');
+    });
+
+    it('renders v-html as markup rather than as an attribute', () => {
+        // The settle path uses its own `patchProp`, and `innerHTML` is a DOM property
+        // rather than an attribute. Written as an attribute it produced
+        // `<div innerhtml="&lt;em&gt;…">` — the markup escaped into an attribute value,
+        // rendering nothing, on a feature the README lists as working under SSR.
+        const result = render({
+            settle: true,
+            timeout: 5,
+            url: '/rich',
+            component: {
+                template: '<div id="rich" v-html="markup"></div>',
+                script: 'export default { data() { return { markup: "<em id=\'inner\'>real markup</em>" }; } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('<em id="inner">real markup</em>');
+        expect(result.html).not.toContain('innerhtml=');
+    });
+
+    it('captures markup appended to <body> outside the mount element', () => {
+        // A toast container, a modal portal, a cookie banner. It is part of the page the
+        // browser paints, and serialising only `#pwax` left it out of the document a
+        // crawler reads.
+        const result = render({
+            settle: true,
+            timeout: 5,
+            url: '/banner',
+            component: {
+                template: '<div>page</div>',
+                script: `export default {
+                    mounted() {
+                        const el = document.createElement('div');
+                        el.id = 'cookie-banner';
+                        el.textContent = 'outside the mount';
+                        document.body.appendChild(el);
+                    },
+                };`,
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.bodyHtml).toEqual(['<div id="cookie-banner">outside the mount</div>']);
+    });
+
+    it('returns rather than hanging when the page never settles', () => {
+        // A clock, a carousel, a poller. The DOM never stops changing, so the ceiling has
+        // to end it — and the process has to exit afterwards. It did not: the JSON was
+        // written and then a `setInterval` kept Node's event loop alive, so PHP waited out
+        // the whole timeout, killed the script and served the SPA — throwing away HTML that
+        // had rendered perfectly well.
+        const started = Date.now();
+
+        const result = render({
+            settle: true,
+            timeout: 2,
+            url: '/clock',
+            component: {
+                template: '<div id="tick">{{ n }}</div>',
+                script: 'export default { data() { return { n: 0 }; }, mounted() { setInterval(() => { this.n++; }, 20); } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        const took = Date.now() - started;
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('id="tick"');
+        // Inside the 2s budget, and nowhere near hanging.
+        expect(took).toBeLessThan(4000);
+    });
+
     it('the standard path is unaffected when settle is false', () => {
         const result = render({
             component: {

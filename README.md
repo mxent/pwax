@@ -1817,11 +1817,18 @@ pending microtasks, timers and async work drained — before serialising the fin
 The result includes everything the browser's first paint would: injected styles, fetched
 data, any DOM mutation that completes before the app settles.
 
-There is no fixed delay to configure. The bridge polls until the document is quiet, in
-the same way Angular's `ApplicationRef.isStable` waits for the app to settle rather than
-sleeping for a fixed duration. The `ssr.timeout` is the hard ceiling — a page that never
-settles (a polling interval, a reconnect loop) is abandoned there, and whatever has
-rendered is serialised.
+There is no fixed delay to configure. Two things decide when the page is done, and both
+have to agree: a counter of the asynchronous work the application still has outstanding —
+timers, `fetch`, `XMLHttpRequest` — and whether the DOM has stopped changing. That is the
+same shape as Angular's `ApplicationRef.isStable`, which counts pending macrotasks rather
+than sleeping. Watching only the DOM cannot tell *finished* from *not yet started*: a
+`fetch` issued in `mounted()` has touched nothing a millisecond later, and a renderer that
+polls the DOM alone calls the page stable before the request has left.
+
+The `ssr.timeout` is the hard ceiling — a page that never settles (a polling interval, a
+reconnect loop) is abandoned there, and whatever has rendered is serialised. The poll's own
+deadline is set below that, so the bridge always has room to serialise and reply before the
+PHP side gives up on it.
 
 ```php
 'ssr' => [
@@ -1847,6 +1854,21 @@ that is not knowable synchronously.
 Styles injected into `<head>` during the render (libraries that inject styles at mount
 time) are captured and inlined in the document's `<head>` with a `data-pwax-settle`
 marker, so they are visible to crawlers and present before the client re-renders.
+
+Markup the application appends to `<body>` **outside** the mount element — a toast
+container, a modal portal, a cookie banner — is captured too, and rendered beside the mount
+element with a `data-pwax-settle-body` marker. The runtime removes those nodes before it
+re-renders, so the application's own copy does not land next to the server's.
+
+**A relative `fetch` resolves against the request.** `fetch('/api/items')` in `mounted()` is
+what an application writes, and Node has no document to resolve it against. Settle mode
+gives the jsdom document the scheme and host the request came in on, so the call reaches
+this application exactly as it would from the browser.
+
+That call is a request your own server has to answer while it is still answering this one.
+Under a single-process `php artisan serve` it deadlocks until the prerender times out; set
+`PHP_CLI_SERVER_WORKERS`, run behind a real server, or read the data in the controller and
+pass it to `pwaxRender()`, which needs no HTTP call at all.
 
 ### Observability
 

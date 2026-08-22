@@ -106,18 +106,30 @@ adds `tests/fixtures/views` to the view finder — put new component fixtures th
 
 ## Manual verification
 
-`orchestra/testbench` can serve a real application against the package:
+`orchestra/testbench` serves a real application against the package:
 
 ```bash
+php vendor/bin/testbench vendor:publish --tag=pwax-assets --force   # once
 php vendor/bin/testbench serve
 ```
 
-Worth checking by hand for anything touching the runtime or the shell:
+`testbench.yaml` registers the provider and `workbench/` holds the demo it serves: two
+pages with scoped styles, a component pulled in with `@pwaxImport` and held in `data()`,
+a route that redirects, SSR on and the service worker on. Between them they cover the
+checks below.
+
+Worth doing by hand for anything touching the runtime or the shell, because the test
+suites cannot see any of it — Vitest runs in jsdom, which hydrates nothing, and the PHP
+suite asserts markup rather than what a browser builds from it:
 
 1. A cold load renders with **no** component fetch before first paint.
 2. Navigating A → B → A leaves exactly one `<style data-pwax-style>` per live component.
-3. A route behind `auth` redirects through the SPA router rather than throwing.
-4. With `service_worker.enabled`, DevTools offline mode still boots the app.
+3. `/elsewhere` redirects through the SPA router rather than throwing.
+4. DevTools offline mode still boots the app, and still navigates between pages.
+5. With SSR on, the console reports **no hydration mismatch** and the page appears once.
+
+The last one is worth the trouble. A mismatch is one line in the console and a page that
+still mostly works, and it is how a prerender silently stops being one.
 
 ## Pull requests
 

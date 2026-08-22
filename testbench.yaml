@@ -1,0 +1,29 @@
+# The demo application `php vendor/bin/testbench serve` runs.
+#
+# Without this file that command serves a bare Laravel skeleton: the provider is not
+# registered, so there are no `pwax:*` commands, no `__pwax__` routes and nothing to look
+# at — which is what CONTRIBUTING.md's "Manual verification" section was asking people to
+# do. See workbench/ for the routes and views it serves.
+
+providers:
+  - Mxent\Pwax\PwaxServiceProvider
+
+env:
+  APP_NAME: "Pwax Demo"
+  # A fixed key so component identifiers stay stable between restarts, and so the demo
+  # starts without a `key:generate`. It signs nothing anyone will ever deploy.
+  APP_KEY: "base64:2fl+Ktvkfl+Fuz4Qp/A75G2RTiWVA/ZoKZvp6fiiM10="
+  APP_URL: "http://127.0.0.1:8000"
+  APP_DEBUG: true
+  # The skeleton has no migrated cache table, and `routes.static_middleware` throttles —
+  # which resolves the default store. On `database` that is a 500 on the runtime bundle,
+  # and the app does not boot at all.
+  CACHE_STORE: array
+  SESSION_DRIVER: array
+
+workbench:
+  start: '/'
+  discovers:
+    config: true
+    web: true
+    views: true

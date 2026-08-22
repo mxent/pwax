@@ -115,6 +115,11 @@ class SsrTest extends TestCase
             $router->get('/ssr-style-escape', fn () => pwaxRender('pages.style-escape'))
                 ->name('ssr.style-escape');
 
+            // A page holding a component in `data()` rather than in `components:`, which
+            // is what `<component :is>` needs and what the state island used to mangle.
+            $router->get('/ssr-dynamic', fn () => pwaxRender('pages.ssr-dynamic'))
+                ->name('ssr.dynamic');
+
             // A page that pulls in sub-components with `@pwaxImport`, by default export
             // and by named export.
             $router->get('/ssr-imports', fn () => pwaxRender('pages.ssr-imports'))
@@ -716,6 +721,53 @@ class SsrTest extends TestCase
         $this->assertStringContainsString('property="og:image" content="http://localhost/img/cover.png"', $html);
         $this->assertStringContainsString('name="twitter:card" content="summary_large_image"', $html);
         $this->assertStringContainsString('<link rel="alternate" hreflang="fr"', $html);
+    }
+
+    /**
+     * The state island may only carry values a JSON round trip leaves unchanged.
+     *
+     * The client *replaces* a component's own `data()` values with what it finds in the
+     * island, so a value JSON cannot carry does not merely lose detail on the way — it
+     * arrives as something else and is used in place of the real thing. A component from
+     * `@pwaxImport` is the case that reaches a page: an async component is a plain object
+     * whose meaning is entirely in its `setup` and `__asyncLoader` functions, and
+     * `JSON.stringify` drops those. The island carried
+     * `{"name":"AsyncComponentWrapper","__asyncResolved":{…}}`, `<component :is="badge">`
+     * was handed that and rendered nothing, and Vue reported a hydration mismatch against
+     * a server rendering that had the real component in it.
+     *
+     * Found by driving a prerendered page in a real browser; jsdom and the PHP suite both
+     * saw markup that looked correct.
+     */
+    public function test_the_state_island_leaves_out_what_json_cannot_carry(): void
+    {
+        $this->requireNode();
+
+        $response = $this->get('/ssr-dynamic');
+
+        $response->assertHeader('X-Pwax-SSR', '1');
+
+        $html = (string) $response->getContent();
+
+        // The server rendered the real component, which is what the client has to match.
+        $this->assertStringContainsString('class="badge"', $html);
+
+        $this->assertSame(
+            1,
+            preg_match('#<script type="application/json" id="pwax-state"[^>]*>(.*?)</script>#s', $html, $island),
+            'the prerendered page carried no state island'
+        );
+
+        $state = json_decode($island[1], true, 512, JSON_THROW_ON_ERROR);
+
+        // Seeded, because it round-trips.
+        $this->assertSame('Dynamic', $state['label']);
+
+        // Not seeded. The client keeps its own value for each, which is the real component
+        // and a real Date rather than a lookalike and a string.
+        $this->assertArrayNotHasKey('badge', $state);
+        $this->assertArrayNotHasKey('published', $state);
+        $this->assertStringNotContainsString('AsyncComponentWrapper', $html);
     }
 
     public function test_the_doctor_reports_a_working_bridge(): void

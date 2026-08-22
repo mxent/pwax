@@ -497,6 +497,8 @@ class Prerenderer
             JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT,
         );
 
+        $this->reportUnseeded($decoded['unseeded'] ?? []);
+
         // The imported components' stylesheets travel out with the HTML so the shell can
         // put them in the document. The browser attaches them as each module loads, which is
         // fine for a client-rendered page and not for a prerendered one: the sub-component's
@@ -513,6 +515,37 @@ class Prerenderer
         }
 
         return ['html' => $html, 'state' => $state, 'styles' => $styles];
+    }
+
+    /**
+     * Name the `data()` keys the bridge could not put in the state island.
+     *
+     * The island is JSON and the client *replaces* a component's own `data()` values with
+     * what it finds there, so a value JSON cannot carry — a component held in `data()`, a
+     * Date, a Map — would arrive as something else and be used in place of the real thing.
+     * The bridge leaves those keys out and the client's own `data()` stands, which is
+     * correct and needs no announcing in production.
+     *
+     * It is worth announcing while developing. The one case that reaches a page is a
+     * component from `@pwaxImport`: seeded, it rendered nothing and Vue reported a
+     * hydration mismatch, and neither the missing element nor the console line points
+     * anywhere near `data()`. One debug line naming the key is the whole difference.
+     */
+    private function reportUnseeded(mixed $keys): void
+    {
+        if (! is_array($keys) || $keys === []) {
+            return;
+        }
+
+        if (! $this->config->get('app.debug') || ! function_exists('app') || ! app()->bound('log')) {
+            return;
+        }
+
+        Log::debug(sprintf(
+            'pwax: these data() keys were left out of the SSR state island because they are not '
+            . 'JSON — the client keeps its own value for each, which is usually what you want: %s.',
+            implode(', ', array_map(strval(...), array_filter($keys, 'is_scalar')))
+        ));
     }
 
     /**

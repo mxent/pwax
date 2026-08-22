@@ -1737,6 +1737,28 @@ rely on what it does as much as on what it returns — it just does not get to o
 was already rendered. Every subsequent navigation is an ordinary client-side render, with
 `data()` in sole charge.
 
+**Only values a JSON round trip leaves unchanged are seeded.** The island is JSON, so a
+`data()` key holding a component from `@pwaxImport`, a `Date`, a `Map`, a class instance or
+a cycle is left out of it and your `data()` keeps sole charge of that key — which is the
+right answer, because none of them is state the client cannot rebuild for itself:
+
+```blade
+<script>
+    const badge = @pwaxImport('components.badge');
+
+    export default {
+        data() {
+            // `badge` is not seeded — the client builds its own. `label` is.
+            return { badge, label: 'Live' };
+        },
+    };
+</script>
+```
+
+With `APP_DEBUG` on, the log names any key that was left out. Serializing them instead
+would be worse than skipping them: a component survives `JSON.stringify` as a lookalike
+with its functions gone, and `<component :is>` handed that renders nothing at all.
+
 ### What can and cannot be prerendered
 
 The bridge renders your component in Node, so anything that needs a browser is not

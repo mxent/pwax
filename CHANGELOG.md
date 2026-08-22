@@ -241,11 +241,38 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a link preview with no image rather than an error — so nobody finds out until someone
   shares a link.
 
+- **A workbench demo application, so `testbench serve` serves something.** CONTRIBUTING.md
+  has asked contributors to verify four things by hand in a real browser for some time, and
+  the command it names could not do it: without a `testbench.yaml` registering the provider,
+  `php vendor/bin/testbench serve` starts a bare Laravel skeleton with no `pwax:*` commands,
+  no `__pwax__` routes and nothing to look at. `testbench.yaml` and `workbench/` are that
+  application — two pages with scoped styles, a component pulled in with `@pwaxImport` and
+  held in `data()`, a route that redirects, SSR on and the service worker on. The SSR state
+  island bug above was found in it, in a browser, after both test suites had gone green.
+
 - **`pwax:doctor` checks the document head.** No sharing image configured; a `head.robots`
   that would `noindex` the whole site; `head.json_ld` with no `@context`; an alternate with
   no URL. Every one of them concerns a tag nobody on the team ever looks at.
 
 ### Fixed
+
+- **The SSR state island shipped values that JSON cannot carry, and the client used them.**
+  `bin/ssr.mjs` serialized the captured `data()` through `JSON.parse(JSON.stringify(…))`,
+  and the client *replaces* a component's own values with what it finds in the island — so
+  a value the round trip changed did not merely lose detail on the way, it arrived as
+  something else and was used in place of the real thing. The case that reaches a page is a
+  component from `@pwaxImport`: an async component is a plain object whose meaning is
+  entirely in its `setup` and `__asyncLoader` functions, `JSON.stringify` drops those, and
+  the island carried `{"name":"AsyncComponentWrapper","__asyncResolved":{…}}`. Hydration
+  handed that to `<component :is="badge">`, which rendered nothing, and Vue reported a
+  mismatch against a server rendering that had the real component in it — one missing
+  element and one console line, neither pointing anywhere near `data()`. A `Date`, a `Map`,
+  a `Set`, a class instance and a cycle all failed the same way.
+
+  Such keys are now left out of the island entirely and the client's own `data()` keeps
+  sole charge of them, which is correct: none of them is state the client cannot rebuild.
+  With `APP_DEBUG` on, the log names them. Found by driving a prerendered page in a real
+  browser — the PHP suite and jsdom both saw markup that looked right.
 
 - **`sync.enqueue()` accepted a cross-origin URL and queued the CSRF token for it.** The
   headers stored with a queued write are the ones the runtime sends, this session's CSRF

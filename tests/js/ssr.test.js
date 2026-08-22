@@ -491,6 +491,8 @@ describe('bin/ssr.mjs settle mode (post-mount rendering)', () => {
         expect(result.ok).toBe(true);
         expect(result.headStyles).toBeDefined();
         expect(result.headStyles.length).toBeGreaterThan(0);
+        // The counterpart to the ceiling case below: this page did settle.
+        expect(result.settled).toBe(true);
         expect(result.headStyles.some((s) => s.includes('.home { color: red; }'))).toBe(true);
     });
 
@@ -511,6 +513,173 @@ describe('bin/ssr.mjs settle mode (post-mount rendering)', () => {
         expect(result.hydrate).toBe(false);
     });
 
+    /**
+     * Every settle test above omits `url`. The PHP side always sends one — it is
+     * `$request->getRequestUri()`, a path like `/about` — and jsdom requires an absolute
+     * URL, so it threw `Invalid URL: /about` on every real request and the route silently
+     * served the SPA. The tests could not see it because they never sent the field.
+     */
+    it('accepts the request URI the PHP side actually sends', () => {
+        const result = render({
+            settle: true,
+            timeout: 5,
+            url: '/about?page=2',
+            origin: 'https://example.test',
+            component: {
+                template: '<div id="p">{{ msg }}</div>',
+                script: 'export default { data() { return { msg: "rendered" }; } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('rendered');
+    });
+
+    it('waits for work that takes longer than a poll round', () => {
+        // The stability check used to be "the DOM did not change in the last 10ms", which
+        // cannot tell finished from not-yet-started: a fetch resolving in 15ms was declared
+        // stable before it had begun, and the bridge reported success with an empty list.
+        const result = render({
+            settle: true,
+            timeout: 5,
+            url: '/slow',
+            component: {
+                template: '<div><ul><li v-for="i in items" :key="i">{{ i }}</li></ul></div>',
+                script: `export default {
+                    data() { return { items: [] }; },
+                    async mounted() {
+                        this.items = await new Promise((r) => setTimeout(() => r(["late"]), 250));
+                    },
+                };`,
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('<li>late</li>');
+    });
+
+    it('resolves a relative fetch against the request origin', () => {
+        // `fetch('/api/items')` is what an application writes. Node has no document to
+        // resolve it against and threw `Failed to parse URL from /api/items`, failing the
+        // whole prerender — on the ordinary shape of the ordinary case.
+        //
+        // Asserted through the error rather than a live server: a relative URL that reaches
+        // Node unresolved cannot even be parsed, so "it tried to connect" is the proof that
+        // it was resolved.
+        const result = render({
+            settle: true,
+            timeout: 5,
+            url: '/list',
+            origin: 'http://127.0.0.1:9',
+            component: {
+                template: '<div id="state">{{ state }}</div>',
+                script: `export default {
+                    data() { return { state: "before" }; },
+                    async mounted() {
+                        try { await fetch('/api/items'); } catch (e) { this.state = 'attempted: ' + e.message; }
+                    },
+                };`,
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('attempted:');
+        expect(result.html).not.toContain('Failed to parse URL');
+    });
+
+    it('renders v-html as markup rather than as an attribute', () => {
+        // The settle path uses its own `patchProp`, and `innerHTML` is a DOM property
+        // rather than an attribute. Written as an attribute it produced
+        // `<div innerhtml="&lt;em&gt;…">` — the markup escaped into an attribute value,
+        // rendering nothing, on a feature the README lists as working under SSR.
+        const result = render({
+            settle: true,
+            timeout: 5,
+            url: '/rich',
+            component: {
+                template: '<div id="rich" v-html="markup"></div>',
+                script: 'export default { data() { return { markup: "<em id=\'inner\'>real markup</em>" }; } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('<em id="inner">real markup</em>');
+        expect(result.html).not.toContain('innerhtml=');
+    });
+
+    it('captures markup appended to <body> outside the mount element', () => {
+        // A toast container, a modal portal, a cookie banner. It is part of the page the
+        // browser paints, and serialising only `#pwax` left it out of the document a
+        // crawler reads.
+        const result = render({
+            settle: true,
+            timeout: 5,
+            url: '/banner',
+            component: {
+                template: '<div>page</div>',
+                script: `export default {
+                    mounted() {
+                        const el = document.createElement('div');
+                        el.id = 'cookie-banner';
+                        el.textContent = 'outside the mount';
+                        document.body.appendChild(el);
+                    },
+                };`,
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.bodyHtml).toEqual(['<div id="cookie-banner">outside the mount</div>']);
+    });
+
+    it('returns rather than hanging when the page never settles', () => {
+        // A clock, a carousel, a poller. The DOM never stops changing, so the ceiling has
+        // to end it — and the process has to exit afterwards. It did not: the JSON was
+        // written and then a `setInterval` kept Node's event loop alive, so PHP waited out
+        // the whole timeout, killed the script and served the SPA — throwing away HTML that
+        // had rendered perfectly well.
+        const started = Date.now();
+
+        const result = render({
+            settle: true,
+            timeout: 2,
+            url: '/clock',
+            component: {
+                template: '<div id="tick">{{ n }}</div>',
+                script: 'export default { data() { return { n: 0 }; }, mounted() { setInterval(() => { this.n++; }, 20); } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        const took = Date.now() - started;
+
+        expect(result.ok).toBe(true);
+        expect(result.html).toContain('id="tick"');
+        // Inside the 2s budget, and nowhere near hanging.
+        expect(took).toBeLessThan(4000);
+        // And it says so. A page abandoned at the ceiling is a partial page, which is
+        // invisible from the outside — the developer sees an empty list and no reason for
+        // it — so the verdict travels back for the PHP side to log in debug.
+        expect(result.settled).toBe(false);
+    });
+
     it('the standard path is unaffected when settle is false', () => {
         const result = render({
             component: {
@@ -528,5 +697,130 @@ describe('bin/ssr.mjs settle mode (post-mount rendering)', () => {
         expect(result.html).not.toContain('<li>Apple</li>');
         // No hydrate flag means the default (true) — the client hydrates.
         expect(result.hydrate).toBeUndefined();
+    });
+});
+
+/*
+ * The promise the prerender makes is that the first paint is the page. Not an
+ * approximation of it, not something a crawler can mostly read — the same markup the
+ * browser would have built for itself. These hold the bridge to it.
+ *
+ * Each of these has a browser on the other side of it. The corpus was written by loading
+ * the same components in Chromium twice — once with JavaScript off, to read what the
+ * server sent, and once normally, to read what the browser made — and diffing the two.
+ * Everything below is a place where they disagreed.
+ */
+describe('bin/ssr.mjs serialises what the browser would build', () => {
+    /*
+     * Enough elements carrying bindings to cross `stringifyStatic`'s threshold, which is
+     * the whole point: below it the compiler leaves the subtree as vnodes and everything
+     * is fine, and above it the subtree is replaced by an HTML string the compiler wrote
+     * itself. That string is where the two serialisers disagree, so a fixture smaller than
+     * this passes with the bug still in place.
+     */
+    const presence =
+        '<div>' +
+        '<input id="a" type="text" :required="true" :readonly="false">' +
+        '<input id="b" type="checkbox" :checked="true">' +
+        '<details :open="true"><summary>s</summary></details>' +
+        '<video :controls="true" :loop="false"></video>' +
+        '<button :disabled="false" :aria-expanded="false">b</button>' +
+        '<p :aria-hidden="false" :data-missing="null">t</p>' +
+        '</div>';
+
+    const component = (template) => ({
+        template,
+        script: 'export default { data() { return {}; } };',
+        style: '',
+        scope: null,
+    });
+
+    for (const settle of [false, true]) {
+        const path = settle ? 'settle' : 'standard';
+
+        it(`renders a presence attribute as presence on the ${path} path`, () => {
+            const result = render({ settle, timeout: 5, component: component(presence), data: {} });
+
+            expect(result.ok).toBe(true);
+
+            // `required="true"` is not what a browser produces for `:required="true"` — it
+            // produces `required=""`, because the attribute's presence *is* the value. The
+            // string form is what Vue's Node compiler writes when it stringifies a hoisted
+            // static subtree, and it is why hoisting is off.
+            expect(result.html).not.toContain('="true"');
+
+            // Present, however the serialiser spells an empty value.
+            expect(result.html).toMatch(/<input id="a" type="text" required(=""|)>/);
+            expect(result.html).toMatch(/<details open(=""|)>/);
+            expect(result.html).toMatch(/<video controls(=""|)>/);
+
+            // And absent when false, rather than carrying the word.
+            expect(result.html).not.toContain('readonly');
+            expect(result.html).not.toContain('loop');
+            expect(result.html).not.toContain('disabled');
+        });
+
+        it(`keeps false on an attribute that is not a presence attribute on the ${path} path`, () => {
+            const result = render({ settle, timeout: 5, component: component(presence), data: {} });
+
+            expect(result.ok).toBe(true);
+
+            // Not cosmetic. `aria-hidden="false"` and no `aria-hidden` at all mean different
+            // things to a screen reader once an ancestor has hidden the subtree, and the
+            // browser renders the attribute.
+            expect(result.html).toContain('aria-hidden="false"');
+
+            // `null` is the one value that means "leave it out".
+            expect(result.html).not.toContain('data-missing');
+        });
+
+        it(`leaves the placeholder comment unlabelled on the ${path} path`, () => {
+            const result = render({
+                settle,
+                timeout: 5,
+                component: {
+                    template: '<div><p v-if="no">n</p></div>',
+                    script: 'export default { data() { return { no: false }; } };',
+                    style: '',
+                    scope: null,
+                },
+                data: {},
+            });
+
+            expect(result.ok).toBe(true);
+
+            // The development compiler writes `<!--v-if-->` where the production compiler
+            // the browser runs writes `<!---->`. The bridge compiles with the development
+            // build for its warnings, so it rewrites the labels on the way out.
+            expect(result.html).not.toContain('<!--v-if-->');
+            expect(result.html).toContain('<div><!----></div>');
+        });
+    }
+
+    it('reflects the properties Vue sets as properties back onto attributes', () => {
+        const result = render({
+            settle: true,
+            timeout: 5,
+            component: {
+                template:
+                    '<form><input id="t" :value="typed"><input id="c" type="checkbox" :checked="ticked">' +
+                    '<select><option value="a">A</option><option value="b" :selected="true">B</option></select></form>',
+                script: 'export default { data() { return { typed: "hello", ticked: true }; } };',
+                style: '',
+                scope: null,
+            },
+            data: {},
+        });
+
+        expect(result.ok).toBe(true);
+
+        // Vue sets these as DOM properties, and a property leaves nothing behind in
+        // serialised HTML. So the prerendered form reached the crawler — and the visitor
+        // without JavaScript — with every field blank and no option selected, while the
+        // browser rendering the same component showed them filled. `@vue/server-renderer`
+        // reflects them for the same reason.
+        expect(result.html).toContain('value="hello"');
+        expect(result.html).toMatch(/<input id="c" type="checkbox" checked(=""|)>/);
+        expect(result.html).toMatch(/<option (value="b" selected|selected(="")? value="b")(="")?>/);
     });
 });

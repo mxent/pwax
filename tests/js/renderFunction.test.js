@@ -104,6 +104,51 @@ describe('compiled render functions run on the vendored runtime build', () => {
     });
 
     /**
+     * A precompiled page has to render the same DOM as one compiled in the browser.
+     *
+     * `@vue/compiler-dom`'s Node build hardwires `transformHoist: stringifyStatic`, which
+     * the browser build sets to `null`. Past a threshold — five elements carrying bindings
+     * is enough — it replaces a hoisted static subtree with an HTML string the compiler
+     * writes itself and the runtime mounts by assigning `innerHTML`, so those elements are
+     * never built node by node.
+     *
+     * The two disagree on the attributes whose presence is their value: the compiler writes
+     * `:required="true"` as `required="true"`, and an element the runtime builds carries
+     * `required=""`. So running `pwax:compile` silently changed the markup of any page big
+     * enough to cross the threshold — and, with SSR on, changed it away from what the server
+     * had sent.
+     */
+    it("builds the same DOM as the browser's own compiler", () => {
+        const template =
+            '<div>' +
+            '<input id="a" type="text" :required="true" :readonly="false">' +
+            '<input id="b" type="checkbox" :checked="true">' +
+            '<details :open="true"><summary>s</summary></details>' +
+            '<video :controls="true" :loop="false"></video>' +
+            '<button :disabled="false" :aria-expanded="false">b</button>' +
+            '<p :aria-hidden="false">t</p>' +
+            '</div>';
+
+        const { functions } = compile({ big: template });
+
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+
+        Vue.createApp({ render: toRenderFunction(functions.big, Vue) }).mount(host);
+
+        expect(host.querySelector('#a').getAttribute('required')).toBe('');
+        expect(host.querySelector('#a').hasAttribute('readonly')).toBe(false);
+        expect(host.querySelector('details').getAttribute('open')).toBe('');
+        expect(host.querySelector('video').getAttribute('controls')).toBe('');
+        expect(host.querySelector('video').hasAttribute('loop')).toBe(false);
+        expect(host.querySelector('button').hasAttribute('disabled')).toBe(false);
+
+        // And `false` stays `false` where the attribute is an ordinary one.
+        expect(host.querySelector('button').getAttribute('aria-expanded')).toBe('false');
+        expect(host.querySelector('p').getAttribute('aria-hidden')).toBe('false');
+    });
+
+    /**
      * `prefixIdentifiers` is what turns `msg` into `_ctx.msg`. Without it the compiler
      * emits `with (_ctx) { … }`, which is a SyntaxError in strict mode — and every
      * component Pwax serves is a module, which is always strict.

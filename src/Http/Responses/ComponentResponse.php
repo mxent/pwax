@@ -540,6 +540,7 @@ class ComponentResponse implements Responsable
         $state = null;
         $importStyles = [];
         $headStyles = [];
+        $bodyHtml = [];
         $ssr = false;
 
         $prerenderer = app(Prerenderer::class);
@@ -559,6 +560,7 @@ class ComponentResponse implements Responsable
                 // without JavaScript.
                 $importStyles = $result['styles'];
                 $headStyles = $result['headStyles'] ?? [];
+                $bodyHtml = $result['bodyHtml'] ?? [];
                 $ssr = true;
 
                 // The per-response hydration signal travels in the initial payload, not
@@ -596,6 +598,7 @@ class ComponentResponse implements Responsable
             'pwaxState' => $state,
             'pwaxSsr' => $ssr,
             'pwaxImportStyles' => $importStyles,
+            'pwaxBodyHtml' => $bodyHtml,
             // Styles injected into `<head>` during a settle-mode prerender (libraries
             // that inject styles at mount time). The shell inlines these in the real
             // `<head>`, so they are visible to crawlers and present before the client

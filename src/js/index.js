@@ -155,6 +155,18 @@ async function boot() {
         trimHydrationWhitespace(mount);
     }
 
+    // A settle-mode prerender is not hydrated: the DOM it produced carries work the
+    // synchronous virtual DOM does not, so the client builds the page again. Anything the
+    // server's copy left in `<body>` outside the mount — a toast container, a modal portal,
+    // a cookie banner — has to go before that happens, or the application's own copy lands
+    // beside the server's and the visitor sees each of them twice.
+    //
+    // Removed on every boot rather than only in settle mode: the marker is only ever
+    // emitted by a settle prerender, so finding one is itself the signal.
+    for (const node of document.querySelectorAll('[data-pwax-settle-body]')) {
+        node.remove();
+    }
+
     // Published before the page component is built, so a component script evaluated during
     // `resolveInitialPage` can already read it.
     window.pwax.ssrState = prerendered ? loadSsrState(config.stateIslandId) : null;

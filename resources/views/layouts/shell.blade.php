@@ -93,6 +93,24 @@
             trust level as the JSON islands below.
         --}}
         <div id="pwax" tabindex="-1" data-pwax-prerendered>{!! $pwaxPrerendered !!}</div>
+
+        {{--
+            Markup a settle-mode prerender found in `<body>` outside the mount element — a
+            toast container, a modal portal, a cookie banner appended in `mounted()`. It is
+            part of the page the browser paints, so a crawler reading this document should
+            see it too.
+
+            Beside the mount element rather than inside it, which is where the application
+            put it. Marked so the runtime can clear it before it re-renders: the client
+            builds its own copy of everything here, and leaving the server's would show each
+            of them twice.
+
+            Trusted server output from the Node SSR bridge, so a raw echo is correct — the
+            same trust level as the prerendered markup above.
+        --}}
+        @foreach ($pwaxBodyHtml ?? [] as $pwaxBodyNode)
+            <div data-pwax-settle-body>{!! $pwaxBodyNode !!}</div>
+        @endforeach
     @else
         <div id="pwax" class="pwax-preloader" tabindex="-1">
             <span class="pwax-sr-only" role="status">Loading</span>

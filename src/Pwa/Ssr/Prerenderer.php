@@ -79,7 +79,7 @@ class Prerenderer
      * deployment SSR is most likely to be running in, since it is the one where not paying
      * for a PHP bootstrap per request matters.
      *
-     * @var array<string, array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}>
+     * @var array<string, array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>, bodyHtml: list<string>}>
      */
     private array $memo = [];
 
@@ -161,7 +161,7 @@ class Prerenderer
      * Prerender the response's component, returning HTML + serialized state or null on
      * any failure (so the caller falls back to the SPA shell).
      *
-     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}|null
+     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>, bodyHtml: list<string>}|null
      */
     public function render(ComponentResponse $response, Request $request, ?Component $component = null): ?array
     {
@@ -204,6 +204,7 @@ class Prerenderer
                     // so `remember()` receives a complete array shape.
                     $cached['hydrate'] ??= true;
                     $cached['headStyles'] ??= [];
+                    $cached['bodyHtml'] ??= [];
 
                     return $this->remember($key, $cached);
                 }
@@ -254,6 +255,11 @@ class Prerenderer
         return [
             'version' => (string) $this->config->get('pwax.assets.versions.vue', ''),
             'url' => $request->getRequestUri(),
+            // The scheme and host this request came in on. Settle mode gives the jsdom
+            // document this as its location, so `window.location` matches the page the
+            // browser would be on and a relative `fetch('/api/items')` in `mounted()`
+            // resolves to this application rather than to nothing.
+            'origin' => $request->getSchemeAndHttpHost(),
             // The payload the *browser* receives for this page, not the bare component.
             // The difference is the precompiled render function: `Pwax::payload()` prepends
             // it to the inline script for a non-addressable page, so the client renders
@@ -413,8 +419,8 @@ class Prerenderer
      * in its original position and let a page that is read on every request age out from
      * under itself. Deleting first and re-inserting moves it to the back.
      *
-     * @param  array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}  $result
-     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}
+     * @param  array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>, bodyHtml: list<string>}  $result
+     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>, bodyHtml: list<string>}
      */
     private function remember(string $key, array $result): array
     {
@@ -435,7 +441,7 @@ class Prerenderer
      * @param  array<string, mixed>  $data
      * @param  array<string, array<string, mixed>>  $imports
      * @param  array<string, string>  $templates
-     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>}|null
+     * @return array{html: string, state: string, styles: array<string, string>, hydrate: bool, headStyles: list<string>, bodyHtml: list<string>}|null
      */
     private function invoke(Component $component, array $data, Request $request, array $imports, array $templates): ?array
     {
@@ -513,6 +519,7 @@ class Prerenderer
         );
 
         $this->reportUnseeded($decoded['unseeded'] ?? []);
+        $this->reportUnsettled($decoded);
 
         // The imported components' stylesheets travel out with the HTML so the shell can
         // put them in the document. The browser attaches them as each module loads, which is
@@ -542,6 +549,14 @@ class Prerenderer
                 (array) ($decoded['headStyles'] ?? []),
                 fn ($s) => is_string($s) && $s !== ''
             )),
+            // Markup the application added to `<body>` outside the mount element during a
+            // settle-mode prerender — a toast container, a modal portal, a cookie banner.
+            // It is part of the page the browser paints, so it belongs in the document a
+            // crawler reads; it goes beside the mount element rather than inside it.
+            'bodyHtml' => array_values(array_filter(
+                (array) ($decoded['bodyHtml'] ?? []),
+                fn ($s) => is_string($s) && $s !== ''
+            )),
         ];
     }
 
@@ -559,6 +574,44 @@ class Prerenderer
      * hydration mismatch, and neither the missing element nor the console line points
      * anywhere near `data()`. One debug line naming the key is the whole difference.
      */
+    /**
+     * Say so when a settle-mode prerender ran out of time with work still in flight.
+     *
+     * The page still ships — a partial prerender beats none, and the client finishes the job
+     * on boot — so nothing about this is an error the visitor sees. It is invisible from the
+     * outside, which is exactly the problem: the developer looking at the markup sees an
+     * empty list and no reason for it.
+     *
+     * The commonest cause is not a slow endpoint. A page whose `mounted()` fetches its own
+     * application deadlocks against a single-worker development server: the one process is
+     * busy serving this request and cannot answer the fetch until it finishes, so the fetch
+     * waits out the whole budget. `php artisan serve` runs one worker unless
+     * `PHP_CLI_SERVER_WORKERS` is set, and every production server runs more — so this is a
+     * failure people meet in development and never in production, which is the kind worth
+     * naming precisely.
+     *
+     * @param  array<string, mixed>  $decoded
+     */
+    private function reportUnsettled(array $decoded): void
+    {
+        if (! array_key_exists('settled', $decoded) || $decoded['settled'] !== false) {
+            return;
+        }
+
+        if (! $this->config->get('app.debug') || ! function_exists('app') || ! app()->bound('log')) {
+            return;
+        }
+
+        Log::debug(sprintf(
+            'pwax: the SSR settle pass ran out of time with %d operation(s) still pending, so the '
+            . 'prerendered markup is what had rendered by then. Raise `pwax.ssr.timeout` if the '
+            . 'work is genuinely slow — but if this page fetches its own application, check that '
+            . 'the development server runs more than one worker (`PHP_CLI_SERVER_WORKERS`), '
+            . 'because a single worker cannot answer a request it is still serving.',
+            max(0, (int) ($decoded['pending'] ?? 0))
+        ));
+    }
+
     private function reportUnseeded(mixed $keys): void
     {
         if (! is_array($keys) || $keys === []) {

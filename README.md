@@ -1817,11 +1817,18 @@ pending microtasks, timers and async work drained — before serialising the fin
 The result includes everything the browser's first paint would: injected styles, fetched
 data, any DOM mutation that completes before the app settles.
 
-There is no fixed delay to configure. The bridge polls until the document is quiet, in
-the same way Angular's `ApplicationRef.isStable` waits for the app to settle rather than
-sleeping for a fixed duration. The `ssr.timeout` is the hard ceiling — a page that never
-settles (a polling interval, a reconnect loop) is abandoned there, and whatever has
-rendered is serialised.
+There is no fixed delay to configure. Two things decide when the page is done, and both
+have to agree: a counter of the asynchronous work the application still has outstanding —
+timers, `fetch`, `XMLHttpRequest` — and whether the DOM has stopped changing. That is the
+same shape as Angular's `ApplicationRef.isStable`, which counts pending macrotasks rather
+than sleeping. Watching only the DOM cannot tell *finished* from *not yet started*: a
+`fetch` issued in `mounted()` has touched nothing a millisecond later, and a renderer that
+polls the DOM alone calls the page stable before the request has left.
+
+The `ssr.timeout` is the hard ceiling — a page that never settles (a polling interval, a
+reconnect loop) is abandoned there, and whatever has rendered is serialised. The poll's own
+deadline is set below that, so the bridge always has room to serialise and reply before the
+PHP side gives up on it.
 
 ```php
 'ssr' => [
@@ -1848,6 +1855,56 @@ Styles injected into `<head>` during the render (libraries that inject styles at
 time) are captured and inlined in the document's `<head>` with a `data-pwax-settle`
 marker, so they are visible to crawlers and present before the client re-renders.
 
+Markup the application appends to `<body>` **outside** the mount element — a toast
+container, a modal portal, a cookie banner — is captured too, and rendered beside the mount
+element with a `data-pwax-settle-body` marker. The runtime removes those nodes before it
+re-renders, so the application's own copy does not land next to the server's.
+
+**A relative `fetch` resolves against the request.** `fetch('/api/items')` in `mounted()` is
+what an application writes, and Node has no document to resolve it against. Settle mode
+gives the jsdom document the scheme and host the request came in on, so the call reaches
+this application exactly as it would from the browser.
+
+That call is a request your own server has to answer while it is still answering this one.
+Under a single-process `php artisan serve` it deadlocks until the prerender times out; set
+`PHP_CLI_SERVER_WORKERS`, run behind a real server, or read the data in the controller and
+pass it to `pwaxRender()`, which needs no HTTP call at all.
+
+### What the prerender guarantees
+
+The markup the server sends is the markup the browser would have built. Not an
+approximation of it — the same attributes, the same values, the same placeholder comments.
+That is the point of prerendering at all: a crawler reading the first paint and a visitor
+without JavaScript should see the page, not a sketch of it.
+
+Holding to that takes deliberate work, because Node and the browser do not compile a
+template the same way by default:
+
+| | The browser | The bridge, without care | Now |
+| --- | --- | --- | --- |
+| `:required="true"` | `required=""` | `required="true"` | `required=""` |
+| `:readonly="false"` | absent | `readonly="false"` | absent |
+| `:aria-hidden="false"` | `aria-hidden="false"` | absent | `aria-hidden="false"` |
+| `:value="'typed'"` | property, no attribute | absent from the HTML | `value="typed"` |
+| `v-if` that did not render | `<!---->` | `<!--v-if-->` | `<!---->` |
+
+The first two come from `@vue/compiler-dom`, which stringifies hoisted static subtrees into
+HTML when it runs under Node and does not when it runs in the browser — so past a threshold
+of about five elements carrying bindings, an entire subtree was written by the compiler's
+serialiser rather than built node by node. Static hoisting is therefore off in both
+`bin/ssr.mjs` and `bin/compile-templates.mjs`; the same divergence otherwise appeared in
+whatever `php artisan pwax:compile` produced.
+
+`value`, `checked`, `selected` and `muted` are the other direction. Vue sets them as DOM
+*properties*, and a property leaves nothing behind in serialised HTML, so a prerendered form
+reached the crawler with every field blank while the browser showed them filled. The bridge
+reflects them back onto attributes, which is what `@vue/server-renderer` does too.
+
+None of this is configurable. It is a correctness property, held by
+`tests/js/ssr.test.js` and by loading the same components in a real browser twice — once
+with JavaScript disabled to read what the server sent, once normally to read what the
+browser made — and diffing.
+
 ### Observability
 
 Prerendered responses carry `X-Pwax-SSR: 1`; SPA fallbacks carry `X-Pwax-SSR: 0`. The
@@ -1862,6 +1919,12 @@ A `0` means one of two things, and they are worth telling apart:
   `prerenderable()`.
 - **The prerender failed and fell back.** A warning is logged once per process, and
   `php artisan pwax:doctor` reproduces it with the underlying Node error.
+
+A settle-mode page can also come back as a `1` that is only *part* of the page: the bridge
+abandons a render at `ssr.timeout` and serialises whatever had rendered by then. That is the
+right outcome — a partial prerender beats none, and the client finishes on boot — and an
+invisible one, so with `APP_DEBUG` on the log says how much work was still pending. The
+usual cause is not a slow endpoint but the single-worker deadlock described above.
 
 ## Security
 

@@ -3,6 +3,7 @@
 namespace Mxent\Pwax\Tests\Feature;
 
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\View;
 use Mxent\Pwax\Pwax;
 use Mxent\Pwax\Support\RenderFunctionStore;
@@ -119,6 +120,15 @@ class SsrTest extends TestCase
             // is what `<component :is>` needs and what the state island used to mangle.
             $router->get('/ssr-dynamic', fn () => pwaxRender('pages.ssr-dynamic'))
                 ->name('ssr.dynamic');
+
+            // Post-mount work: a settle-mode page whose content, styles and body-level
+            // markup all arrive after `mounted()`.
+            $router->get('/ssr-settle', fn () => pwaxRender('pages.ssr-settle'))
+                ->name('ssr.settle');
+
+            // A page that never settles, so the ceiling has to end the render.
+            $router->get('/ssr-restless', fn () => pwaxRender('pages.ssr-restless'))
+                ->name('ssr.restless');
 
             // A page that pulls in sub-components with `@pwaxImport`, by default export
             // and by named export.
@@ -768,6 +778,97 @@ class SsrTest extends TestCase
         $this->assertArrayNotHasKey('badge', $state);
         $this->assertArrayNotHasKey('published', $state);
         $this->assertStringNotContainsString('AsyncComponentWrapper', $html);
+    }
+
+    /**
+     * Settle mode, end to end through the response.
+     *
+     * The bridge's own behaviour is covered in `tests/js/ssr.test.js`; this is the part
+     * only PHP can assert — that what the bridge captured after `mounted()` reaches the
+     * document. Settle mode failed on every real request before this: jsdom was handed
+     * `$request->getRequestUri()` as its URL and threw `Invalid URL: /ssr-settle`, so the
+     * route quietly served the SPA shell. Every JS test omitted `url`, which is the one
+     * field the PHP side always sends.
+     */
+    public function test_settle_mode_captures_what_happens_after_mount(): void
+    {
+        $this->requireNode();
+
+        config()->set('pwax.ssr.settle', true);
+        config()->set('pwax.ssr.timeout', 15);
+
+        $response = $this->get('/ssr-settle');
+
+        $response->assertHeader('X-Pwax-SSR', '1');
+
+        $html = (string) $response->getContent();
+
+        // State set 120ms after mount — past the point a DOM-quiet check called it stable.
+        $this->assertStringContainsString('after mount', $html);
+        $this->assertStringNotContainsString('>before mount<', $html);
+
+        // A style the application injected into <head> during the settle.
+        $this->assertMatchesRegularExpression('/<style[^>]*data-pwax-settle/', $html);
+        $this->assertStringContainsString('rebeccapurple', $html);
+
+        // Markup appended to <body> outside the mount element, kept beside it and marked
+        // so the runtime can clear it before rendering its own copy.
+        $this->assertStringContainsString('data-pwax-settle-body', $html);
+        $this->assertStringContainsString('cookie-banner', $html);
+
+        // `v-html` is a DOM property, not an attribute. Written as one it rendered nothing.
+        $this->assertStringContainsString('<em id="inner">from v-html</em>', $html);
+        $this->assertStringNotContainsString('innerhtml=', $html);
+    }
+
+    /**
+     * A prerender abandoned at the ceiling ships a partial page, and says so.
+     *
+     * Nothing about it is visible from outside: the response is a 200 with `X-Pwax-SSR: 1`
+     * and markup that simply lacks whatever had not finished. A developer looking at an
+     * empty list has no way to tell it from a list that is genuinely empty — least of all
+     * when the cause is the one that catches everybody, a page fetching its own application
+     * through a development server with a single worker, which cannot answer a request it
+     * is still serving.
+     */
+    public function test_a_prerender_that_runs_out_of_time_says_so(): void
+    {
+        $this->requireNode();
+
+        config()->set('pwax.ssr.settle', true);
+        config()->set('pwax.ssr.timeout', 3);
+        config()->set('app.debug', true);
+
+        $messages = [];
+
+        Log::listen(function ($message) use (&$messages): void {
+            $messages[] = (string) $message->message;
+        });
+
+        $response = $this->get('/ssr-restless');
+
+        // Still prerendered: what had rendered by the ceiling is better than nothing, and
+        // the client finishes the job on boot.
+        $response->assertHeader('X-Pwax-SSR', '1');
+        $this->assertStringContainsString('id="tick"', (string) $response->getContent());
+
+        $this->assertNotEmpty(array_filter(
+            $messages,
+            fn (string $message): bool => str_contains($message, 'ran out of time')
+                && str_contains($message, 'PHP_CLI_SERVER_WORKERS')
+        ), 'The settle timeout was not reported: ' . implode(' | ', $messages));
+    }
+
+    public function test_settle_mode_is_off_unless_asked_for(): void
+    {
+        $this->requireNode();
+
+        // The standard path is a single synchronous pass, so post-mount work is absent —
+        // which is correct, and is why settle mode is opt-in.
+        $html = (string) $this->get('/ssr-settle')->getContent();
+
+        $this->assertStringContainsString('before mount', $html);
+        $this->assertStringNotContainsString('data-pwax-settle-body', $html);
     }
 
     public function test_the_doctor_reports_a_working_bridge(): void

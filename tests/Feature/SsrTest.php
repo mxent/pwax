@@ -127,7 +127,7 @@ class SsrTest extends TestCase
 
             // Page shapes an application actually writes, each of which the prerenderer
             // and the browser have to agree on.
-            foreach (['multiroot', 'comment', 'scoped', 'conditional'] as $shape) {
+            foreach (['multiroot', 'comment', 'scoped', 'conditional', 'nav'] as $shape) {
                 $router->get("/ssr-shape-{$shape}", fn () => pwaxRender("pages.shapes.{$shape}"))
                     ->name("ssr.shape.{$shape}");
             }
@@ -447,6 +447,10 @@ class SsrTest extends TestCase
             'an html comment' => ['comment', '<p>After the comment</p>'],
             'a scoped style' => ['scoped', '<p class="inner" data-pwax-'],
             'v-if and v-for' => ['conditional', '<li>1</li><li>2</li><li>3</li>'],
+            // `<RouterLink>` is the spelling the README documents for linking between
+            // pages, and it prerenders to a real anchor — which is the whole of what a
+            // crawler needs, and why a hand-written `<a>` buys nothing for SEO.
+            'a RouterLink nav' => ['nav', '<a href="/about"'],
         ];
     }
 

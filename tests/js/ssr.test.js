@@ -94,6 +94,53 @@ describe('bin/ssr.mjs renders a component to HTML', () => {
         expect(result.html).toBe('<main><!--[--><!----><p>Anchored</p><!--]--></main>');
     });
 
+    it.each([['RouterLink'], ['router-link']])(
+        'resolves <%s>, which is the same component under either spelling',
+        (tag) => {
+            // Vue looks an unknown tag up by its literal name, then camelized, then
+            // capitalized — so a PascalCase registration answers to both spellings and a
+            // kebab one answers only to its own. Registered as `router-link`, the bridge
+            // could not resolve `<RouterLink>`: the spelling the README documents, and with
+            // the resolution guard in place it did not render wrong, it refused to
+            // prerender the page at all.
+            const result = render({
+                url: '/',
+                component: {
+                    template: `<nav><${tag} to="/about">About</${tag}></nav>`,
+                    script: '',
+                    style: '',
+                    scope: null,
+                },
+                data: {},
+            });
+
+            expect(result.ok).toBe(true);
+
+            // A real anchor with a real href — which is the whole of what a crawler needs,
+            // and the reason a hand-written `<a>` buys nothing for SEO.
+            expect(result.html).toContain('<a href="/about"');
+            expect(result.html).toContain('>About</a>');
+        }
+    );
+
+    it.each([['RouterView'], ['router-view']])(
+        'resolves <%s> in the content template under either spelling',
+        (tag) => {
+            const result = render({
+                templates: {
+                    content: `<main><${tag}></${tag}></main>`,
+                    loader: '<div class="pwax-loading"></div>',
+                    error: '<div class="pwax-error"></div>',
+                },
+                component: { template: '<p>Page</p>', script: '', style: '', scope: null },
+                data: {},
+            });
+
+            expect(result.ok).toBe(true);
+            expect(result.html).toContain('<p>Page</p>');
+        }
+    );
+
     it('renders router-links as anchors, with the active classes Vue Router applies', () => {
         const result = render({
             url: '/about',

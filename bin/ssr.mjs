@@ -507,7 +507,14 @@ async function renderOne() {
     };
 
     /*
-     * `router-view` renders the *page component wrapper*, not the page component.
+     * `RouterView` renders the *page component wrapper*, not the page component.
+     *
+     * Registered in PascalCase, which is the spelling that resolves both. Vue looks an
+     * unknown tag up by its literal name, then camelized, then capitalized — so
+     * `RouterView` answers to `<RouterView>` and to `<router-view>`, while a `router-view`
+     * registration answers only to the kebab spelling. `<RouterView>` and `<RouterLink>`
+     * are what the README documents, and with the resolution guard in place they did not
+     * merely render wrong, they refused to prerender at all.
      *
      * This is the difference between HTML that hydrates and HTML that does not. On the
      * client, `<router-view>` resolves to `PwaxPage`, whose template has two root-level
@@ -524,7 +531,7 @@ async function renderOne() {
      * The state below is the success branch, which is the only branch a prerender reaches:
      * an error would have been reported instead of rendered.
      */
-    app.component('router-view', {
+    app.component('RouterView', {
         name: 'PwaxPage',
         template: pageTemplate(templates),
         data: () => ({
@@ -538,7 +545,8 @@ async function renderOne() {
     });
 
     /*
-     * `router-link`, rendering exactly what Vue Router's own `RouterLink` renders.
+     * `RouterLink`, rendering exactly what Vue Router's own does — and registered in the
+     * spelling that answers to `<RouterLink>` and `<router-link>` alike.
      *
      * Vue Router is not installed here — Pwax vendors it as a browser global — so the
      * bridge stands in for it. "Roughly an `<a>`" is not close enough: this was written as
@@ -552,7 +560,7 @@ async function renderOne() {
      * patch is still a wasted DOM write and a "hydration completed but contains mismatches"
      * line in everyone's console.
      */
-    app.component('router-link', {
+    app.component('RouterLink', {
         props: { to: { type: [String, Object], default: '' } },
         render() {
             const href = typeof this.to === 'string' ? this.to : this.to.path || '';

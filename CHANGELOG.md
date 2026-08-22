@@ -207,6 +207,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`<RouterLink>` and `<RouterView>` prerender.** The bridge registered them in kebab-case,
+  and Vue resolves an unknown tag by its literal name, then camelized, then capitalized — so
+  a `router-link` registration answers only to `<router-link>` while `RouterLink` answers to
+  both. PascalCase is the spelling the README documents for linking between pages, and with
+  the resolution guard in place it did not render wrong: it refused to prerender the page at
+  all, silently serving the SPA shell. Registered in the spelling that resolves both.
+
 - **A prerendered page whose mount element holds anything else is repaired, and says so.**
   Vue hydrates from `container.firstChild`, and its recovery from a mismatch there is to
   build the application afresh *before* that node and leave the server's copy where it is —

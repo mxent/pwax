@@ -241,6 +241,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a link preview with no image rather than an error — so nobody finds out until someone
   shares a link.
 
+- **A script can ask for the `<head>`.** `['src' => '…', 'head' => true]` in `pwax.scripts`
+  renders the tag in the head instead of at the end of the body. The default position is
+  right for almost everything — a script there cannot hold up the first paint — and wrong
+  for the two kinds that have to run before it: a CSS engine that builds its stylesheet by
+  reading the DOM, and a script that sets a theme class to prevent a flash of its own.
+  `pwax.blade.head` could always do this; it cost a Blade view for one tag. `head` is a
+  placement instruction, not an attribute, and is not rendered as one. Head scripts are
+  precached like any other, so moving one cannot drop it from the offline install.
+
+- **`pwax:doctor` names a browser-side CSS engine under SSR.** The Tailwind Play CDN,
+  `@tailwindcss/browser`, the UnoCSS runtime and Twind all generate their stylesheet by
+  reading the DOM in the browser, so a prerendered page ships its markup and none of its
+  styles: a crawler without JavaScript sees an unstyled document and everyone else sees the
+  page painted bare first. Worth naming because the local symptom is a few milliseconds
+  nobody catches.
+
 - **A workbench demo application, so `testbench serve` serves something.** CONTRIBUTING.md
   has asked contributors to verify four things by hand in a real browser for some time, and
   the command it names could not do it: without a `testbench.yaml` registering the provider,
@@ -256,6 +272,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no URL. Every one of them concerns a tag nobody on the team ever looks at.
 
 ### Fixed
+
+- **A dangling symlink under `public/` took the whole progressive web app down.**
+  `php artisan storage:link` puts `public/storage` there, pointing at `storage/app/public`;
+  on a fresh clone, after a deploy that moved the target, or in a container whose storage
+  volume is not mounted yet, that link dangles. Finder reports a dangling link as a *file* —
+  it is not a directory, so nothing else fits — and `SplFileInfo::getSize()` then stats a
+  path that is not there and throws. The throw escaped `AssetManifest::build()`, so
+  `/sw.json` answered 500 and `/sw.js` answered `// pwax: service worker error`: nothing
+  installed, nothing updated, nothing worked offline, because of one broken link in a
+  directory the application barely thinks about. Unreadable entries are skipped now.
 
 - **The SSR state island shipped values that JSON cannot carry, and the client used them.**
   `bin/ssr.mjs` serialized the captured `data()` through `JSON.parse(JSON.stringify(…))`,

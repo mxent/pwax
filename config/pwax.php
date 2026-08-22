@@ -322,6 +322,28 @@ return [
     |          'crossorigin' => 'anonymous', 'defer' => true],
     |     ],
     |
+    | Stylesheets go in <head>. Scripts go at the end of <body>, after Vue, Vue Router
+    | and Pinia, which is right for almost everything: a script there cannot hold up the
+    | first paint. `head => true` moves one into <head> instead, for the two kinds that
+    | have to run before the first paint and cannot wait behind the framework:
+    |
+    |     'scripts' => [
+    |         // A CSS engine that builds its stylesheet by reading the DOM.
+    |         ['src' => 'https://cdn.tailwindcss.com', 'head' => true],
+    |         // A script that sets a theme class, to prevent a flash of the wrong one.
+    |         ['src' => '/js/theme.js', 'head' => true],
+    |     ],
+    |
+    | `head` is a placement instruction, not an attribute, and is not rendered as one.
+    | Everything in <head> is render-blocking, so put nothing there that does not have
+    | to be.
+    |
+    | With SSR on, a browser-side CSS engine cannot style the prerendered HTML at all —
+    | it runs in the browser and the server has already sent the document. `head => true`
+    | removes the flash for visitors who run JavaScript; it does nothing for a crawler
+    | that does not. Build your CSS to a file and list it in `styles` instead.
+    | `php artisan pwax:doctor` says so if it finds one of them here.
+    |
     */
 
     'styles' => [],

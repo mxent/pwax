@@ -495,6 +495,35 @@ class CommandsTest extends TestCase
      * and applied by every other test in this file rather than scattered through the
      * suite, so a doctor change that adds a new check only has to update one place.
      */
+    public function test_the_doctor_command_warns_about_a_browser_side_css_engine_under_ssr(): void
+    {
+        $this->manifest_clean();
+
+        config()->set('pwax.head.image', 'https://example.test/og.png');
+        config()->set('pwax.ssr.enabled', true);
+        config()->set('pwax.scripts', ['https://cdn.tailwindcss.com']);
+
+        // A prerendered page ships its markup and none of its styles, and the local symptom
+        // is a few milliseconds of unstyled content that nobody catches.
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('Tailwind Play CDN')
+            ->assertSuccessful();
+    }
+
+    public function test_the_doctor_command_is_quiet_about_a_css_engine_without_ssr(): void
+    {
+        $this->manifest_clean();
+
+        config()->set('pwax.head.image', 'https://example.test/og.png');
+        config()->set('pwax.scripts', ['https://cdn.tailwindcss.com']);
+
+        // Without SSR there is no markup to be unstyled: the mount point is empty until the
+        // runtime fills it, by which time the engine has run.
+        $this->artisan('pwax:doctor')
+            ->doesntExpectOutputToContain('Tailwind Play CDN')
+            ->assertSuccessful();
+    }
+
     public function test_the_doctor_command_warns_when_no_sharing_image_is_configured(): void
     {
         $this->manifest_clean();

@@ -102,6 +102,54 @@ class ShellTest extends TestCase
     }
 
     /**
+     * A script that asked for the head goes in the head, and nowhere else.
+     *
+     * The default position — the end of the body, behind Vue, Vue Router and Pinia — is
+     * right for almost everything and wrong for the two kinds of script that have to run
+     * before the first paint: a CSS engine that generates its stylesheet by scanning the
+     * DOM, and a script that sets a theme class to prevent a flash of its own.
+     */
+    public function test_a_script_can_ask_for_the_head(): void
+    {
+        config()->set('pwax.scripts', [
+            ['src' => 'https://example.test/theme.js', 'head' => true],
+            'https://example.test/analytics.js',
+        ]);
+
+        $head = array_column($this->shell()->headScripts(), 'src');
+        $foot = array_column($this->shell()->vendorScripts(), 'src');
+
+        $this->assertSame(['https://example.test/theme.js'], $head);
+        $this->assertContains('https://example.test/analytics.js', $foot);
+        $this->assertNotContains('https://example.test/theme.js', $foot);
+    }
+
+    public function test_the_head_flag_is_not_rendered_as_an_attribute(): void
+    {
+        config()->set('pwax.scripts', [['src' => '/js/theme.js', 'head' => true, 'defer' => true]]);
+
+        $rendered = (string) $this->shell()->attributes($this->shell()->headScripts()[0]);
+
+        // `attributes()` renders `true` as a boolean attribute, so left in place this would
+        // put a stray `head` on every one of these tags.
+        $this->assertStringNotContainsString('head', $rendered);
+        $this->assertStringContainsString('src="/js/theme.js"', $rendered);
+        $this->assertStringContainsString('defer', $rendered);
+    }
+
+    public function test_the_document_puts_a_head_script_before_the_body(): void
+    {
+        config()->set('pwax.scripts', [['src' => '/js/theme.js', 'head' => true]]);
+
+        $this->app['router']->middleware('web')->get('/headed', fn () => pwaxRender('pages.home'));
+
+        $html = (string) $this->get('/headed')->getContent();
+
+        $this->assertGreaterThan(0, strpos($html, '<script src="/js/theme.js"></script>'));
+        $this->assertLessThan(strpos($html, '</head>'), strpos($html, '/js/theme.js'));
+    }
+
+    /**
      * The service worker needs the framework separated from the application's own extra
      * scripts: the framework failing to install means the app will not start, an
      * analytics tag failing means nothing at all.

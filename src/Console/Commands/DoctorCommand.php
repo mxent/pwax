@@ -68,6 +68,7 @@ class DoctorCommand extends Command
         $this->checkWorkerSourceMap($config);
         $this->checkPushSubscriptionsTable($config);
         $this->checkSsr($config);
+        $this->checkRuntimeStyling($config);
         $this->checkHead($config);
 
         $this->newLine();
@@ -1428,6 +1429,67 @@ class DoctorCommand extends Command
             'SSR fallback is "spa" (a Node failure serves the SPA shell)',
             sprintf('SSR fallback is "%s" — a Node failure will return a 500. Set ssr.fallback to "spa" for production.', $fallback),
         );
+    }
+
+    /**
+     * A CSS engine that runs in the browser, on a site that prerenders.
+     *
+     * The Tailwind Play CDN and its like generate a stylesheet by scanning the DOM *after*
+     * they load, in the browser. Nothing on the server knows what CSS those class names
+     * need, so a prerendered page ships with its markup and none of its styles: a crawler
+     * that does not run JavaScript sees an unstyled document, and everyone else sees the
+     * page painted bare and restyled a moment later.
+     *
+     * Worth naming because the local symptom is almost nothing. On a fast connection the
+     * unstyled window is a few milliseconds and nobody catches it; across the network, with
+     * a third-party origin to resolve and a hundred kilobytes to fetch and parse before the
+     * scan even starts, it is the first thing a visitor sees.
+     *
+     * Only warned about when SSR is on. Without it the page has no markup to be unstyled —
+     * the mount point is empty until the runtime fills it, by which time the engine has run.
+     */
+    private function checkRuntimeStyling(Config $config): void
+    {
+        if (! $config->get('pwax.ssr.enabled', false)) {
+            return;
+        }
+
+        // Matched on the part of the URL that names the tool, so a version or a mirror does
+        // not slip past. Not exhaustive, and not meant to be: these are the ones that turn
+        // up in a Laravel application.
+        $engines = [
+            'cdn.tailwindcss.com' => 'the Tailwind Play CDN',
+            '@tailwindcss/browser' => 'Tailwind\'s browser build',
+            'tailwindcss/browser' => 'Tailwind\'s browser build',
+            '@unocss/runtime' => 'the UnoCSS runtime',
+            'unocss/runtime' => 'the UnoCSS runtime',
+            '@twind/' => 'Twind',
+            'twind.style' => 'Twind',
+        ];
+
+        foreach ((array) $config->get('pwax.scripts', []) as $script) {
+            $src = is_array($script) ? ($script['src'] ?? null) : $script;
+
+            if (! is_string($src) || $src === '') {
+                continue;
+            }
+
+            foreach ($engines as $needle => $name) {
+                if (! str_contains($src, $needle)) {
+                    continue;
+                }
+
+                $this->warn_(sprintf(
+                    'SSR is on and pwax.scripts loads %s, which builds its stylesheet by reading '
+                    . 'the DOM in the browser. The prerendered HTML therefore carries no styles: a '
+                    . 'crawler without JavaScript sees an unstyled page, and everyone else sees it '
+                    . 'painted bare first. Build your CSS to a file and list it in pwax.styles.',
+                    $name
+                ));
+
+                return;
+            }
+        }
     }
 
     /**

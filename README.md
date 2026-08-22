@@ -1759,6 +1759,60 @@ With `APP_DEBUG` on, the log names any key that was left out. Serializing them i
 would be worse than skipping them: a component survives `JSON.stringify` as a lookalike
 with its functions gone, and `<component :is>` handed that renders nothing at all.
 
+### Styling a prerendered page
+
+A prerendered page has its markup in the document from the first byte. Whatever styles that
+markup needs have to be in the document too, or the page paints bare and is restyled a
+moment later — and a crawler that does not run JavaScript never sees it styled at all.
+
+Three sources are already in the prerendered HTML, and need nothing from you:
+
+| In the document | How it gets there |
+| --- | --- |
+| A component's `<style>` / `<style scoped>` | Inlined into `<head>`, keyed so the runtime adopts it rather than adding a second copy |
+| The stylesheets of components it pulls in with `@pwaxImport` | Inlined the same way |
+| `pwax.styles` | `<link rel="stylesheet">` in `<head>` |
+
+One source is not, and cannot be: **CSS that only exists after browser JavaScript has run.**
+The Tailwind Play CDN, `@tailwindcss/browser`, the UnoCSS runtime and Twind all work the
+same way — they load in the browser, read the DOM, work out which utility classes are
+present, and inject a `<style>`. Nothing on the server knows what CSS those class names
+need, so the prerendered HTML carries the markup and none of the styles.
+
+With SSR on, `php artisan pwax:doctor` says so if it finds one of them in `pwax.scripts`.
+
+**Build your CSS to a file.** For Tailwind that means the CLI or the Vite plugin rather than
+the Play CDN — which Tailwind's own documentation says is not for production anyway. Point
+its content globs at your component views, since they are where the class names live:
+
+```js
+// tailwind.config.js — or `@source` directives in v4
+content: [
+    './resources/views/**/*.blade.php',
+],
+```
+
+```php
+// config/pwax.php
+'styles' => ['/css/app.css'],
+```
+
+That stylesheet is linked in the head of every page, prerendered or not, and the service
+worker precaches it so the app is styled offline too.
+
+**If you must keep a browser-side engine,** put it in the head so it runs before the first
+paint rather than behind Vue, Vue Router and Pinia:
+
+```php
+'scripts' => [
+    ['src' => 'https://cdn.tailwindcss.com', 'head' => true],
+],
+```
+
+That removes the flash for visitors who run JavaScript — measured on the demo app, first
+paint goes from unstyled to styled — but it cannot help the crawler or the visitor who does
+not. Only a real stylesheet can.
+
 ### What can and cannot be prerendered
 
 The bridge renders your component in Node, so anything that needs a browser is not
@@ -2001,6 +2055,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `assets.versions` | see config | Pinned Vue / Router / Pinia versions |
 | `assets.pinia` | `true` | Load Pinia at all |
 | `styles`, `scripts` | `[]` | Extra tags; string or attribute array |
+| `scripts[].head` | `false` | Render this script in `<head>` rather than at the end of `<body>` |
 | `vue.plugins`, `vue.directives`, `vue.middleware` | `[]` | Vue extensions |
 | `minify.enabled` | production only | Minify component sources |
 | `minify.store`, `minify.ttl` | `null` | Cache for minified output |

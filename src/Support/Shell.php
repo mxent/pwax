@@ -143,17 +143,93 @@ class Shell
      * Vue Router and Pinia are IIFE builds that read the global `Vue`, so Vue has to be
      * evaluated first. None of them are modules, so they cannot be deferred.
      *
+     * Application scripts that asked for the head are not here — see {@see headScripts()}.
+     *
      * @return list<array<string, string|bool>>
      */
     public function vendorScripts(): array
     {
         $tags = $this->frameworkScripts();
 
-        foreach ((array) $this->config->get('pwax.scripts', []) as $script) {
-            $tags[] = is_array($script) ? $script : ['src' => (string) $script];
+        foreach ($this->configuredScripts(head: false) as $script) {
+            $tags[] = $script;
         }
 
         $tags[] = ['src' => $this->runtimeUrl()];
+
+        return $tags;
+    }
+
+    /**
+     * Application scripts that asked to be in `<head>` rather than at the end of `<body>`.
+     *
+     *     'scripts' => [
+     *         ['src' => '/js/theme.js', 'head' => true],
+     *     ],
+     *
+     * The default position is the end of the body, behind Vue, Vue Router and Pinia, and
+     * that is right for almost everything: a script there cannot block the first paint.
+     *
+     * Two kinds of script cannot live there, and both are ordinary:
+     *
+     *   - A CSS engine that runs in the browser — the Tailwind Play CDN and its like
+     *     generate a stylesheet by scanning the DOM after they load. Behind the framework,
+     *     the page paints unstyled and is restyled a moment later; on a prerendered page,
+     *     which has its markup in the document from the first byte, that flash is the whole
+     *     content of the page.
+     *   - A script that has to run before the first paint to prevent a flash of its own —
+     *     reading a stored theme and setting a class on `<html>` is the usual one.
+     *
+     * `pwax.blade.head` could always do this, but it costs a Blade view for what is one
+     * tag. Being in the head means being render-blocking, which is the point and also the
+     * cost: everything here delays the first paint, so put nothing here that does not have
+     * to be.
+     *
+     * @return list<array<string, string|bool>>
+     */
+    public function headScripts(): array
+    {
+        return $this->configuredScripts(head: true);
+    }
+
+    /**
+     * Every script the application configured, wherever it goes.
+     *
+     * The service worker precaches from this rather than from the two positional lists,
+     * so moving a script into the head cannot quietly drop it from the offline install.
+     *
+     * @return list<array<string, string|bool>>
+     */
+    public function applicationScripts(): array
+    {
+        return [...$this->configuredScripts(head: true), ...$this->configuredScripts(head: false)];
+    }
+
+    /**
+     * `pwax.scripts`, normalised and split by where the tag goes.
+     *
+     * `head` is a placement instruction, not an attribute, so it is stripped here — left in
+     * place, `attributes()` would render it as a boolean attribute and every one of these
+     * tags would carry a stray `head` in the markup.
+     *
+     * @return list<array<string, string|bool>>
+     */
+    private function configuredScripts(bool $head): array
+    {
+        $tags = [];
+
+        foreach ((array) $this->config->get('pwax.scripts', []) as $script) {
+            /** @var array<string, string|bool> $tag */
+            $tag = is_array($script) ? $script : ['src' => (string) $script];
+
+            if ((bool) ($tag['head'] ?? false) !== $head) {
+                continue;
+            }
+
+            unset($tag['head']);
+
+            $tags[] = $tag;
+        }
 
         return $tags;
     }

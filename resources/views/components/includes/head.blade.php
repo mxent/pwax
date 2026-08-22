@@ -540,6 +540,18 @@
     <link rel="stylesheet" {{ $shell->attributes($style) }}>
 @endforeach
 
+{{--
+    Application scripts that asked for the head with `['src' => '…', 'head' => true]`.
+
+    Last in the head and render-blocking, which is the point: a CSS engine that generates
+    its stylesheet in the browser, or a script that sets a theme class before the first
+    paint, cannot do its job from the end of the body behind the framework. Everything here
+    delays the first paint, so the default position is still the foot.
+--}}
+@foreach ($shell->headScripts() as $pwaxHeadScript)
+    <script {{ $shell->attributes($pwaxHeadScript) }}></script>
+@endforeach
+
 @if (config('pwax.blade.head'))
     @include(config('pwax.blade.head'))
 @endif

@@ -373,7 +373,13 @@ class AssetManifest
 
         // The application's own extra scripts. Precached, never critical: whether an
         // analytics tag is reachable is not a reason to leave the app uninstalled.
-        foreach ($this->shell->vendorScripts() as $tag) {
+        //
+        // `applicationScripts()` rather than `vendorScripts()`, so a script that asked for
+        // the head is precached like any other. Read from the positional list, moving one
+        // into the head would have quietly dropped it from the offline install — and the
+        // scripts most likely to ask for the head are the ones whose absence is most
+        // visible, since that is why they asked.
+        foreach ([...$this->shell->vendorScripts(), ...$this->shell->applicationScripts()] as $tag) {
             $src = $tag['src'] ?? null;
 
             if (is_string($src) && $src !== '') {

@@ -222,7 +222,7 @@ class HeadMeta
     private function jsonLd(Head $page): array
     {
         if ($page->jsonLd !== []) {
-            return $page->jsonLd;
+            return $this->encodable($page->jsonLd);
         }
 
         /** @var mixed $configured */
@@ -239,7 +239,32 @@ class HeadMeta
             ? array_values(array_filter($configured, 'is_array'))
             : [$configured];
 
-        return $entries;
+        return $this->encodable($entries);
+    }
+
+    /**
+     * Drop structured data that will not survive `json_encode`.
+     *
+     * A string that is not valid UTF-8, a stray resource, a `NAN` — each makes `json_encode`
+     * return false. The two paths this metadata travels handle that differently on their
+     * own: the view writes an empty `<script type="application/ld+json">`, which is invalid
+     * structured data, and the payload is a `JsonResponse`, which throws. So the same page
+     * rendered fine on a reload and returned a 500 on a client-side navigation — the exact
+     * divergence between document and payload this class exists to prevent.
+     *
+     * Filtered once, here, so both see the same list. Encoding it twice is not free, but
+     * this runs on a page that declared structured data at all, and it is a handful of
+     * small objects.
+     *
+     * @param  list<array<string, mixed>>  $entries
+     * @return list<array<string, mixed>>
+     */
+    private function encodable(array $entries): array
+    {
+        return array_values(array_filter(
+            $entries,
+            static fn (array $entry): bool => json_encode($entry) !== false,
+        ));
     }
 
     /**
@@ -260,6 +285,14 @@ class HeadMeta
         $links = [];
 
         foreach ($declared as $key => $value) {
+            // In the map spelling the key is the language tag; in the list spelling it is an
+            // array index and the tag is inside. A numeric key with a string value is
+            // neither — it is `['fr']` where `['fr' => '/fr']` was meant — and no language
+            // tag is all digits, so it is dropped rather than emitted as `hreflang="0"`.
+            if (! is_array($value) && ! is_string($key)) {
+                continue;
+            }
+
             $hreflang = is_array($value) ? (string) ($value['hreflang'] ?? '') : (string) $key;
             $href = is_array($value) ? (string) ($value['href'] ?? '') : (string) $value;
             $href = (string) $this->absolute($href);

@@ -145,7 +145,21 @@
     production, where the policy is on and nobody is looking at the console.
 --}}
 @foreach ($pwaxHead->jsonLd as $pwaxSchema)
-    <script type="application/ld+json" data-pwax-head{!! $nonceAttr !!}>{!! json_encode($pwaxSchema, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) !!}</script>
+    @php
+        /*
+         * `false` rather than a throw when the data will not encode — a string that is not
+         * valid UTF-8, a stray resource, a NAN. An empty <script type="application/ld+json">
+         * is invalid structured data, so a block that cannot be filled is better not written:
+         * the page is otherwise fine and there is nothing here worth taking it down for.
+         */
+        $pwaxSchemaJson = json_encode(
+            $pwaxSchema,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
+        );
+    @endphp
+    @if ($pwaxSchemaJson !== false)
+        <script type="application/ld+json" data-pwax-head{!! $nonceAttr !!}>{!! $pwaxSchemaJson !!}</script>
+    @endif
 @endforeach
 
 {{--

@@ -368,6 +368,39 @@ class HeadMetaTest extends TestCase
         $this->assertStringContainsString('Organization', (string) $this->get('/plain')->getContent());
     }
 
+    public function test_structured_data_that_will_not_encode_is_dropped_from_both_paths(): void
+    {
+        $this->app['router']->middleware('web')->get('/broken', fn () => pwaxRender('pages.home')
+            // Not valid UTF-8. `json_encode` returns false for it, and the two paths this
+            // metadata travels used to disagree about that: the view wrote an empty
+            // `<script type="application/ld+json">` and the payload's JsonResponse threw, so
+            // the same page rendered on a reload and returned a 500 after a link.
+            ->jsonLd(['@type' => 'Article', 'headline' => "\xB1\x31"])
+            ->jsonLd(['@type' => 'BreadcrumbList']));
+
+        $html = (string) $this->get('/broken')->getContent();
+
+        $this->assertSame(1, substr_count($html, '<script type="application/ld+json"'));
+        $this->assertStringContainsString('"@type":"BreadcrumbList"', $html);
+
+        $this->assertSame(
+            [['@type' => 'BreadcrumbList']],
+            $this->payload('/broken')['head']['jsonLd']
+        );
+    }
+
+    public function test_a_malformed_alternate_is_dropped_rather_than_emitted_as_hreflang_zero(): void
+    {
+        // `['fr']` where `['fr' => '/fr']` was meant. No language tag is all digits, so the
+        // array index is not one — and `hreflang="0"` is worse than nothing.
+        config()->set('pwax.head.alternates', ['fr']);
+
+        $this->assertStringNotContainsString(
+            'rel="alternate"',
+            (string) $this->get('/plain')->getContent()
+        );
+    }
+
     public function test_alternate_links_are_emitted_for_every_locale(): void
     {
         $this->app['router']->middleware('web')->get('/localised', fn () => pwaxRender('pages.home')

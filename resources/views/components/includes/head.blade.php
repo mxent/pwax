@@ -6,7 +6,7 @@
     When it does, this page's own stylesheet has to be in the document before the markup
     is painted — see the block near the bottom.
 --}}
-@props(['shell', 'component' => null, 'head' => null, 'title' => null, 'prerendered' => false, 'importStyles' => []])
+@props(['shell', 'component' => null, 'head' => null, 'title' => null, 'prerendered' => false, 'importStyles' => [], 'headStyles' => []])
 @php
     /** @var \Mxent\Pwax\Pwa\WebManifest $pwaxManifest */
     $pwaxManifest = app(\Mxent\Pwax\Pwa\WebManifest::class);
@@ -267,6 +267,16 @@
 --}}
 @foreach ($importStyles as $pwaxImportUrl => $pwaxImportCss)
     <style data-pwax-style="{{ $pwaxImportUrl }}"{!! $nonceAttr !!}>{!! $pwaxCss($pwaxImportCss) !!}</style>
+@endforeach
+
+{{--
+    Styles injected into `<head>` during a settle-mode prerender — the Tailwind CDN
+    script does this, as do libraries that inject styles at mount time. Inlining them
+    here means they are visible to crawlers and present before the client re-renders.
+    Marked `data-pwax-settle` so the runtime can adopt or replace them on re-render.
+--}}
+@foreach ($headStyles as $pwaxHeadStyle)
+    <style data-pwax-settle{!! $nonceAttr !!}>{!! $pwaxHeadStyle !!}</style>
 @endforeach
 
 <style{!! $nonceAttr !!}>

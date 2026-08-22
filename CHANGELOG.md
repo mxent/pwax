@@ -9,6 +9,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **SSR settle mode: post-mount rendering.** When `pwax.ssr.settle` is true, the SSR
+  bridge mounts the app to a jsdom document, lets lifecycle hooks run, waits for async
+  work to settle, and serialises the final DOM. This captures everything the standard
+  `renderToString` pass cannot: Tailwind CDN styles injected in `mounted()`, data
+  fetched from an API then rendered as a list, any DOM mutation that completes within
+  the settle window. The result is the full page as the browser's first paint would
+  show it — complete for crawlers and no-JS visitors. The client re-renders (does not
+  hydrate) the settled HTML, since the DOM may carry content the synchronous virtual DOM
+  does not. New config keys: `ssr.settle` (bool, default false), `ssr.settle_delay` (ms,
+  default 100). Requires `jsdom` as an optional peer dependency
+  (`npm install --save-dev jsdom`).
 - **Server-side rendering for SEO.** The first-paint response of an eligible route is
   prerendered to real HTML through a Node SSR bridge (`bin/ssr.mjs`), using the same
   compiled `Component` the browser would receive run through `@vue/server-renderer`. The

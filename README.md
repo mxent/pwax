@@ -1838,6 +1838,44 @@ prerender — naming what happened and what to do — and the route serves the o
 shell. The alternative is markup that looks right, gets indexed, and is discarded the
 moment the browser hydrates it.
 
+### Settle mode: post-mount rendering
+
+The standard SSR pass is a single synchronous render (`renderToString`), which captures the
+initial markup but nothing that happens after `mounted()`: a Tailwind CDN script injecting
+`<style>` tags, a `fetch` that populates a list, a `setTimeout` that reveals content. The
+browser renders all of that; the crawler sees none of it.
+
+Settle mode fixes this. When `ssr.settle` is true, the bridge mounts the app to a jsdom
+document, lets lifecycle hooks run, and waits for async work to settle before serialising
+the final DOM. The result includes everything the browser's first paint would — injected
+styles, fetched data, any DOM mutation that completes within the settle window.
+
+```php
+'ssr' => [
+    'enabled' => true,
+    'settle' => true,           // wait for post-mount behaviour
+    'settle_delay' => 100,      // ms to wait for async work
+],
+```
+
+Install the optional peer dependency:
+
+```bash
+npm install --save-dev jsdom
+```
+
+**The client does not hydrate settled HTML.** The settled DOM may carry content the
+synchronous virtual DOM does not (the fetched list, the injected styles), so
+`createSSRApp`'s node-by-node comparison would bail out and re-render anyway. Instead the
+client re-renders from scratch — the prerendered HTML was for the crawler, and the swap is
+invisible to a visitor whose page has already painted. This is the same trade Angular
+Universal makes when hydration is not available, and it is the right one for content that
+is not knowable synchronously.
+
+Styles injected into `<head>` during the settle (Tailwind CDN, libraries that inject styles
+at mount time) are captured and inlined in the document's `<head>` with a `data-pwax-settle`
+marker, so they are visible to crawlers and present before the client re-renders.
+
 ### Observability
 
 Prerendered responses carry `X-Pwax-SSR: 1`; SPA fallbacks carry `X-Pwax-SSR: 0`. The
@@ -2095,6 +2133,8 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `ssr.cache.ttl` | `null` | Seconds to keep an entry (`null` = forever for data-free pages) |
 | `ssr.timeout` | `5` | Seconds before abandoning the Node pass and falling back |
 | `ssr.fallback` | `'spa'` | `'spa'` (serve the SPA shell on failure) or `'error'` (return 500) |
+| `ssr.settle` | `false` | Wait for post-mount behaviour (Tailwind CDN styles, async data) before serialising |
+| `ssr.settle_delay` | `100` | Milliseconds to wait for async work to settle |
 
 ### Service worker
 

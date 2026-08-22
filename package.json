@@ -31,6 +31,7 @@
     "peerDependencies": {
         "@vue/compiler-dom": "^3.5.41",
         "@vue/server-renderer": "^3.5.41",
+        "jsdom": "^25.0.0",
         "vue": "^3.5.41"
     },
     "peerDependenciesMeta": {
@@ -38,6 +39,9 @@
             "optional": true
         },
         "@vue/server-renderer": {
+            "optional": true
+        },
+        "jsdom": {
             "optional": true
         },
         "vue": {

@@ -41,7 +41,7 @@
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}" dir="{{ $pwaxShell->direction() }}">
 
 <head>
-    <x-pwax::includes.head :shell="$pwaxShell" :component="$pwaxComponent ?? null" :head="$pwaxHead ?? null" :title="$pwaxTitle ?? null" :prerendered="$pwaxSsr ?? false" :importStyles="$pwaxImportStyles ?? []" />
+    <x-pwax::includes.head :shell="$pwaxShell" :component="$pwaxComponent ?? null" :head="$pwaxHead ?? null" :title="$pwaxTitle ?? null" :prerendered="$pwaxSsr ?? false" :importStyles="$pwaxImportStyles ?? []" :headStyles="$pwaxHeadStyles ?? []" />
     @stack('pwax-head')
 </head>
 

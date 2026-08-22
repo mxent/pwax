@@ -539,6 +539,7 @@ class ComponentResponse implements Responsable
         $prerendered = null;
         $state = null;
         $importStyles = [];
+        $headStyles = [];
         $ssr = false;
 
         $prerenderer = app(Prerenderer::class);
@@ -557,6 +558,7 @@ class ComponentResponse implements Responsable
                 // too late for markup that is already on screen and never for a visitor
                 // without JavaScript.
                 $importStyles = $result['styles'];
+                $headStyles = $result['headStyles'] ?? [];
                 $ssr = true;
 
                 // The per-response hydration signal travels in the initial payload, not
@@ -566,7 +568,14 @@ class ComponentResponse implements Responsable
                 // is where the runtime reads it and what a crawler or a no-JS visitor can
                 // see. Sending it in both places shipped every prerendered page's state
                 // twice for a copy nothing ever read.
-                $payload['hydrate'] = true;
+                //
+                // When the bridge used settle mode (jsdom mount + wait for post-mount
+                // behaviour), it returns `hydrate: false` because the settled DOM may
+                // carry content the synchronous virtual DOM does not — injected Tailwind
+                // styles, fetched data — and `createSSRApp`'s node-by-node comparison would
+                // bail out and re-render anyway. The prerendered HTML is for the crawler;
+                // the client re-renders for interactivity, replacing the prerendered DOM.
+                $payload['hydrate'] = $result['hydrate'];
             }
         }
 
@@ -587,6 +596,11 @@ class ComponentResponse implements Responsable
             'pwaxState' => $state,
             'pwaxSsr' => $ssr,
             'pwaxImportStyles' => $importStyles,
+            // Styles injected into `<head>` during a settle-mode prerender (Tailwind CDN,
+            // libraries that inject styles at mount time). The shell inlines these in the
+            // real `<head>`, so they are visible to crawlers and present before the client
+            // re-renders. Empty for the standard `renderToString` path.
+            'pwaxHeadStyles' => $headStyles,
         ])->render();
 
         $response = new Response($html, $this->status, $this->headers);

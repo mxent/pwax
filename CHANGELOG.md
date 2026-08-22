@@ -247,6 +247,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`sync.enqueue()` accepted a cross-origin URL and queued the CSRF token for it.** The
+  headers stored with a queued write are the ones the runtime sends, this session's CSRF
+  token among them, and the worker replays them verbatim from a context the page cannot
+  see — so a URL on another origin, whether a typo or a third-party API somebody meant to
+  call, handed that token away. `push.js` refuses exactly this for `pwax.push.endpoint`,
+  in the same words; the queue had no such guard. It now returns `false` and says why.
+
+- **A queued write that met a 419 could never succeed.** `RETRYABLE` keeps 419 out of the
+  set of statuses that count as the server answering, precisely so a write that sat offline
+  past `session.lifetime` is not deleted — but the replay re-sent the *stored* headers, so
+  the retry presented the same dead token and got the same 419, for ever. The entry was
+  immortal, the write never landed, and the "3 changes will send when you are back online"
+  counter never moved. The worker now asks an open page for the session's current token
+  before it drains the queue (once per drain, not once per entry) and swaps it into each
+  entry's headers. With no page open — a genuine Background Sync wake — the stored token is
+  still used, which is where this started, so nothing is worse than before.
+
 - **Resource hints for configured plugins and directives were never emitted.**
   `Shell::modulePreloads()` read `pwax.plugins` and `pwax.directives`; the group moved under
   `pwax.vue.*` in 5.0, so those keys no longer exist and the reader was handed an empty

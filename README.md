@@ -731,6 +731,16 @@ prompt, and spending it is the application's decision.
 payment as readily as a draft, and only the application knows which of its requests repeat
 safely.
 
+It takes URLs on your own origin only, and returns `false` for anything else. What is
+stored alongside the request is the headers the runtime sends, this session's CSRF token
+among them, and the worker replays them from a context the page cannot see — so a
+cross-origin URL there would hand that token to somebody else. Call a third-party API from
+the page, where you control the headers.
+
+The token itself is refreshed at replay time from whatever page is open, not sent as it was
+when the write was queued. That is what makes a write that sat offline past
+`session.lifetime` succeed on its retry rather than meeting the same 419 for ever.
+
 ### Being opened by the operating system
 
 Three manifest members hand your application an entry point from outside the browser, and

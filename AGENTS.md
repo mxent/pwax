@@ -102,7 +102,13 @@ These are non-negotiable; the maintainers reject PRs that deviate.
 
 ### PHP
 
-- `declare(strict_types=1);` in every file. No exceptions.
+- **No `declare(strict_types=1);`.** This is a library: strict types apply
+  at the *caller's* boundary, so turning them on changes what an
+  application is allowed to pass to `ComponentResponse::status()` or
+  `cacheable()` — a `"3600"` out of a config file stops working. Laravel's
+  own first-party packages omit it for the same reason. Type coercion is
+  handled explicitly instead: every value read out of configuration is cast
+  at the point of use, which is why `(int)` and `(string)` are everywhere.
 - Single quotes for strings, double quotes only for interpolation.
 - Curly braces on every control structure, including single-line bodies.
 - PHP 8 constructor property promotion: `public function __construct(public X $x) {}`.
@@ -133,9 +139,9 @@ done. Both must be clean.
   signed id.
 
 Run `npm run build` after every JS edit and `npx vitest run` to confirm the
-existing tests still pass. The four pre-existing failures in
-`tests/js/renderFunction.test.js` are a known flake from a peer-dep issue
-with `@vue/compiler-dom`; do not try to fix them as part of unrelated work.
+existing tests still pass. The whole suite is green; a failure in
+`tests/js/renderFunction.test.js` means `npm ci` has not been run or the
+`@vue/compiler-dom` peer dependency is missing, not a known flake.
 
 ### Tests
 
@@ -235,13 +241,18 @@ fine; removing from them is a major version.
 - The global helpers: `pwax()`, `pwaxRender()`, `pwaxRoute()`. Knowing one
   spelling gives you the others.
 - `Mxent\Pwax\Http\Responses\ComponentResponse` and its fluent API:
-  `title()`, `description()`, `canonical()`, `meta()`, `property()`,
-  `offline()`, `status()`, `prerenderable()`, `spaOnly()`. Implements
-  `Responsable`, so a controller can `return $response;`.
+  `title()`, `description()`, `canonical()`, `image()`, `robots()`,
+  `alternate()`, `jsonLd()`, `meta()`, `property()`, `cacheable()`,
+  `offline()`, `status()`, `asJson()`, `withHeaders()`,
+  `prerenderable()`, `spaOnly()`. Implements `Responsable`, so a
+  controller can `return $response;`.
 - The `Mxent\Pwax\Pwa\HeadMeta` resolver and its `Data\Head` value object —
   page metadata flows through this, and the runtime carries the resolved
-  head in the payload so client-side navigations update `<title>` and the
-  meta tags too.
+  head in the payload so client-side navigations update `<title>`, the
+  meta tags, the `hreflang` links and the JSON-LD blocks too. Everything
+  the package emits into `<head>` carries `data-pwax-head`; that marker
+  is the contract, and `src/js/head.js` sweeps by it rather than by tag
+  name so a new kind of managed element needs no change there.
 - The `Mxent\Pwax\Pwa\Strategy` constants: `NETWORK_ONLY`,
   `NETWORK_FIRST`, `CACHE_FIRST`, `STALE_WHILE_REVALIDATE`. These are the
   only accepted spellings; the 3.x aliases (`freshness`, `performance`,
@@ -502,9 +513,11 @@ half of the issues that arrive on the maintainer queue:
 - **A new `window.pwax.*` namespace named after the application** — the
   namespace is the package's, not the consumer's. Applications attach
   their own data to `window`, not to `window.pwax`.
-- **Custom `@stack('pwax-body')`, `@stack('pwax-foot')`** — only
-  `@stack('pwax-head')` is wired up. The shell renders foot content via
-  the `pwax.blade.foot` override.
+- **Custom `@stack('pwax-body')`** — the shell wires up two stacks and
+  that is not one of them. `@stack('pwax-head')` renders inside `<head>`
+  and `@stack('pwax-foot')` after the vendor scripts at the end of
+  `<body>`; content pushed to any other name is silently dropped. For a
+  whole partial rather than a push, use the `pwax.blade.foot` override.
 - **A `pwax_component()` global helper** — it does not exist (was
   removed). The function is `pwaxImport()` (camelCase), and it is called
   via `@pwaxImport(...)` inside Blade, not as a free helper.

@@ -306,4 +306,43 @@ class ShellTest extends TestCase
 
         $this->assertSame('/', $this->shell()->runtimeConfig()['home']);
     }
+
+    /**
+     * The shell wires up two stacks, and both are public API.
+     *
+     * `pwax-foot` was wired up and documented nowhere, which is the same thing as not
+     * existing: an application that found it had no promise it would keep working, and
+     * AGENTS.md said outright that it was not there. It renders after the vendor scripts,
+     * which is the whole reason to want it — that is where a script needing Vue to have
+     * evaluated has to go.
+     *
+     * Pushed from views rendered inside the shell render, which is the only place a push
+     * survives: Blade flushes its stacks when the outermost render finishes, so a
+     * `View::startPush()` in a controller is gone before the shell asks for it.
+     */
+    public function test_the_shell_renders_both_of_its_stacks(): void
+    {
+        config()->set('pwax.blade.head', 'stacks.head');
+        config()->set('pwax.blade.foot', 'stacks.foot');
+
+        $this->app['router']->middleware('web')->get('/stacked', fn () => pwaxRender('pages.home'));
+
+        $html = (string) $this->get('/stacked')->getContent();
+
+        $this->assertStringContainsString('<meta name="from-the-head-stack" content="1">', $html);
+        $this->assertStringContainsString('<script id="from-the-foot-stack"></script>', $html);
+
+        // Position, not just presence. The point of the foot stack is that Vue has already
+        // evaluated by the time the pushed content runs; the point of the head stack is
+        // that it is in the head at all.
+        $this->assertGreaterThan(
+            strrpos($html, 'vue.global.prod.js'),
+            strpos($html, 'from-the-foot-stack'),
+        );
+
+        $this->assertLessThan(
+            strpos($html, '</head>'),
+            strpos($html, 'from-the-head-stack'),
+        );
+    }
 }

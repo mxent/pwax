@@ -205,7 +205,72 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the `push_subscriptions` table exists when VAPID is configured. Each is a check
   that previously failed silently or in a place the developer was not looking.
 
+- **The rest of the page-metadata surface.** `title()`, `description()`, `canonical()`,
+  `meta()` and `property()` were the whole of what a page could say about itself, which
+  leaves out most of what a page has to say. `ComponentResponse` gains four methods, each
+  with an application-wide default under `pwax.head`:
+  - `image($url)` — sets `og:image` and `twitter:image` together, because a page that has
+    one and not the other is a page whose link preview depends on which service is
+    unfurling it. Default: `head.image`.
+  - `robots($directives)` — `<meta name="robots">`, with `head.robots` as the place a
+    staging deployment says `noindex, nofollow` once rather than on every route. It is
+    applied whether or not Open Graph derivation is on, so turning derivation off cannot
+    silently start indexing that deployment.
+  - `jsonLd($schema)` — a `<script type="application/ld+json">` block, repeatable for a page
+    that makes several claims. Default: `head.json_ld`. A page that calls it *replaces* the
+    default rather than adding to it: an `Article` and an `Organization` are two claims
+    about two different things, and emitting both against one URL says the page is both.
+  - `alternate($hreflang, $href)` — `<link rel="alternate" hreflang>`, so a localised page
+    is not competing with its own translations in the index. Default: `head.alternates`,
+    which takes the map spelling (`['fr' => '/fr']`).
+
+  All four are rendered into the document — so a prerendered page carries them for the
+  crawler that does not run JavaScript — and all four travel in the payload, so a
+  client-side navigation replaces them. That last part is why they belong here rather than
+  in `@stack('pwax-head')`: a hand-written `ld+json` block in the stack is rendered once and
+  never replaced, so from the second page onwards it describes a page the visitor has left.
+  Stale structured data is not a missing rich result, it is a wrong one.
+
+- **`og:locale`, derived from the application locale.** In Open Graph's underscored form,
+  so a localised application declares its locale once rather than in three places that can
+  disagree. Overridable with `head.locale`.
+
+- **URLs in Open Graph tags are made absolute.** `og:image`, `og:url`, `twitter:image` and
+  the rest are resolved against `app.url` when given a site-relative path. A scraper reading
+  the tag does not necessarily have the document to resolve one against, and the failure is
+  a link preview with no image rather than an error — so nobody finds out until someone
+  shares a link.
+
+- **`pwax:doctor` checks the document head.** No sharing image configured; a `head.robots`
+  that would `noindex` the whole site; `head.json_ld` with no `@context`; an alternate with
+  no URL. Every one of them concerns a tag nobody on the team ever looks at.
+
 ### Fixed
+
+- **Resource hints for configured plugins and directives were never emitted.**
+  `Shell::modulePreloads()` read `pwax.plugins` and `pwax.directives`; the group moved under
+  `pwax.vue.*` in 5.0, so those keys no longer exist and the reader was handed an empty
+  array. The entries lost were the most load-bearing on the list — the runtime `await`s
+  plugins and directives *before* it mounts, so each was a serial round trip on the critical
+  path with no hint at all. Nothing failed: a missing resource hint costs a round trip and
+  never an error, and the test that should have caught it set the old key too. It now
+  asserts that the hints and the runtime config read the same place, whatever it is called
+  next.
+
+- **The `<noscript>` rule that hides the preloader carried no CSP nonce.** Under a strict
+  `style-src 'nonce-…'` it was refused — and that one rule lifts an opaque, full-viewport
+  cover off the "enable JavaScript" message beneath it, so the only visitor who ever reaches
+  that markup was left looking at a spinner that would never stop. `Shell::nonce()` also
+  resolved the value afresh for each of its callers, so a `csp.nonce` callable minting one
+  per call gave the head, the foot, the shell and the runtime config four different nonces
+  where the header names exactly one; it is memoised per shell now.
+
+- **The SSR prerender memo grew for the life of the worker.** `Prerenderer` is a singleton
+  and its memo was documented as per-request. It is per *worker*: under `php artisan serve`
+  the container is torn down after every request and the growth is invisible, but under
+  Octane, FrankenPHP or Swoole it accumulated a rendered HTML document plus its serialized
+  state per distinct page for as long as the process lived — which is the deployment SSR is
+  most likely to be running in. It is bounded now, evicting oldest-first.
 
 - **A prerendered page whose mount element holds anything else is repaired, and says so.**
   Vue hydrates from `container.firstChild`, and its recovery from a mismatch there is to
@@ -293,6 +358,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   components with an unscoped `<style>` block.
 
 ### Changed
+
+- **`head.twitter_card` defaults to `null` and follows the image.** A card declaring
+  `summary_large_image` with no image renders as a bare summary anyway, and a `summary`
+  beside a 1200x630 image throws most of that artwork away — so left null the card follows
+  the one fact that decides which of the two is right. A `config/pwax.php` published before
+  this carries a literal `'summary'` and keeps exactly the tag it had; set the key
+  explicitly to pin one spelling for every page.
 
 - **`plugins`, `directives` and the client-side middleware now live under `pwax.vue.*`.**
   The two configs that shared the word "middleware" — `pwax.middleware` (the Laravel

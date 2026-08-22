@@ -242,13 +242,19 @@ return pwaxRender('pages.post.show', ['post' => $post])
     ->title($post->meta_title ?: $post->title)
     ->description($post->excerpt)
     ->canonical(route('posts.show', $post))
-    ->property('og:image', $post->image_url)
-    ->meta('robots', $post->draft ? 'noindex' : null)
+    ->image($post->image_url)
+    ->robots($post->draft ? 'noindex' : 'index, follow')
     ->offline(false); // refuse service-worker caching for this page
 ```
 
-Methods available: `title()`, `description()`, `canonical()`, `meta()`,
-`property()`, `offline()`, `status()`, `prerenderable()`, `spaOnly()`. Use `->status(404)` instead of
+Methods available: `title()`, `description()`, `canonical()`,
+`image()`, `robots()`, `alternate()`, `jsonLd()`, `meta()`,
+`property()`, `cacheable()`, `offline()`, `status()`, `asJson()`,
+`withHeaders()`, `prerenderable()`, `spaOnly()`.
+
+`->image()` sets `og:image` and `twitter:image` together and makes a
+site-relative path absolute; `->robots()` is `->meta('robots', …)` with
+an application-wide default under `pwax.head.robots`. Use `->status(404)` instead of
 converting the response to a Symfony `Response` and calling
 `setStatusCode()` on it — that bypasses the runtime's signal that the
 URL produced a real page. The 404 fallback should look like:
@@ -273,12 +279,13 @@ fluent API on the response (§6) instead.
 The flow is:
 
 1. The route calls `pwaxRender(...)` and optionally chains
-   `->title()`, `->description()`, `->canonical()`, `->meta()`,
+   `->title()`, `->description()`, `->canonical()`, `->image()`,
+   `->robots()`, `->alternate()`, `->jsonLd()`, `->meta()`,
    `->property()` on the response.
 2. `Mxent\Pwax\Pwa\HeadMeta::resolve()` fills in defaults from
-   `pwax.head.*` (title, title_template, description, open_graph,
-   twitter_card) and derives Open Graph / Twitter card tags from the
-   values that are set.
+   `pwax.head.*` (title, title_template, description, image, robots,
+   locale, alternates, json_ld, open_graph, twitter_card) and derives
+   Open Graph / Twitter card tags from the values that are set.
 3. The shell renders `<title>`, `<meta>`, `<link rel="canonical">`
    from the resolved `Head`, with `data-pwax-head` so the runtime can
    replace them on a client-side navigation.
@@ -297,23 +304,57 @@ title — `':title · Acme'` against a fallback of `'Acme'` would render
    that. A page that wants no canonical URL simply omits it and the
    previous page's is removed.
 
-### JSON-LD and other <head> extensions
+### JSON-LD
 
-Use `@stack('pwax-head')` to inject extra head content from a partial:
+Structured data belongs on the response, not in a stack:
+
+```php
+pwaxRender('pages.post', compact('post'))
+    ->title($post->title)
+    ->image($post->cover_url)
+    ->jsonLd([
+        '@context' => 'https://schema.org',
+        '@type' => 'Article',
+        'headline' => $post->title,
+        'datePublished' => $post->published_at->toIso8601String(),
+    ]);
+```
+
+Call `->jsonLd()` more than once for a page that makes several claims
+(an `Article` and the `BreadcrumbList` above it) and each becomes its
+own block. The package escapes the JSON so a value from the database
+cannot close the block, and stamps the CSP nonce on it.
+
+A page that calls `->jsonLd()` **replaces** `pwax.head.json_ld` rather
+than adding to it: an `Article` and an `Organization` are two claims
+about two different things, and emitting both against one URL says the
+page is both.
+
+Do **not** reach for `@push('pwax-head')` with a hand-written
+`<script type="application/ld+json">` for per-page data. That block is
+rendered once into the document and is never replaced on a client-side
+navigation, so from the second page onwards it describes a page the
+visitor has left. Stale structured data is not a missing rich result,
+it is a wrong one. The stack is for document-level content that is the
+same on every page.
+
+### Other <head> extensions
+
+Use `@stack('pwax-head')` for content that belongs to the document
+rather than to the page — a verification tag, the site's own
+`Organization` graph:
 
 ```blade
 @once
     @push('pwax-head')
-        <script type="application/ld+json">
-            {!! json_encode($schema, JSON_UNESCAPED_SLASHES) !!}
-        </script>
+        <meta name="google-site-verification" content="…">
     @endpush
 @endonce
 ```
 
 The shell renders `data-pwax-head` markers on its own tags so the
-runtime knows to replace them on a client-side navigation; anything
-inside `@stack('pwax-head')` keeps the same behaviour.
+runtime knows which to replace on a client-side navigation; anything
+inside `@stack('pwax-head')` is left alone.
 
 ---
 

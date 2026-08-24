@@ -1,0 +1,45 @@
+# Dependencies
+/vendor/
+/node_modules/
+composer.lock
+
+# IDE and Editor Files
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+# NOTE: /dist is intentionally NOT ignored — the built client runtime is committed
+# and shipped inside the Composer package. CI fails if it drifts from src/js.
+/build/
+
+# Testing
+.phpunit.result.cache
+/.phpunit.cache
+/coverage/
+
+# Testbench workbench scratch space
+/workbench/database/*.sqlite
+/vendor/orchestra/testbench-core/laravel/storage/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+/tmp/
+*.tmp
+*.bak
+*~

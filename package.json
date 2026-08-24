@@ -1,0 +1,41 @@
+{
+    "name": "@mxent/pwax",
+    "version": "1.0.0",
+    "private": true,
+    "description": "Client runtime for the mxent/pwax Laravel package. Built to dist/pwax.js and shipped inside the Composer package — npm install is only needed to contribute.",
+    "license": "MIT",
+    "type": "module",
+    "scripts": {
+        "build": "node build.js",
+        "dev": "node build.js --watch",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "lint": "eslint src/js tests/js build.js bin",
+        "lint:fix": "eslint --fix src/js tests/js build.js bin",
+        "format": "prettier --write \"src/js/**/*.{js,mjs}\" \"tests/js/**/*.js\" build.js \"bin/**/*.mjs\"",
+        "format:check": "prettier --check \"src/js/**/*.{js,mjs}\" \"tests/js/**/*.js\" build.js \"bin/**/*.mjs\"",
+        "types": "tsc --noEmit --strict --lib es2022,dom types/pwax.d.ts"
+    },
+    "devDependencies": {
+        "@vue/compiler-dom": "^3.5.41",
+        "esbuild": "^0.28.2",
+        "eslint": "^10.9.0",
+        "globals": "^17.11.0",
+        "jsdom": "^30.0.1",
+        "prettier": "^3.9.6",
+        "typescript": "^7.0.2",
+        "vitest": "^4.1.11"
+    },
+    "peerDependencies": {
+        "@vue/compiler-dom": "^3.5.41"
+    },
+    "peerDependenciesMeta": {
+        "@vue/compiler-dom": {
+            "optional": true
+        }
+    },
+    "engines": {
+        "node": ">=20"
+    },
+    "types": "types/pwax.d.ts"
+}

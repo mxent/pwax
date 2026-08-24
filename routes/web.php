@@ -1,0 +1,102 @@
+<?php
+
+use Illuminate\Support\Facades\Route;
+use Mxent\Pwax\Http\Controllers\PwaxController;
+use Mxent\Pwax\Http\Middleware\HandlePwaxRequests;
+
+/*
+|--------------------------------------------------------------------------
+| Pwax routes
+|--------------------------------------------------------------------------
+|
+| Component endpoints run through the application's own middleware stack —
+| `web` by default. That matters: a component is a Blade view, and it may call
+| `auth()`, read the session, or branch on a policy. Without middleware here,
+| every component would render as a guest.
+|
+| Set `pwax.routes.register` to false to register these yourself instead.
+|
+*/
+
+$prefix = trim((string) config('pwax.route_prefix', '__pwax__'), '/');
+
+// Pwax's own middleware is named explicitly rather than relied upon through the group,
+// so these routes behave correctly even if the application replaces the group's contents.
+/** @var list<string> $middleware */
+$middleware = array_values(array_unique(array_merge(
+    (array) config('pwax.middleware', ['web']),
+    [HandlePwaxRequests::class],
+)));
+
+Route::group(array_filter([
+    'prefix' => $prefix,
+    'as' => 'pwax.',
+    'middleware' => $middleware,
+    'domain' => config('pwax.routes.domain'),
+]), function (): void {
+    // A component has exactly one representation: an ES module carrying its template,
+    // script, styles and scope together. One request gives the client everything, and
+    // there is no second shape of URL to sign, cache or reason about.
+    //
+    // Identifiers are base64url + a hex signature, so the character class is tight.
+    Route::get('/c/{id}.js', [PwaxController::class, 'js'])
+        ->where('id', '[A-Za-z0-9_-]+')
+        ->name('js');
+});
+
+/*
+|--------------------------------------------------------------------------
+| Static endpoints
+|--------------------------------------------------------------------------
+|
+| The runtime bundle, the manifest and the service worker are the same for every
+| visitor and never read the session, so they are deliberately kept out of the
+| `web` group. Putting them in it would start a session and set a cookie on
+| requests that have no use for either.
+|
+*/
+
+Route::group(array_filter([
+    'middleware' => (array) config('pwax.routes.static_middleware', []),
+    'domain' => config('pwax.routes.domain'),
+]), function () use ($prefix): void {
+    Route::get($prefix . '/pwax.js', [PwaxController::class, 'runtime'])->name('pwax.runtime');
+
+    // The bundle's own `sourceMappingURL` points here. Without it every developer who
+    // opens devtools gets a 404 from the package and debugs minified code.
+    Route::get($prefix . '/pwax.js.map', [PwaxController::class, 'sourceMap'])->name('pwax.runtime-map');
+
+    // Same for the worker, which is a built bundle and ends with its own
+    // `sourceMappingURL`. Without this every developer who opens devtools on the worker
+    // gets a 404 from the package and steps through minified code.
+    Route::get($prefix . '/pwax-sw.js.map', [PwaxController::class, 'workerSourceMap'])
+        ->name('pwax.worker-map');
+
+    Route::get(
+        ltrim((string) config('pwax.manifest_path', '/manifest.json'), '/'),
+        [PwaxController::class, 'manifest']
+    )->name('pwax.manifest');
+
+    // Registered unconditionally so that toggling `service_worker.enabled` at runtime
+    // takes effect without rebuilding the route table; the controller returns 404 when
+    // the worker is off.
+    Route::get(
+        ltrim((string) config('pwax.service_worker.path', '/sw.js'), '/'),
+        [PwaxController::class, 'serviceWorker']
+    )->name('pwax.service-worker');
+
+    // The asset manifest the worker installs the application from — every vendor bundle,
+    // the runtime, the offline shell and every component, each with a content hash.
+    Route::get(
+        ltrim((string) config('pwax.service_worker.asset_manifest.path', '/sw.json'), '/'),
+        [PwaxController::class, 'assetManifest']
+    )->name('pwax.asset-manifest');
+
+    // The offline shell. Deliberately in this group and not in `web`: it must render
+    // without a session so that what gets precached carries no CSRF token and no
+    // signed-in user's data.
+    Route::get(
+        ltrim((string) config('pwax.service_worker.shell.path', '/__pwax__/shell'), '/'),
+        [PwaxController::class, 'shell']
+    )->name('pwax.shell');
+});

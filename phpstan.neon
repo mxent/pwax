@@ -1,0 +1,16 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 8
+
+    # `config/pwax.php` is a plain array literal with nothing to analyse, and analysing it
+    # only trips the rule against `env()` outside a real application's config directory.
+    paths:
+        - src
+        - routes
+
+    excludePaths:
+        - src/helpers.php
+
+    treatPhpDocTypesAsCertain: false

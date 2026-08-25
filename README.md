@@ -560,12 +560,41 @@ export default {
 </script>
 ```
 
+### The page comes back as you left it
+
+Removing the round trip is only half of it. A page that is fetched again is also *mounted*
+again, so a half-filled form comes back empty however fast the navigation was. Retained
+pages keep their component instance alive in a Vue
+[`<KeepAlive>`](https://vuejs.org/guide/built-ins/keep-alive.html), so what comes back is
+the page you left — the text you had typed, the list scrolled where you scrolled it, the
+panel you had open.
+
+That changes one thing about lifecycle, and it is the thing to know:
+
+```js
+export default {
+    mounted()   { this.load(); },   // runs once, and NOT again on the way back
+    activated() { this.load(); },   // runs on first render and on every return
+};
+```
+
+A page that must be current every time it is shown does that work in `activated()`.
+`deactivated()` is its pair, for stopping a timer or a subscription while the page is off
+screen. Both fire only for retained pages; on a page that is not retained, `mounted()`
+still runs on every visit as before.
+
 ```php
 'restore' => [
     'enabled' => true,
     'entries' => 12,     // pages kept; the least recently used is dropped
+    'state'   => true,   // keep the component instance too, not just the payload
 ],
 ```
+
+`state => false` keeps the round-trip saving and drops the instance retention — the
+setting for an application whose pages assume `mounted()` runs on every visit. `entries`
+caps both, so the payload store and `<KeepAlive>` never disagree about which pages are
+live.
 
 Pages are held **in memory only** and never written to disk, so a reload, a new tab or a
 closed browser leaves nothing behind — a payload can carry a signed-in visitor's data, and
@@ -1929,7 +1958,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `security.cross_origin_opener_policy` | `'same-origin-allow-popups'` | Documents only; `'same-origin'` for cross-origin isolation |
 | `security.cross_origin_embedder_policy` | `null` | Off. `'require-corp'` completes cross-origin isolation |
 | `prefetch.mode`, `.delay` | `'hover'`, `65` | Fetch a page before it is asked for; `false` turns it off |
-| `restore.enabled`, `.entries` | `true`, `12` | Render back/forward from memory instead of refetching; `false` turns it off |
+| `restore.enabled`, `.entries`, `.state` | `true`, `12`, `true` | Render back/forward from memory instead of refetching, keeping each page's component instance; `false` turns it off |
 | `push.public_key`, `.private_key` | `null` | VAPID pair; `pwax:vapid` generates one |
 | `push.endpoint` | `null` | Your route that stores a subscription |
 | `push.title`, `.icon`, `.badge` | `null` | Fallbacks for a push payload that omits them |

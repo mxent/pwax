@@ -525,9 +525,25 @@ return [
     | `window.pwax.restore.forget(path)`, drop everything with `clear()`, or a page can opt
     | out for good by declaring `restore: false` in its script, next to `middleware`.
     |
-    | 'entries' caps how many pages are held. They are held in memory only, never written
-    | to disk, and never expire while the document lives — a page payload can carry a
-    | signed-in visitor's data, so a reload or a new tab starts with nothing.
+    | 'state' also keeps the page's *component instance* alive, in a Vue `<KeepAlive>`, so
+    | going back returns to the page rather than to a fresh copy of it: a half-filled form,
+    | a scrolled list, an open panel are all still there. Note what that means for
+    | lifecycle — a retained page's `mounted()` runs once and does not run again on the way
+    | back. A page that must refresh itself on every return does that work in `activated()`
+    | instead, which fires on the first render and on every return after it:
+    |
+    |     export default {
+    |         mounted()   { this.load(); },   // runs once
+    |         activated() { this.load(); },   // runs on every return — use this one
+    |     };
+    |
+    | Set 'state' => false to keep the round trip saving without the instances, which is
+    | the setting for an application whose pages assume `mounted()` runs on every visit.
+    |
+    | 'entries' caps how many pages are held, and doubles as the `<KeepAlive>` cap so the
+    | two never disagree about which pages are live. They are held in memory only, never
+    | written to disk, and never expire while the document lives — a page payload can carry
+    | a signed-in visitor's data, so a reload or a new tab starts with nothing.
     |
     | false  off; every navigation fetches
     |
@@ -536,6 +552,7 @@ return [
     'restore' => [
         'enabled' => true,
         'entries' => 12,
+        'state' => true,
     ],
 
     /*

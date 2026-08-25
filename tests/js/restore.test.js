@@ -9,6 +9,10 @@
  * The flag that carries it is consumed once per navigation, which is the part most easily
  * broken by a later change — a pop that misses the cache must not leave the flag set for
  * the click that follows it.
+ *
+ * The stored values here are stand-ins. In the runtime each entry is a `{payload, options}`
+ * pair — the store is deliberately incurious about that, and these are about which entry
+ * comes back and when, not what is in it.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { createRestore } from '../../src/js/restore.js';

@@ -53,8 +53,12 @@ declare namespace Pwax {
         push: { publicKey: string | null; endpoint: string | null };
         prefetch: { mode: string; delay: number } | false;
         progress: { delay: number; trickle: boolean } | false;
-        /** How many rendered pages to keep for the back button, or `false` to keep none. */
-        restore: { entries: number } | false;
+        /**
+         * How many rendered pages to keep for the back button, or `false` to keep none.
+         * `state` additionally keeps each page's component instance alive in a
+         * `<KeepAlive>`, so a half-filled form survives going back.
+         */
+        restore: { entries: number; state: boolean } | false;
         templates: Record<string, string>;
         /** The resolved `pwax.vue.*` extensions, keyed by the name they were configured under. */
         plugins: Record<string, RuntimeExtension>;

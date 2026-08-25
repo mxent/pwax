@@ -327,9 +327,11 @@ describe('what stays on screen during a navigation', () => {
         });
 
         // Guarded on the absence of a component, not on `loading` — that guard is what
-        // used to replace the page you were reading.
-        expect(page.template).toContain('v-if="!component"');
-        expect(page.template).not.toContain('v-else-if="loading"');
+        // used to replace the page you were reading. Matched without the `v-if` /
+        // `v-else-if` prefix, because which of the two carries it is a detail of how the
+        // branches are ordered; that it is `!component` and never `loading` is not.
+        expect(page.template).toMatch(/v-(else-)?if="!component"/);
+        expect(page.template).not.toContain('loading"');
     });
 });
 

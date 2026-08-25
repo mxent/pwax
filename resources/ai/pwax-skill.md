@@ -587,11 +587,30 @@ export default {
 </script>
 ```
 
+Retained pages also keep their **component instance** alive in a Vue
+`<KeepAlive>` (`pwax.restore.state`, default `true`), so a half-filled
+form, a scrolled list or an open panel is still there on the way back.
+
+This changes lifecycle, and it is the thing that catches people:
+
+```js
+export default {
+    mounted()   { this.load(); },   // runs once, NOT again on the way back
+    activated() { this.load(); },   // first render AND every return — use this
+};
+```
+
+A page that must be current every time it is shown loads in
+`activated()`; `deactivated()` is its pair for stopping timers. Set
+`pwax.restore.state => false` to keep the round-trip saving without the
+instances, for an application whose pages assume `mounted()` runs every
+visit.
+
 Held in memory only, never written to disk, capped at `entries` (default
-12) and never expiring while the document lives. A reload or a new tab
-starts with nothing, because a payload can carry a signed-in visitor's
-data. Do **not** reach for `sessionStorage` to make it survive a reload;
-that is the reason it does not.
+12, which caps `<KeepAlive>` too) and never expiring while the document
+lives. A reload or a new tab starts with nothing, because a payload can
+carry a signed-in visitor's data. Do **not** reach for `sessionStorage`
+to make it survive a reload; that is the reason it does not.
 
 Scroll position is restored by the router and is unaffected by any of this.
 

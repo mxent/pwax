@@ -21,8 +21,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wrong and `clear()` drops all of them; a page opts out for good with `restore: false` in
   its script, next to `middleware`.
 
+  Retained pages keep their **component instance** alive in a Vue `<KeepAlive>`, so what
+  comes back is the page you left — the text you had typed, the list scrolled where you
+  scrolled it. Note the lifecycle consequence: a retained page's `mounted()` runs once and
+  does **not** run again on the way back. A page that must be current every time it is
+  shown does that work in `activated()`, which fires on the first render and on every
+  return; `deactivated()` is its pair.
+
   Pages are held in memory only, never written to disk, and capped by
-  `pwax.restore.entries` (default 12). `pwax.restore.enabled => false` turns it off.
+  `pwax.restore.entries` (default 12, which caps `<KeepAlive>` too).
+  `pwax.restore.state => false` keeps the round-trip saving without the instances, and
+  `pwax.restore.enabled => false` turns the whole thing off.
 
 ### Fixed
 

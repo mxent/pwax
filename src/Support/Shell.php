@@ -128,7 +128,12 @@ class Shell
      * it through as `['entries' => 0]` would leave the runtime listening for pops to
      * answer them from a store that can never hold anything.
      *
-     * @return array{entries: int}|false
+     * `state` is the `<KeepAlive>` half — whether a page's component instance is kept, and
+     * not merely its payload. It rides along with `entries` rather than being its own key
+     * because it cannot work alone: the runtime needs a stored options object to give Vue
+     * a stable component identity, and that object lives in the same store `entries` caps.
+     *
+     * @return array{entries: int, state: bool}|false
      */
     private function restore(): array|false
     {
@@ -142,7 +147,10 @@ class Shell
             return false;
         }
 
-        return ['entries' => $entries];
+        return [
+            'entries' => $entries,
+            'state' => (bool) $this->config->get('pwax.restore.state', true),
+        ];
     }
 
     /**

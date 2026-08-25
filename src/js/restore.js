@@ -27,6 +27,14 @@
  * a particular page to always be current can drop it with `window.pwax.restore.forget(path)`
  * after the mutation, drop everything with `clear()`, or opt the page out entirely.
  *
+ * What is stored is a pair: the payload the page was rendered from, and the *resolved
+ * component options object* it was compiled into. The second is there for `<KeepAlive>`,
+ * which reuses a page instance — and so the form a visitor was half-way through filling
+ * in — only when the component type object is identical between the two visits. Vue's
+ * `patch()` compares `n1.type === n2.type`, and every compile produces a fresh object, so
+ * a store that hands the original back is the only way that identity can survive a
+ * navigation. Restoring recompiles nothing.
+ *
  * Held in memory only, never written to disk, and capped. A page payload can carry a
  * signed-in visitor's data, so it lives as long as the document does and no longer: a
  * reload, a new tab, or closing the browser leaves nothing behind. `sessionStorage` would
@@ -82,19 +90,24 @@ export function createRestore(config = {}, target = window) {
 
     return {
         /**
-         * Keep the payload that rendered a path.
+         * Keep what rendered a path: `{payload, options}`.
          *
          * Re-remembering a path already held moves it to the end of the map, which is what
          * makes eviction least-recently-used rather than first-in: a page visited
          * repeatedly should not be dropped because it was first seen a long time ago.
+         *
+         * It also *replaces* the stored options with the ones just used, which keeps the
+         * store and `<KeepAlive>` agreeing on which object is this path's component. They
+         * are already the same object on a restore, so this only matters when a page was
+         * fetched and compiled afresh — and then the new object is the right one.
          */
-        remember(path, payload) {
-            if (!enabled || !limit || !path || !payload) {
+        remember(path, entry) {
+            if (!enabled || !limit || !path || !entry) {
                 return;
             }
 
             entries.delete(path);
-            entries.set(path, payload);
+            entries.set(path, entry);
 
             // A `while` rather than an `if`: `limit` can be lowered by a caller between
             // writes, and one `delete` would then leave the map permanently over cap.
@@ -104,7 +117,7 @@ export function createRestore(config = {}, target = window) {
         },
 
         /**
-         * The payload to restore this path with, or null to fetch it.
+         * The `{payload, options}` to restore this path with, or null to fetch it.
          *
          * Returns a payload only when the navigation in progress is a restoration visit,
          * so a caller cannot serve a cached page for a link click by mistake — the check
@@ -126,18 +139,18 @@ export function createRestore(config = {}, target = window) {
                 return null;
             }
 
-            const payload = entries.get(path);
+            const entry = entries.get(path);
 
-            if (payload === undefined) {
+            if (entry === undefined) {
                 return null;
             }
 
             // Refresh recency. Going back to a page is a use of it, so it should outlive
             // pages that have only been passed through once.
             entries.delete(path);
-            entries.set(path, payload);
+            entries.set(path, entry);
 
-            return payload;
+            return entry;
         },
 
         /** Drop one path, for an application that has just made it stale. */

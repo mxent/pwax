@@ -159,6 +159,20 @@ export function createPageComponent({
     // fetches rather than replaying the payload the document was served with.
     let initialPayload = initial;
 
+    /*
+     * How many page instances `<KeepAlive>` may hold, or 0 for none.
+     *
+     * Gated on the restoration cache rather than configured apart from it, because
+     * `<KeepAlive>` cannot work without it. Vue reuses a cached instance only when the
+     * component *type object* is identical between the two visits: `patch()` compares
+     * `n1.type === n2.type`, and a type that differs tears the instance down and builds a
+     * new one — in a `<KeepAlive>` it throws outright. Every compile produces a fresh
+     * options object, so the only thing that can supply a stable identity is a store that
+     * held the first one. That store is `restore`.
+     */
+    const retain =
+        config.restore && config.restore.state !== false ? config.restore.entries || 0 : 0;
+
     return {
         name: 'PwaxPage',
 
@@ -192,7 +206,7 @@ export function createPageComponent({
          * Built by `pageTemplate()` rather than written here — see that module's docblock
          * for why the fragment structure is what it is.
          */
-        template: pageTemplate(templates),
+        template: pageTemplate(templates, retain),
 
         data() {
             return {
@@ -204,6 +218,10 @@ export function createPageComponent({
                 // is not the path being navigated to. It is what keys the transition, so
                 // it must change only when the rendered page does.
                 renderedPath: null,
+                // Which of the two page slots renders: inside `<KeepAlive>`, or beside
+                // it. Moved with the swap rather than ahead of it, so a page that opts out
+                // cannot switch the slot out from under the page still on screen.
+                keepState: true,
                 // The first paint is not a navigation: the browser has just read the
                 // document, so announcing it again would be noise.
                 announced: false,
@@ -280,7 +298,7 @@ export function createPageComponent({
                     this.error = null;
                     this.currentPath = path;
 
-                    return this.mount(restored);
+                    return this.mount(restored.payload, restored.options);
                 }
 
                 this.abort();
@@ -363,7 +381,7 @@ export function createPageComponent({
             /**
              * Turn a payload into a mounted component.
              */
-            async mount(payload) {
+            async mount(payload, retained = null) {
                 if (!payload) {
                     this.fail(new Error('pwax: empty component payload'));
                     return;
@@ -381,7 +399,14 @@ export function createPageComponent({
                     // ready, so the swap never flashes unstyled content.
                     const previous = this.mountedStyleKey;
 
-                    const options = await toOptions(payload);
+                    /*
+                     * The *same* options object as last time, when this page is being
+                     * restored. Not an optimisation: it is what lets `<KeepAlive>` reuse
+                     * the instance, and therefore what preserves the form the visitor was
+                     * filling in. Compiling again would produce an equal-but-distinct type
+                     * and Vue would throw rather than reuse.
+                     */
+                    const options = retained || (await toOptions(payload));
 
                     const key = pageStyleKey(payload);
 
@@ -441,6 +466,7 @@ export function createPageComponent({
                     const swap = () => {
                         this.component = Vue.markRaw(options);
                         this.renderedPath = this.currentPath;
+                        this.keepState = options.restore !== false;
                         this.loading = false;
                     };
 
@@ -465,7 +491,7 @@ export function createPageComponent({
                      * checkout step, a flash of something that has since been read.
                      */
                     if (options.restore !== false) {
-                        restore?.remember(this.currentPath, payload);
+                        restore?.remember(this.currentPath, { payload, options });
                     }
 
                     this.$nextTick(() => {

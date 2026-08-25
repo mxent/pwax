@@ -31,14 +31,39 @@ class BackForwardRestoreTest extends TestCase
     {
         // On by default: the browser does this for a server-rendered site, and an
         // application should not have to opt in to getting it back.
-        $this->assertSame(['entries' => 12], $this->runtimeConfig()['restore']);
+        $this->assertSame(
+            ['entries' => 12, 'state' => true],
+            $this->runtimeConfig()['restore']
+        );
     }
 
     public function test_the_cap_is_configurable(): void
     {
         config()->set('pwax.restore.entries', 40);
 
-        $this->assertSame(['entries' => 40], $this->runtimeConfig()['restore']);
+        $this->assertSame(40, $this->runtimeConfig()['restore']['entries']);
+    }
+
+    public function test_component_state_can_be_left_behind_while_the_round_trip_is_kept(): void
+    {
+        config()->set('pwax.restore.state', false);
+
+        // The escape hatch for an application whose pages assume `mounted()` runs on
+        // every visit: back is still instant, but the instance is rebuilt.
+        $restore = $this->runtimeConfig()['restore'];
+
+        $this->assertFalse($restore['state']);
+        $this->assertSame(12, $restore['entries']);
+    }
+
+    public function test_state_retention_goes_away_with_restoration_itself(): void
+    {
+        config()->set('pwax.restore.enabled', false);
+
+        // `<KeepAlive>` cannot work without the stored options object that gives Vue a
+        // stable component identity, so there is no such thing as state retention with
+        // restoration switched off.
+        $this->assertFalse($this->runtimeConfig()['restore']);
     }
 
     public function test_it_can_be_switched_off_entirely(): void

@@ -523,7 +523,10 @@ return [
     | you return to is the list you left — the same bargain the browser's own back/forward
     | cache makes. An application that has just made a page wrong can drop it with
     | `window.pwax.restore.forget(path)`, drop everything with `clear()`, or a page can opt
-    | out for good by declaring `restore: false` in its script, next to `middleware`.
+    | out for good by declaring `restore: false` in its script, next to `middleware`. An
+    | opted-out page is not held at all — its payload is never stored and its component
+    | instance is destroyed on the way out rather than parked in memory, so nothing typed
+    | into a checkout step outlives the visit.
     |
     | 'state' also keeps the page's *component instance* alive, in a Vue `<KeepAlive>`, so
     | going back returns to the page rather than to a fresh copy of it: a half-filled form,
@@ -540,10 +543,12 @@ return [
     | Set 'state' => false to keep the round trip saving without the instances, which is
     | the setting for an application whose pages assume `mounted()` runs on every visit.
     |
-    | 'entries' caps how many pages are held, and doubles as the `<KeepAlive>` cap so the
-    | two never disagree about which pages are live. They are held in memory only, never
-    | written to disk, and never expire while the document lives — a page payload can carry
-    | a signed-in visitor's data, so a reload or a new tab starts with nothing.
+    | 'entries' caps how many pages are held, and caps `<KeepAlive>` with it. Worth
+    | thinking about: a retained page is a live component instance and its DOM, not just a
+    | payload, so twelve of them is twelve rendered pages held in memory. They are held in
+    | memory only, never written to disk, and never expire while the document lives — a
+    | page payload can carry a signed-in visitor's data, so a reload or a new tab starts
+    | with nothing.
     |
     | false  off; every navigation fetches
     |

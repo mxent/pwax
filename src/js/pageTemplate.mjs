@@ -59,6 +59,10 @@ export const DEFAULT_ERROR = `
  * form, a scrolled list, an open panel — so going back returns to the page rather than to
  * a fresh copy of it.
  *
+ * The key is `renderedKey`, not the path: see `pageKey()` in `page.js` for why keying a
+ * retained instance on the path is what lets `<KeepAlive>`'s cache and the restoration
+ * store disagree about which component a page is.
+ *
  * The opted-out page renders *outside* `<KeepAlive>` rather than being excluded from it.
  * Vue's `exclude` matches on a component's `name`, which a page compiled from a Blade view
  * need not have; a second slot guarded on the same flag needs no name and cannot match the
@@ -70,7 +74,7 @@ export const DEFAULT_ERROR = `
  */
 export function pageTemplate(templates = {}, retain = 0) {
     const page = (guard) =>
-        `<component v-if="${guard}" :is="component" :key="renderedPath"></component>`;
+        `<component v-if="${guard}" :is="component" :key="renderedKey"></component>`;
 
     const slot =
         retain > 0

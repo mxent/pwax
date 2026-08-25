@@ -85,7 +85,7 @@ describe('what stays on screen during a navigation', () => {
 
         const rendered = state.component;
         expect(rendered).toBeTruthy();
-        expect(state.renderedPath).toBe('/one');
+        expect(state.renderedKey).toMatch(/^\/one#/);
 
         // A second navigation, deliberately left in flight.
         const second = state.visit('/two');
@@ -94,13 +94,13 @@ describe('what stays on screen during a navigation', () => {
         // The whole fix, in one assertion: the page being rendered is still the page the
         // visitor was reading.
         expect(state.component).toBe(rendered);
-        expect(state.renderedPath).toBe('/one');
+        expect(state.renderedKey).toMatch(/^\/one#/);
 
         http.settle();
         await second;
 
         expect(state.component).not.toBe(rendered);
-        expect(state.renderedPath).toBe('/two');
+        expect(state.renderedKey).toMatch(/^\/two#/);
     });
 
     it('mounts the resolved options directly, with no async wrapper', async () => {
@@ -140,7 +140,7 @@ describe('what stays on screen during a navigation', () => {
         // Different object, same shape — what matters is that the *type* Vue sees is a
         // plain options object it can compare, not a fresh async wrapper every time.
         expect(state.component).toEqual(type);
-        expect(state.renderedPath).toBe('/one');
+        expect(state.renderedKey).toMatch(/^\/one#/);
     });
 
     it('leaves the rendered page in place when a navigation fails', async () => {
@@ -172,12 +172,12 @@ describe('what stays on screen during a navigation', () => {
         await state.visit('/missing');
 
         // The error template replaces the page — that part is deliberate, a failed
-        // navigation needs somewhere to say so. What must not move is `renderedPath`:
+        // navigation needs somewhere to say so. What must not move is `renderedKey`:
         // it keys the transition, and advancing it on a failure would animate a page out
         // with nothing behind it, so going back would have nothing to return to.
         expect(state.error).toBeTruthy();
         expect(state.component).toBe(rendered);
-        expect(state.renderedPath).toBe('/one');
+        expect(state.renderedKey).toMatch(/^\/one#/);
     });
 
     it('runs the bar for a fetch and not for the inlined landing page', async () => {
@@ -248,7 +248,7 @@ describe('what stays on screen during a navigation', () => {
 
         // `progress: false` in config resolves to null, and every call site is optional.
         await expect(state.visit('/one')).resolves.toBeUndefined();
-        expect(state.renderedPath).toBe('/one');
+        expect(state.renderedKey).toMatch(/^\/one#/);
     });
 
     it('wraps the page swap in the browser View Transitions API', async () => {

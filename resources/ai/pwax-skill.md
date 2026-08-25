@@ -577,7 +577,9 @@ window.pwax.restore.clear();              // everything, e.g. on sign-out
 
 A page that must never be restored declares it in its own script, next to
 `middleware` — for a one-time token, a checkout step, anything only correct
-at the moment it was served:
+at the moment it was served. Such a page is not held at all: its payload is
+never stored, and its instance is destroyed on the way out rather than
+parked in `<KeepAlive>`, so nothing typed into it outlives the visit:
 
 ```vue
 <script>
@@ -608,7 +610,9 @@ visit.
 
 Held in memory only, never written to disk, capped at `entries` (default
 12, which caps `<KeepAlive>` too) and never expiring while the document
-lives. A reload or a new tab starts with nothing, because a payload can
+lives. A retained page is a live component instance and its DOM, not
+just a payload, so the cap is a real memory decision — lower it for an
+application with heavy pages. A reload or a new tab starts with nothing, because a payload can
 carry a signed-in visitor's data. Do **not** reach for `sessionStorage`
 to make it survive a reload; that is the reason it does not.
 

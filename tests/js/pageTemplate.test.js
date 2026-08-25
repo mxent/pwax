@@ -49,7 +49,7 @@ describe('pageTemplate', () => {
                 data: () => ({
                     component: null,
                     error: null,
-                    renderedPath: '/x',
+                    renderedKey: '/x#1',
                     keepState: true,
                     ...state,
                 }),
@@ -98,7 +98,7 @@ describe('pageTemplate', () => {
             data: () => ({
                 component: { template: '<p id="page"></p>' },
                 error: null,
-                renderedPath: '/x',
+                renderedKey: '/x#1',
                 keepState: false,
             }),
             methods: { retry() {} },

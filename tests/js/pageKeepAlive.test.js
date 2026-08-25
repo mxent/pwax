@@ -36,12 +36,21 @@ const noStyles = {
  * crashed on every restore. `mounts` distinguishes "the instance was kept" from "the page
  * never changed": a retained page mounts exactly once, however many times it is visited.
  */
-const formPage = (name, mounts, extra = {}) => ({
+const formPage = (name, log, extra = {}) => ({
     data() {
         return { typed: '' };
     },
     mounted() {
-        mounts[name] = (mounts[name] || 0) + 1;
+        log.mounts[name] = (log.mounts[name] || 0) + 1;
+    },
+    // Which of these fires on the way out is the whole difference between the two page
+    // slots: a retained page is *deactivated* and kept, one that is not is *unmounted* and
+    // destroyed. Nothing else distinguishes them from outside.
+    deactivated() {
+        log.events.push(`${name}:deactivated`);
+    },
+    unmounted() {
+        log.events.push(`${name}:unmounted`);
     },
     template: `<div><span class="who">${name}</span><input class="field" v-model="typed"></div>`,
     ...extra,
@@ -58,15 +67,16 @@ async function mountRuntime({ pages, restoreConfig = { entries: 12, state: true 
     const target = new EventTarget();
     const restore = createRestore(restoreConfig, target);
 
-    /** name → how many times that page has been mounted. */
-    const mounts = {};
+    /** `mounts`: name → times mounted. `events`: lifecycle in the order it happened. */
+    const log = { mounts: {}, events: [] };
+    const mounts = log.mounts;
 
     /** Anything Vue threw during render or patch. Must stay empty. */
     const thrown = [];
 
     // `created()` visits the component's own route, so there is always a page before the
     // one a test is interested in. Giving it a dedicated one keeps that out of the way.
-    const all = { '/start': formPage('start', mounts), ...pages(mounts) };
+    const all = { '/start': formPage('start', log), ...pages(log) };
 
     // Each path compiles to a distinct module, exactly as the real loader would. A path
     // with no entry *rejects*, which is how `/broken` produces a real navigation failure —
@@ -120,6 +130,7 @@ async function mountRuntime({ pages, restoreConfig = { entries: 12, state: true 
         app,
         restore,
         mounts,
+        events: log.events,
         thrown,
         back: () => target.dispatchEvent(new Event('popstate')),
         async go(path) {
@@ -194,6 +205,42 @@ describe('going back to a page you were part-way through', () => {
         expect(app.mounts.checkout).toBe(2);
     });
 
+    it('destroys an opted-out page rather than parking it in the cache', async () => {
+        /*
+         * The visible half of the opt-out — a fresh, empty form on return — is enforced by
+         * the store alone: an opted-out page is never remembered, so it recompiles, gets a
+         * new key, and `<KeepAlive>` cannot mistake it for the instance it already has.
+         *
+         * That is not the whole of what `restore: false` promises. A checkout step or a
+         * page holding a one-time token should not be *sitting in memory* with the
+         * visitor's input still in its DOM, whether or not it is ever shown again. Which
+         * is what the second slot beside `<KeepAlive>` is for, and the only way to see the
+         * difference from outside is which lifecycle hook fires on the way out.
+         */
+        const app = await mountRuntime({
+            pages: (m) => ({
+                '/checkout': formPage('checkout', m, { restore: false }),
+                '/form': formPage('form', m),
+                '/other': formPage('other', m),
+            }),
+        });
+
+        await app.go('/form');
+        await app.go('/other');
+
+        // A retained page is parked, not destroyed.
+        expect(app.events).toContain('form:deactivated');
+        expect(app.events).not.toContain('form:unmounted');
+
+        await app.go('/checkout');
+        await app.type('card number');
+        await app.go('/other');
+
+        // An opted-out one is destroyed, and takes what was typed into it with it.
+        expect(app.events).toContain('checkout:unmounted');
+        expect(app.events).not.toContain('checkout:deactivated');
+    });
+
     it('does not keep it when state retention is switched off', async () => {
         const app = await mountRuntime({
             pages: (m) => ({ '/form': formPage('form', m), '/other': formPage('other', m) }),
@@ -236,6 +283,78 @@ describe('going back to a page you were part-way through', () => {
         expect(app.thrown).toEqual([]);
         expect(app.field().value).toBe('kept');
         expect(app.mounts.form).toBe(1);
+    });
+
+    it('rebuilds the page cleanly after an application drops it', async () => {
+        // `window.pwax.restore.forget()` is the documented way to say a held page is now
+        // wrong. Dropping the payload makes the next visit fetch and compile afresh — and
+        // the instance Vue still has cached under that key was built from the *previous*
+        // compile.
+        const app = await mountRuntime({
+            pages: (m) => ({ '/form': formPage('form', m), '/other': formPage('other', m) }),
+        });
+
+        await app.go('/form');
+        await app.type('stale');
+        await app.go('/other');
+
+        app.restore.forget('/form');
+
+        app.back();
+        await app.go('/form');
+
+        expect(app.thrown).toEqual([]);
+        expect(app.who()).toBe('form');
+        // Dropped on purpose, so the visitor gets a fresh page rather than the old one.
+        expect(app.field().value).toBe('');
+        expect(app.mounts.form).toBe(2);
+    });
+
+    it('rebuilds every page cleanly after an application clears the lot', async () => {
+        const app = await mountRuntime({
+            pages: (m) => ({ '/form': formPage('form', m), '/other': formPage('other', m) }),
+        });
+
+        await app.go('/form');
+        await app.type('stale');
+        await app.go('/other');
+
+        // What an application does on sign-out.
+        app.restore.clear();
+
+        app.back();
+        await app.go('/form');
+
+        expect(app.thrown).toEqual([]);
+        expect(app.field().value).toBe('');
+    });
+
+    it('rebuilds a page cleanly after it is evicted for being the oldest', async () => {
+        // The two caches evict on their own schedules, so a page can be gone from one
+        // while the other still holds it, with nobody having called anything. This does
+        // not by itself reproduce the crash the two tests above do — under a shared cap
+        // the orderings usually agree — which is exactly why it is worth pinning: it
+        // covers the ordinary path to the same divergence.
+        const app = await mountRuntime({
+            pages: (m) => ({
+                '/a': formPage('a', m),
+                '/b': formPage('b', m),
+                '/c': formPage('c', m),
+            }),
+            restoreConfig: { entries: 2, state: true },
+        });
+
+        await app.go('/a');
+        await app.type('dropped');
+        await app.go('/b');
+        await app.go('/c');
+
+        app.back();
+        await app.go('/a');
+
+        expect(app.thrown).toEqual([]);
+        expect(app.who()).toBe('a');
+        expect(app.field().value).toBe('');
     });
 
     it('survives a failed navigation in between', async () => {

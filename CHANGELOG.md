@@ -19,7 +19,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on, clicking a link asks for the page as it is now. So going back shows the page as it
   was. `window.pwax.restore.forget(path)` drops one page after a mutation has made it
   wrong and `clear()` drops all of them; a page opts out for good with `restore: false` in
-  its script, next to `middleware`.
+  its script, next to `middleware`, which stores nothing for it and destroys its instance
+  on the way out rather than parking it in memory.
 
   Retained pages keep their **component instance** alive in a Vue `<KeepAlive>`, so what
   comes back is the page you left — the text you had typed, the list scrolled where you

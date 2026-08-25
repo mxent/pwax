@@ -36,6 +36,45 @@ function pageStyleKey(payload) {
 }
 
 /**
+ * The identity Vue keys a page's instance on.
+ *
+ * Not the path, which is the obvious choice and the wrong one. `<KeepAlive>` caches by the
+ * vnode's key, and reuses a cached instance by patching the old vnode against the new one
+ * — which throws outright if the component *type* differs. So a key must change whenever
+ * the type does, and the type is a fresh object every time a page is compiled.
+ *
+ * Keying on the path alone tied `<KeepAlive>`'s cache to this module's, and left them free
+ * to disagree. They did, on the one operation an application is told to reach for:
+ * `window.pwax.restore.forget(path)` drops the payload so the page is fetched and compiled
+ * afresh, while `<KeepAlive>` still held an instance built from the previous compile under
+ * the same key — and the next visit back to that page killed the application. `clear()`
+ * did the same thing to every page at once, and the two caches falling out of step through
+ * ordinary eviction would have done it eventually without either being called.
+ *
+ * Keyed on the options object instead, the question does not arise. A page restored from
+ * the store carries the same object and so the same key, and `<KeepAlive>` reuses its
+ * instance; a page compiled afresh gets a new key, and `<KeepAlive>` builds a new instance
+ * beside the old one rather than mistaking one for the other. The stale entry is evicted in
+ * its own time by the `max` the two caches share.
+ *
+ * A `WeakMap`, so an options object that has been dropped everywhere else takes its key
+ * with it. The path is in the key only to make it legible in devtools.
+ */
+const pageKeys = new WeakMap();
+let pageKeySequence = 0;
+
+function pageKey(options, path) {
+    let key = pageKeys.get(options);
+
+    if (key === undefined) {
+        key = `${path}#${++pageKeySequence}`;
+        pageKeys.set(options, key);
+    }
+
+    return key;
+}
+
+/**
  * Run a DOM mutation inside `document.startViewTransition` when the browser supports it.
  *
  * The View Transitions API snapshots the current document, lets the callback commit a
@@ -214,10 +253,15 @@ export function createPageComponent({
                 loading: true,
                 error: null,
                 currentPath: null,
-                // The path of the component actually on screen, which during a navigation
-                // is not the path being navigated to. It is what keys the transition, so
-                // it must change only when the rendered page does.
-                renderedPath: null,
+                // What Vue keys the page instance on: the identity of the component
+                // actually on screen, which during a navigation is not the one being
+                // navigated to. It moves only when the rendered page does, so a failed
+                // navigation leaves the visitor exactly where they were.
+                //
+                // An identity rather than the path, because two visits to one path can be
+                // two different components — see `pageKey()` — and the moment those share
+                // a key, `<KeepAlive>` reuses an instance built from the other one.
+                renderedKey: null,
                 // Which of the two page slots renders: inside `<KeepAlive>`, or beside
                 // it. Moved with the swap rather than ahead of it, so a page that opts out
                 // cannot switch the slot out from under the page still on screen.
@@ -441,7 +485,7 @@ export function createPageComponent({
                     // The swap, and the only point at which the page on screen changes.
                     // Everything above this line ran while the previous page was still
                     // rendered: the fetch, the compile, the external assets, the
-                    // stylesheet. `renderedPath` moves with it, because it keys the
+                    // stylesheet. `renderedKey` moves with it, because it keys the
                     // transition and must not change while a navigation is merely in
                     // flight — a failed one leaves the visitor where they were.
                     // `markRaw`, not `defineAsyncComponent`. The options object was
@@ -450,8 +494,8 @@ export function createPageComponent({
                     // extra microtask and an extra render pass in which `component` is
                     // truthy but draws nothing. Worse, it minted a *new component type* on
                     // every navigation, so returning to a path already visited unmounted
-                    // and rebuilt the page from scratch even though `renderedPath` — the
-                    // key on the `<component>` — had not changed.
+                    // and rebuilt the page from scratch even though the key on the
+                    // `<component>` had not changed.
                     //
                     // `markRaw` does what the `shallowRef` was reaching for: it keeps Vue
                     // from walking the options and making them reactive.
@@ -465,7 +509,7 @@ export function createPageComponent({
                     // is ready, even when `transition.duration` is 0.
                     const swap = () => {
                         this.component = Vue.markRaw(options);
-                        this.renderedPath = this.currentPath;
+                        this.renderedKey = pageKey(options, this.currentPath);
                         this.keepState = options.restore !== false;
                         this.loading = false;
                     };

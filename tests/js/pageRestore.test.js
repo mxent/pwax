@@ -86,7 +86,7 @@ describe('going back to a page the document has already rendered', () => {
 
         expect(http.json).toHaveBeenCalledTimes(2);
         expect(state.component.template).toBe('<p>/one</p>');
-        expect(state.renderedPath).toBe('/one');
+        expect(state.renderedKey).toMatch(/^\/one#/);
     });
 
     it('still fetches when a link is clicked to a page already held', async () => {

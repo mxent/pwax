@@ -560,6 +560,10 @@ export default {
 </script>
 ```
 
+Such a page is not held at all: its payload is never stored, and its component instance is
+destroyed when you navigate away rather than parked in memory. Nothing the visitor typed
+into it outlives the visit.
+
 ### The page comes back as you left it
 
 Removing the round trip is only half of it. A page that is fetched again is also *mounted*
@@ -593,8 +597,12 @@ still runs on every visit as before.
 
 `state => false` keeps the round-trip saving and drops the instance retention — the
 setting for an application whose pages assume `mounted()` runs on every visit. `entries`
-caps both, so the payload store and `<KeepAlive>` never disagree about which pages are
-live.
+caps both stores.
+
+It is a cap worth thinking about, because a retained page is a live component instance and
+its DOM, not just a payload: twelve of them is twelve rendered pages held in memory. Lower
+it for an application with heavy pages; raise it for one with light pages and deep
+navigation.
 
 Pages are held **in memory only** and never written to disk, so a reload, a new tab or a
 closed browser leaves nothing behind — a payload can carry a signed-in visitor's data, and
@@ -603,7 +611,9 @@ is exactly why it is not used. Entries do not expire: a prefetch is a guess abou
 somebody is going and is stale within seconds, but "the page I was just looking at" does
 not become wrong because a minute passed. The cap is what bounds it.
 
-Scroll position is restored already, by the router, and is unaffected by any of this.
+Scroll position is restored by the router and is unaffected by any of this — though it
+lands more accurately on a retained page, because the content is back at its full height
+before the browser is asked to scroll to an offset within it.
 
 ## Importing components
 

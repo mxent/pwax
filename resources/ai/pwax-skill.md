@@ -427,8 +427,8 @@ package version (which is rarely what you want — fork it knowingly).
 
 ## 9. Config keys that cross the runtime boundary
 
-The three Vue extensions are emitted into the page as JavaScript; they
-all live under `pwax.vue.*`:
+The three Vue extensions are resolved server-side into a module URL or a
+dotted path and emitted as JSON; they all live under `pwax.vue.*`:
 
 ```php
 'vue' => [
@@ -439,9 +439,12 @@ all live under `pwax.vue.*`:
 ```
 
 Each value is either a `@pwaxImport('view.name')` reference or a dotted
-path to a global on `window`. Values are configuration, **never** a
-place for request input. They are emitted verbatim into a `<script
-type="application/json">` block.
+path to a global on `window`. `Shell::extensions()` turns each one into
+a `{type: 'module', url}` or `{type: 'global', path}` entry inside the
+`<script type="application/json">` config island, and `extensions.js`
+imports the URL or walks the path — it never evaluates a configured
+string. Values are still configuration, **never** a place for request
+input.
 
 The `pwax.middleware` config is a **different** key — it lists Laravel
 middleware groups to inject the package's HTTP middleware into. The

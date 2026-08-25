@@ -611,9 +611,14 @@ is exactly why it is not used. Entries do not expire: a prefetch is a guess abou
 somebody is going and is stale within seconds, but "the page I was just looking at" does
 not become wrong because a minute passed. The cap is what bounds it.
 
-Scroll position is restored by the router and is unaffected by any of this — though it
-lands more accurately on a retained page, because the content is back at its full height
-before the browser is asked to scroll to an offset within it.
+Two kinds of scroll, restored by two different mechanisms. The **window's** position comes
+from the router's own saved position, as it always has — though it lands more accurately on
+a retained page, whose content is back at full height before the browser is asked to scroll
+within it. Scrolling **inside** the page — a list pane, a chat log, anything with
+`overflow: auto` — is restored by Pwax, because `<KeepAlive>` does not do it: deactivating
+detaches the nodes, and a scrollable element that leaves the document has its `scrollTop`
+reset to zero by the browser. Pwax reads those offsets just before the swap and puts them
+back as part of it.
 
 ## Importing components
 

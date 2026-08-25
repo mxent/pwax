@@ -75,6 +75,58 @@ function pageKey(options, path) {
 }
 
 /**
+ * The scroll offsets inside a retained page.
+ *
+ * `<KeepAlive>` keeps a page's DOM nodes, and the browser keeps what is *in* them — an
+ * input's value, a checkbox, a text selection. It does not keep where anything is scrolled
+ * to. Deactivating moves the nodes into a detached container, and a scrollable element that
+ * leaves the document has its `scrollTop` reset to zero by the browser on the way out. The
+ * nodes that come back are the same nodes, scrolled back to the top.
+ *
+ * Window scroll is not affected — the router restores that from its own saved position —
+ * so this is about the scrollable regions *within* a page: a list pane, a chat log, a
+ * sidebar, anything with `overflow: auto`.
+ *
+ * The offsets have to be read before the swap, which is why this lives here rather than in
+ * a `deactivated()` hook on the page itself. By the time `deactivated()` runs the element
+ * is already detached and already reads zero, so a hook capturing there records nothing:
+ * checked in a real browser, which is also the only place the problem is visible at all.
+ * A DOM implementation without layout — jsdom, and so this package's test suite — keeps
+ * `scrollTop` across a detach and reports every one of these cases as already working.
+ *
+ * Keyed on the options object, the same identity `<KeepAlive>` keys the instance on, so a
+ * page whose offsets are held is exactly a page whose instance is held. A `WeakMap`,
+ * because the element references it stores would otherwise pin a whole page's DOM in
+ * memory after the instance holding it had gone.
+ */
+const retainedScroll = new WeakMap();
+
+function captureScroll(root) {
+    const offsets = [];
+
+    if (!root) {
+        return offsets;
+    }
+
+    // The root itself as well as its descendants: the scrollable element is often the
+    // page's own outermost node.
+    for (const el of [root, ...root.querySelectorAll('*')]) {
+        if (el.scrollTop || el.scrollLeft) {
+            offsets.push([el, el.scrollTop, el.scrollLeft]);
+        }
+    }
+
+    return offsets;
+}
+
+function applyScroll(offsets) {
+    for (const [el, top, left] of offsets || []) {
+        el.scrollTop = top;
+        el.scrollLeft = left;
+    }
+}
+
+/**
  * Run a DOM mutation inside `document.startViewTransition` when the browser supports it.
  *
  * The View Transitions API snapshots the current document, lets the callback commit a
@@ -95,7 +147,19 @@ function pageKey(options, path) {
  */
 function withViewTransition(update) {
     if (typeof document !== 'undefined' && typeof document.startViewTransition === 'function') {
-        return document.startViewTransition(update);
+        // `.updateCallbackDone`, not the transition itself. `startViewTransition()` returns
+        // a `ViewTransition`, which is not a promise — awaiting it resolves on the spot, so
+        // a caller that believed it was waiting for the DOM to be committed was not waiting
+        // for anything at all. The browser does hold its snapshot until the callback's own
+        // promise settles; this is the handle on that.
+        //
+        // Guarded, because the object comes from the browser rather than from here. The
+        // swap does its own work inside `update`, so a missing handle costs ordering the
+        // caller wanted, not correctness — whereas reading a property off `undefined`
+        // would take down the navigation.
+        const transition = document.startViewTransition(update);
+
+        return transition?.updateCallbackDone ?? Promise.resolve(transition);
     }
 
     return update();
@@ -507,11 +571,39 @@ export function createPageComponent({
                     // single-frame empty state is the flicker that motivated this change.
                     // With it, the browser holds the old page visible until the new one
                     // is ready, even when `transition.duration` is 0.
-                    const swap = () => {
+                    /*
+                     * The outgoing page's scroll offsets, read while its nodes are still
+                     * in the document. One line later they are detached and read zero.
+                     * `this.component` is the page being replaced, and is the same object
+                     * `<KeepAlive>` has its instance filed under.
+                     */
+                    if (retain > 0 && this.component) {
+                        retainedScroll.set(
+                            this.component,
+                            captureScroll(document.getElementById(config.mount || 'pwax'))
+                        );
+                    }
+
+                    const swap = async () => {
                         this.component = Vue.markRaw(options);
                         this.renderedKey = pageKey(options, this.currentPath);
                         this.keepState = options.restore !== false;
                         this.loading = false;
+
+                        /*
+                         * Inside the callback, not after it. A view transition takes its
+                         * "after" snapshot when this promise settles and renders that
+                         * snapshot for the length of the animation — so offsets applied
+                         * once the transition is already running are applied to something
+                         * the visitor cannot see, and are gone by the time they can. Put
+                         * back here, they are part of the picture the browser animates to.
+                         *
+                         * `$nextTick` first, because the three assignments above have only
+                         * queued a render: the nodes to scroll are not in the document yet.
+                         */
+                        await this.$nextTick();
+
+                        applyScroll(retainedScroll.get(options));
                     };
 
                     const transitionReady = withViewTransition(swap);

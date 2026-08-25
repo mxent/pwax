@@ -95,12 +95,15 @@ async function mountRuntime({ pages, restoreConfig = { entries: 12, state: true 
     const page = createPageComponent({
         http: { json: vi.fn(async (path) => ({ module: path })) },
         styles: noStyles,
-        config: { restore: restoreConfig },
+        // `mount` names the element the runtime owns; the scroll capture reads the
+        // offsets from inside it, the same element `refocus()` reaches for.
+        config: { mount: 'pwax', restore: restoreConfig },
         initial: null,
         restore,
     });
 
     const host = document.createElement('div');
+    host.id = 'pwax';
     document.body.appendChild(host);
 
     let vm = null;
@@ -355,6 +358,51 @@ describe('going back to a page you were part-way through', () => {
         expect(app.thrown).toEqual([]);
         expect(app.who()).toBe('a');
         expect(app.field().value).toBe('');
+    });
+
+    it('puts back the scroll offsets inside a retained page', async () => {
+        /*
+         * `<KeepAlive>` keeps the nodes and the browser keeps what is in them, but not
+         * where they are scrolled to: deactivating detaches the nodes, and a scrollable
+         * element leaving the document has its `scrollTop` reset by the browser.
+         *
+         * This test cannot prove that. jsdom has no layout, so `scrollTop` is an ordinary
+         * property that survives a detach — every case here reads as already working
+         * whether the offsets are put back or not. What it does pin is the wiring: that
+         * the outgoing page's offsets are read *before* the swap, and applied to the
+         * incoming one. Both halves matter and both were wrong at first — a
+         * `deactivated()` hook reads zero because the nodes are already detached, and
+         * offsets applied after the view transition starts are discarded when it ends.
+         *
+         * The behaviour itself was verified against the built runtime in headless
+         * Chromium, with and without the View Transitions API, since that is the only
+         * place it is observable at all.
+         */
+        const app = await mountRuntime({
+            pages: (m) => ({ '/form': formPage('form', m), '/other': formPage('other', m) }),
+        });
+
+        await app.go('/form');
+
+        const pane = document.createElement('div');
+        app.host.querySelector('.who').after(pane);
+        pane.className = 'pane';
+        pane.scrollTop = 250;
+
+        await app.go('/other');
+        expect(app.who()).toBe('other');
+
+        // What a real browser does when the nodes are detached, and what jsdom does not.
+        // Without standing it in, this assertion passes against an implementation that
+        // captures nothing and applies nothing — which is what the first version of this
+        // test did.
+        pane.scrollTop = 0;
+
+        app.back();
+        await app.go('/form');
+
+        expect(app.thrown).toEqual([]);
+        expect(app.host.querySelector('.pane')?.scrollTop).toBe(250);
     });
 
     it('survives a failed navigation in between', async () => {

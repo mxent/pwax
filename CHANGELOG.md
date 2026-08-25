@@ -24,7 +24,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   Retained pages keep their **component instance** alive in a Vue `<KeepAlive>`, so what
   comes back is the page you left — the text you had typed, the list scrolled where you
-  scrolled it. Note the lifecycle consequence: a retained page's `mounted()` runs once and
+  scrolled it. Scroll offsets *inside* a page are restored by Pwax rather than by
+  `<KeepAlive>`, which does not keep them: deactivating detaches the nodes, and the browser
+  zeroes a scrollable element's `scrollTop` on the way out. Note the lifecycle consequence: a retained page's `mounted()` runs once and
   does **not** run again on the way back. A page that must be current every time it is
   shown does that work in `activated()`, which fires on the first render and on every
   return; `deactivated()` is its pair.

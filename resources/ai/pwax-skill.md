@@ -616,7 +616,10 @@ application with heavy pages. A reload or a new tab starts with nothing, because
 carry a signed-in visitor's data. Do **not** reach for `sessionStorage`
 to make it survive a reload; that is the reason it does not.
 
-Scroll position is restored by the router and is unaffected by any of this.
+Two scrolls, two mechanisms: the **window** position comes from the
+router's saved position, while scrolling **inside** a page (`overflow:
+auto` panes) is restored by Pwax — `<KeepAlive>` does not keep it,
+because detaching the nodes makes the browser zero their `scrollTop`.
 
 ---
 

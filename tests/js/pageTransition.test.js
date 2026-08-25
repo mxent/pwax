@@ -34,7 +34,10 @@ function bind(page) {
         ...page.data(),
         $route: { fullPath: '/one' },
         $router: { replace: vi.fn(), push: vi.fn() },
-        $nextTick: (fn) => fn(),
+        // Vue's own `$nextTick` runs a callback *and*, called bare, returns a promise.
+        // Stubbing only the callback form left `await this.$nextTick()` calling
+        // `undefined()`, and the page component reporting a connection failure.
+        $nextTick: (fn) => (fn ? fn() : Promise.resolve()),
     };
 
     for (const [name, fn] of Object.entries(page.methods)) {
@@ -257,9 +260,12 @@ describe('what stays on screen during a navigation', () => {
         // was removed because two-phase mount/unmount was the source of the empty
         // router-view flicker; the browser's snapshot mechanism does the same job
         // without interleaving the two phases.
-        const start = vi.fn((update) => {
-            update();
-        });
+        // Faithful to the real API: `startViewTransition()` hands back a `ViewTransition`
+        // whose `updateCallbackDone` settles when the callback's own promise does. A mock
+        // returning `undefined` let this test pass while the navigation underneath it was
+        // failing — reading a property off that `undefined` threw, `mount()` caught it,
+        // and the two assertions below were both still true of a page that had errored.
+        const start = vi.fn((update) => ({ updateCallbackDone: Promise.resolve(update()) }));
 
         // jsdom provides `document` already. Adding `startViewTransition` to it
         // exercises the path: the runtime checks for the API and uses it; the rest of
@@ -283,6 +289,8 @@ describe('what stays on screen during a navigation', () => {
 
         expect(start).toHaveBeenCalled();
         expect(state.component).toBeTruthy();
+        // Which is only meaningful alongside this.
+        expect(state.error).toBeNull();
 
         delete globalThis.document.startViewTransition;
     });

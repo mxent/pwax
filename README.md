@@ -514,6 +514,68 @@ you would rather show one.
 > Use `v-text`, not `v-html`. Part of `error` derives from the HTTP response, and
 > rendering that as HTML would make reflected content executable.
 
+### Going back
+
+A router turns the back button into an ordinary navigation: the URL changes, the page is
+fetched again, and you wait for something you were looking at a moment ago. A
+server-rendered site does not do this — the browser keeps its own
+[back/forward cache](https://web.dev/articles/bfcache) and restores the previous document
+without a request — so moving an application to a router is what *introduces* that wait,
+on the one navigation where a visitor is most certain of what they are about to see.
+
+Pwax puts it back. Every page that renders is kept, and a navigation the browser started —
+back, forward, `router.go()` — is answered from memory with no request at all:
+
+```
+link click    bar starts ─► payload ─► bar completes ─► page fades in
+back button   page fades in
+```
+
+Only those. Clicking a link to a page you have seen before still fetches. The two are
+different questions: going back asks for *the page you were on*, while clicking a link asks
+for *the page as it is now*. Turbo draws the same line and calls them restoration visits and
+application visits; Inertia arrives at it by keeping page props in `history.state`.
+
+So going back shows the page as it was. Comment on a post, press back, and the list you
+return to is the list you left — the same bargain the browser's own back/forward cache
+makes for a server-rendered site. When your application has just made one of those pages
+wrong, say so:
+
+```js
+await fetch('/posts/1/comments', { method: 'POST', body });
+
+window.pwax.restore.forget('/posts/1');   // next visit back to it fetches
+window.pwax.restore.clear();              // drop everything, e.g. on sign-out
+```
+
+A page that should never be restored says so once, in its own script, next to
+`middleware`:
+
+```vue
+<script>
+export default {
+    // A one-time token, a checkout step, a confirmation only correct when it was served.
+    restore: false,
+};
+</script>
+```
+
+```php
+'restore' => [
+    'enabled' => true,
+    'entries' => 12,     // pages kept; the least recently used is dropped
+],
+```
+
+Pages are held **in memory only** and never written to disk, so a reload, a new tab or a
+closed browser leaves nothing behind — a payload can carry a signed-in visitor's data, and
+that is the same rule prefetching follows. `sessionStorage` would survive a reload, which
+is exactly why it is not used. Entries do not expire: a prefetch is a guess about where
+somebody is going and is stale within seconds, but "the page I was just looking at" does
+not become wrong because a minute passed. The cap is what bounds it.
+
+Scroll position is restored already, by the router, and is unaffected by any of this.
+
 ## Importing components
 
 Use the `@pwax` directive to reference another component:
@@ -1867,6 +1929,7 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `security.cross_origin_opener_policy` | `'same-origin-allow-popups'` | Documents only; `'same-origin'` for cross-origin isolation |
 | `security.cross_origin_embedder_policy` | `null` | Off. `'require-corp'` completes cross-origin isolation |
 | `prefetch.mode`, `.delay` | `'hover'`, `65` | Fetch a page before it is asked for; `false` turns it off |
+| `restore.enabled`, `.entries` | `true`, `12` | Render back/forward from memory instead of refetching; `false` turns it off |
 | `push.public_key`, `.private_key` | `null` | VAPID pair; `pwax:vapid` generates one |
 | `push.endpoint` | `null` | Your route that stores a subscription |
 | `push.title`, `.icon`, `.badge` | `null` | Fallbacks for a push payload that omits them |
@@ -1972,6 +2035,8 @@ The runtime publishes `window.pwax`:
 | `pwax.launch.consume(fn)` | Files and URLs the operating system launched the app with |
 | `pwax.share(data)` | The platform share sheet |
 | `pwax.prefetch(path)` | Fetch a page's payload before it is asked for |
+| `pwax.restore.forget(path)` | Drop one page, so the next visit back to it fetches |
+| `pwax.restore.clear()` | Drop every page held for the back button |
 | `pwax.progress` | The navigation progress bar, for your own long tasks |
 | `pwax.app`, `pwax.router` | The Vue app and router instances |
 | `pwax.config`, `pwax.version` | Runtime configuration and package version |

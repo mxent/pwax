@@ -502,6 +502,44 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Back/forward restoration
+    |--------------------------------------------------------------------------
+    |
+    | A router turns the back button into an ordinary navigation: the URL changes, the
+    | page is fetched again, and the visitor waits for something they were looking at a
+    | moment ago. A server-rendered site does not do this — the browser keeps its own
+    | back/forward cache and restores the previous document without a request — so moving
+    | to a router is what introduces the wait, on the navigation where a visitor is most
+    | certain of what they are about to see.
+    |
+    | This puts it back. Pages that have been rendered are kept, and a navigation the
+    | browser started — back, forward, `router.go()` — is answered from memory with no
+    | request.
+    |
+    | Only those. A link click to a page you have seen before still fetches: going back
+    | asks for the page you were on, clicking a link asks for the page as it is now.
+    |
+    | So going back shows the page as it was. Comment on a post, press back, and the list
+    | you return to is the list you left — the same bargain the browser's own back/forward
+    | cache makes. An application that has just made a page wrong can drop it with
+    | `window.pwax.restore.forget(path)`, drop everything with `clear()`, or a page can opt
+    | out for good by declaring `restore: false` in its script, next to `middleware`.
+    |
+    | 'entries' caps how many pages are held. They are held in memory only, never written
+    | to disk, and never expire while the document lives — a page payload can carry a
+    | signed-in visitor's data, so a reload or a new tab starts with nothing.
+    |
+    | false  off; every navigation fetches
+    |
+    */
+
+    'restore' => [
+        'enabled' => true,
+        'entries' => 12,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Page transition
     |--------------------------------------------------------------------------
     |

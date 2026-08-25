@@ -119,6 +119,47 @@ describe('window.pwax.start (reboot)', () => {
 
         expect(typeof window.pwax.start).toBe('function');
     });
+    it('does not leave the previous runtime listening after a reboot', async () => {
+        /*
+         * `reboot()` unmounts the Vue application, which takes every listener Vue added
+         * with it — but the prefetcher listens on `document` and the restoration cache on
+         * `window`, and neither is Vue's to remove. Each boot used to add another set, so
+         * after two reboots one hovered link was fetched three times and three copies of
+         * every page payload were held.
+         */
+        const live = new Map();
+        const count = (type, by) => live.set(type, (live.get(type) || 0) + by);
+
+        for (const target of [document, window]) {
+            const add = target.addEventListener.bind(target);
+            const remove = target.removeEventListener.bind(target);
+
+            vi.spyOn(target, 'addEventListener').mockImplementation((type, fn, opts) => {
+                count(type, 1);
+                return add(type, fn, opts);
+            });
+            vi.spyOn(target, 'removeEventListener').mockImplementation((type, fn, opts) => {
+                count(type, -1);
+                return remove(type, fn, opts);
+            });
+        }
+
+        await importRuntime();
+        await vi.waitFor(() => {
+            expect(window.pwax).toBeDefined();
+        });
+
+        // The prefetcher on `document`, the restoration cache on `window`.
+        expect(live.get('pointerenter')).toBe(1);
+        expect(live.get('popstate')).toBe(1);
+
+        await window.pwax.start();
+        await window.pwax.start();
+
+        expect(live.get('pointerenter')).toBe(1);
+        expect(live.get('popstate')).toBe(1);
+    });
+
     it('arms start even when the boot failed', async () => {
         // Vue missing is the boot failure people actually hit — a script tag in the wrong
         // order — and it throws before `window.pwax.start` was ever assigned. Without this,

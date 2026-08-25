@@ -7,7 +7,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Back/forward restoration.** A router turns the back button into an ordinary
+  navigation, so the page a visitor was looking at a moment ago is fetched again — a wait
+  the browser's own back/forward cache does not impose on a server-rendered site. Every
+  page that renders is now kept, and a navigation the browser started — back, forward,
+  `router.go()` — is answered from memory with no request.
+
+  A link click to a page already held still fetches: going back asks for the page you were
+  on, clicking a link asks for the page as it is now. So going back shows the page as it
+  was. `window.pwax.restore.forget(path)` drops one page after a mutation has made it
+  wrong and `clear()` drops all of them; a page opts out for good with `restore: false` in
+  its script, next to `middleware`.
+
+  Pages are held in memory only, never written to disk, and capped by
+  `pwax.restore.entries` (default 12). `pwax.restore.enabled => false` turns it off.
+
+### Fixed
+
+- **`window.pwax.start()` no longer leaves the previous runtime listening.** A reboot
+  unmounts the Vue application, which takes every listener Vue added with it — but not the
+  prefetcher's, which are on `document`. Each reboot added another set, so a hovered link
+  was fetched once per boot that had ever run.
 
 ## [1.0.0]
 

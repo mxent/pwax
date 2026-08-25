@@ -151,6 +151,7 @@ export function createPageComponent({
     // module middleware does not hold up the first paint; `await` accepts both.
     middleware = {},
     prefetcher = null,
+    restore = null,
     templates = {},
     progress = null,
 }) {
@@ -253,6 +254,33 @@ export function createPageComponent({
                     this.currentPath = path;
 
                     return this.mount(payload);
+                }
+
+                /*
+                 * Back or forward to a page this document has already rendered.
+                 *
+                 * `take()` answers only for a navigation the browser started, so a link
+                 * click to a URL that happens to be held still fetches — going back asks
+                 * for the page you were on, clicking a link asks for the page as it is
+                 * now. See `restore.js` for why those are different questions.
+                 *
+                 * Nothing between here and `mount()` touches the network, so `loading`
+                 * is never set and the progress bar never starts: there is no wait to
+                 * report. The page on screen stays there for the one microtask
+                 * `mount()` needs, exactly as it does for a fetched page.
+                 */
+                const restored = restore?.take(path);
+
+                if (restored) {
+                    // A navigation already in flight is now irrelevant — the visitor has
+                    // gone back while it was running — and its payload must not be
+                    // allowed to land on top of the restored page.
+                    this.abort();
+
+                    this.error = null;
+                    this.currentPath = path;
+
+                    return this.mount(restored);
                 }
 
                 this.abort();
@@ -424,6 +452,21 @@ export function createPageComponent({
                     // new pseudo-elements have been committed; without the API, the
                     // await is a no-op on a synchronous value.
                     await transitionReady;
+
+                    /*
+                     * Kept for the back button, now that this page is definitely the one
+                     * on screen. Recorded after the swap rather than after the fetch so
+                     * that a payload which failed to compile, or a middleware that
+                     * redirected away from it, leaves nothing behind to restore.
+                     *
+                     * A page opts out by declaring `restore: false` in its script, the
+                     * same way it declares `middleware`. That is for a page whose content
+                     * is only correct at the moment it was served — a one-time token, a
+                     * checkout step, a flash of something that has since been read.
+                     */
+                    if (options.restore !== false) {
+                        restore?.remember(this.currentPath, payload);
+                    }
 
                     this.$nextTick(() => {
                         this.announce();

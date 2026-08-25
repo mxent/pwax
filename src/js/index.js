@@ -18,6 +18,7 @@ import { createPushApi } from './push.js';
 import { createPageComponent } from './page.js';
 import { createPrefetcher } from './prefetch.js';
 import { createProgress } from './progress.js';
+import { createRestore } from './restore.js';
 import { createRouter } from './router.js';
 import {
     createServiceWorkerApi,
@@ -28,6 +29,16 @@ import { createStyleManager } from './styles.js';
 import { createSyncApi } from './sync.js';
 
 const DEFAULT_CONTENT = '<main><router-view></router-view></main>';
+
+/**
+ * The pieces of the last boot that attached listeners outside the Vue application.
+ *
+ * `reboot()` unmounts the app, which takes every listener Vue added with it — but not
+ * these. The prefetcher listens on `document` and the restoration cache on `window`, and
+ * both would otherwise survive as duplicates for the life of the page: two prefetchers
+ * fetch every hovered link twice, and two caches hold two copies of every page payload.
+ */
+let listening = null;
 
 async function boot() {
     const config = loadConfig();
@@ -48,12 +59,25 @@ async function boot() {
     // worker is exactly the one whose failed request has nothing else to explain it.
     watchConnectivity();
 
+    // Before this boot attaches its own. See `listening` above.
+    listening?.prefetcher?.stop?.();
+    listening?.restore?.stop?.();
+
     const http = createHttp(config);
     const styles = createStyleManager(document);
     const prefetcher = createPrefetcher(
         http,
         config.prefetch === false ? { mode: false } : config.prefetch || {}
     );
+
+    // The back/forward cache the router took away. Built here rather than beside the
+    // router so its `popstate` listener is registered before Vue Router's own, which
+    // makes the ordering plain even though the guard that reads the flag runs after
+    // every listener either way.
+    const restore = createRestore(config.restore === false ? false : config.restore || {});
+
+    listening = { prefetcher, restore };
+
     const loader = createComponentLoader({ styles, nonce: config.nonce });
 
     // Null when the application turned it off, and every call site uses `?.` — a disabled
@@ -82,6 +106,25 @@ async function boot() {
         launch: createLaunchApi(),
         share: createShareApi().share,
         prefetch: prefetcher.prefetch,
+        /*
+         * Going back shows the page as it was. An application that has just made one of
+         * those pages wrong — posted a comment, deleted a row, signed the visitor out —
+         * says so here, and the next visit back to it fetches instead.
+         *
+         * Deliberately narrower than the cache itself: `remember` and `take` belong to
+         * the navigation lifecycle, and `stop` would leave the back button fetching for
+         * the rest of the session with nothing to say why.
+         */
+        restore: {
+            forget: (path) => restore.forget(path),
+            clear: () => restore.clear(),
+            get size() {
+                return restore.size;
+            },
+            get enabled() {
+                return restore.enabled;
+            },
+        },
         // Exposed so an application can wrap its own long-running work — a form
         // submission, a report — in the same indicator its navigations use.
         progress: progressBar,
@@ -122,6 +165,7 @@ async function boot() {
         initial,
         middleware: middlewareReady,
         prefetcher,
+        restore,
         templates: config.templates || {},
         progress: progressBar,
     });

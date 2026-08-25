@@ -532,7 +532,7 @@ shared domain with Nova, Telescope or a Filament panel.
 
 ---
 
-## 12. Prefetching
+## 12. Prefetching and going back
 
 `pwax.prefetch.{mode,delay}` controls whether the runtime fetches the
 next page before the visitor clicks:
@@ -550,6 +550,47 @@ worker is what stores pages.
 
 Costs a request for a link someone hovers and does not click. Turn it
 off for an application with expensive pages or metered users.
+
+### The back button
+
+`pwax.restore.{enabled,entries}` controls the other half. A router turns
+back into an ordinary navigation, so the page is fetched again; the
+browser's own back/forward cache does no such thing for a server-rendered
+site. The runtime keeps every page it renders and answers a navigation the
+**browser** started — back, forward, `router.go()` — from memory with no
+request.
+
+Only those. A link click to a page already held still fetches. Going back
+asks for the page you were on; clicking a link asks for the page as it is
+now. (Turbo calls these restoration and application visits.)
+
+So going back shows the page **as it was**. After a mutation that makes a
+held page wrong, say so:
+
+```js
+window.pwax.restore.forget('/posts/1');   // that page only
+window.pwax.restore.clear();              // everything, e.g. on sign-out
+```
+
+A page that must never be restored declares it in its own script, next to
+`middleware` — for a one-time token, a checkout step, anything only correct
+at the moment it was served:
+
+```vue
+<script>
+export default {
+    restore: false,
+};
+</script>
+```
+
+Held in memory only, never written to disk, capped at `entries` (default
+12) and never expiring while the document lives. A reload or a new tab
+starts with nothing, because a payload can carry a signed-in visitor's
+data. Do **not** reach for `sessionStorage` to make it survive a reload;
+that is the reason it does not.
+
+Scroll position is restored by the router and is unaffected by any of this.
 
 ---
 

@@ -53,6 +53,8 @@ declare namespace Pwax {
         push: { publicKey: string | null; endpoint: string | null };
         prefetch: { mode: string; delay: number } | false;
         progress: { delay: number; trickle: boolean } | false;
+        /** How many rendered pages to keep for the back button, or `false` to keep none. */
+        restore: { entries: number } | false;
         templates: Record<string, string>;
         /** The resolved `pwax.vue.*` extensions, keyed by the name they were configured under. */
         plugins: Record<string, RuntimeExtension>;
@@ -205,6 +207,8 @@ declare namespace Pwax {
         start(): Promise<void>;
         /** Fetch a page's payload before it is asked for. */
         prefetch(path: string): Promise<unknown>;
+        /** The pages held for the back button. */
+        readonly restore: RestoreApi;
         readonly sw: ServiceWorkerApi;
         readonly install: InstallApi;
         readonly badge: BadgeApi;
@@ -220,6 +224,25 @@ declare namespace Pwax {
          */
         share(data: ShareData): Promise<'shared' | 'dismissed' | 'unavailable'>;
         readonly progress: Progress | null;
+    }
+
+    /**
+     * Control over what the back button restores.
+     *
+     * Going back renders the page as it was when the visitor left it, without a request.
+     * That is what back means — the browser's own back/forward cache behaves the same way
+     * for a server-rendered site — but it means an application that has just changed one
+     * of those pages has to say so.
+     */
+    interface RestoreApi {
+        /** Drop one path, so the next visit back to it fetches. */
+        forget(path: string): void;
+        /** Drop every held page. For a sign-out, or any change that invalidates all of them. */
+        clear(): void;
+        /** How many pages are currently held. */
+        readonly size: number;
+        /** Whether restoration is switched on for this application. */
+        readonly enabled: boolean;
     }
 
     /** Events dispatched on `document`. */

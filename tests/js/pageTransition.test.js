@@ -34,7 +34,10 @@ function bind(page) {
         ...page.data(),
         $route: { fullPath: '/one' },
         $router: { replace: vi.fn(), push: vi.fn() },
-        $nextTick: (fn) => fn(),
+        // Vue's own `$nextTick` runs a callback *and*, called bare, returns a promise.
+        // Stubbing only the callback form left `await this.$nextTick()` calling
+        // `undefined()`, and the page component reporting a connection failure.
+        $nextTick: (fn) => (fn ? fn() : Promise.resolve()),
     };
 
     for (const [name, fn] of Object.entries(page.methods)) {
@@ -85,7 +88,7 @@ describe('what stays on screen during a navigation', () => {
 
         const rendered = state.component;
         expect(rendered).toBeTruthy();
-        expect(state.renderedPath).toBe('/one');
+        expect(state.renderedKey).toMatch(/^\/one#/);
 
         // A second navigation, deliberately left in flight.
         const second = state.visit('/two');
@@ -94,13 +97,13 @@ describe('what stays on screen during a navigation', () => {
         // The whole fix, in one assertion: the page being rendered is still the page the
         // visitor was reading.
         expect(state.component).toBe(rendered);
-        expect(state.renderedPath).toBe('/one');
+        expect(state.renderedKey).toMatch(/^\/one#/);
 
         http.settle();
         await second;
 
         expect(state.component).not.toBe(rendered);
-        expect(state.renderedPath).toBe('/two');
+        expect(state.renderedKey).toMatch(/^\/two#/);
     });
 
     it('mounts the resolved options directly, with no async wrapper', async () => {
@@ -140,7 +143,7 @@ describe('what stays on screen during a navigation', () => {
         // Different object, same shape — what matters is that the *type* Vue sees is a
         // plain options object it can compare, not a fresh async wrapper every time.
         expect(state.component).toEqual(type);
-        expect(state.renderedPath).toBe('/one');
+        expect(state.renderedKey).toMatch(/^\/one#/);
     });
 
     it('leaves the rendered page in place when a navigation fails', async () => {
@@ -172,12 +175,12 @@ describe('what stays on screen during a navigation', () => {
         await state.visit('/missing');
 
         // The error template replaces the page — that part is deliberate, a failed
-        // navigation needs somewhere to say so. What must not move is `renderedPath`:
+        // navigation needs somewhere to say so. What must not move is `renderedKey`:
         // it keys the transition, and advancing it on a failure would animate a page out
         // with nothing behind it, so going back would have nothing to return to.
         expect(state.error).toBeTruthy();
         expect(state.component).toBe(rendered);
-        expect(state.renderedPath).toBe('/one');
+        expect(state.renderedKey).toMatch(/^\/one#/);
     });
 
     it('runs the bar for a fetch and not for the inlined landing page', async () => {
@@ -248,7 +251,7 @@ describe('what stays on screen during a navigation', () => {
 
         // `progress: false` in config resolves to null, and every call site is optional.
         await expect(state.visit('/one')).resolves.toBeUndefined();
-        expect(state.renderedPath).toBe('/one');
+        expect(state.renderedKey).toMatch(/^\/one#/);
     });
 
     it('wraps the page swap in the browser View Transitions API', async () => {
@@ -257,9 +260,12 @@ describe('what stays on screen during a navigation', () => {
         // was removed because two-phase mount/unmount was the source of the empty
         // router-view flicker; the browser's snapshot mechanism does the same job
         // without interleaving the two phases.
-        const start = vi.fn((update) => {
-            update();
-        });
+        // Faithful to the real API: `startViewTransition()` hands back a `ViewTransition`
+        // whose `updateCallbackDone` settles when the callback's own promise does. A mock
+        // returning `undefined` let this test pass while the navigation underneath it was
+        // failing — reading a property off that `undefined` threw, `mount()` caught it,
+        // and the two assertions below were both still true of a page that had errored.
+        const start = vi.fn((update) => ({ updateCallbackDone: Promise.resolve(update()) }));
 
         // jsdom provides `document` already. Adding `startViewTransition` to it
         // exercises the path: the runtime checks for the API and uses it; the rest of
@@ -283,6 +289,8 @@ describe('what stays on screen during a navigation', () => {
 
         expect(start).toHaveBeenCalled();
         expect(state.component).toBeTruthy();
+        // Which is only meaningful alongside this.
+        expect(state.error).toBeNull();
 
         delete globalThis.document.startViewTransition;
     });
@@ -327,9 +335,11 @@ describe('what stays on screen during a navigation', () => {
         });
 
         // Guarded on the absence of a component, not on `loading` — that guard is what
-        // used to replace the page you were reading.
-        expect(page.template).toContain('v-if="!component"');
-        expect(page.template).not.toContain('v-else-if="loading"');
+        // used to replace the page you were reading. Matched without the `v-if` /
+        // `v-else-if` prefix, because which of the two carries it is a detail of how the
+        // branches are ordered; that it is `!component` and never `loading` is not.
+        expect(page.template).toMatch(/v-(else-)?if="!component"/);
+        expect(page.template).not.toContain('loading"');
     });
 });
 

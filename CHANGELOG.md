@@ -7,7 +7,41 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Back/forward restoration.** A router turns the back button into an ordinary
+  navigation, so the page a visitor was looking at a moment ago is fetched again — a wait
+  the browser's own back/forward cache does not impose on a server-rendered site. Every
+  page that renders is now kept, and a navigation the browser started — back, forward,
+  `router.go()` — is answered from memory with no request.
+
+  A link click to a page already held still fetches: going back asks for the page you were
+  on, clicking a link asks for the page as it is now. So going back shows the page as it
+  was. `window.pwax.restore.forget(path)` drops one page after a mutation has made it
+  wrong and `clear()` drops all of them; a page opts out for good with `restore: false` in
+  its script, next to `middleware`, which stores nothing for it and destroys its instance
+  on the way out rather than parking it in memory.
+
+  Retained pages keep their **component instance** alive in a Vue `<KeepAlive>`, so what
+  comes back is the page you left — the text you had typed, the list scrolled where you
+  scrolled it. Scroll offsets *inside* a page are restored by Pwax rather than by
+  `<KeepAlive>`, which does not keep them: deactivating detaches the nodes, and the browser
+  zeroes a scrollable element's `scrollTop` on the way out. Note the lifecycle consequence: a retained page's `mounted()` runs once and
+  does **not** run again on the way back. A page that must be current every time it is
+  shown does that work in `activated()`, which fires on the first render and on every
+  return; `deactivated()` is its pair.
+
+  Pages are held in memory only, never written to disk, and capped by
+  `pwax.restore.entries` (default 12, which caps `<KeepAlive>` too).
+  `pwax.restore.state => false` keeps the round-trip saving without the instances, and
+  `pwax.restore.enabled => false` turns the whole thing off.
+
+### Fixed
+
+- **`window.pwax.start()` no longer leaves the previous runtime listening.** A reboot
+  unmounts the Vue application, which takes every listener Vue added with it — but not the
+  prefetcher's, which are on `document`. Each reboot added another set, so a hovered link
+  was fetched once per boot that had ever run.
 
 ## [1.0.0]
 

@@ -67,6 +67,7 @@ class Shell
             'home' => $this->pwax->homeUrl(),
             'progress' => $this->progress(),
             'prefetch' => $this->prefetch(),
+            'restore' => $this->restore(),
             'plugins' => $this->extensions('pwax.vue.plugins'),
             'directives' => $this->extensions('pwax.vue.directives'),
             'middleware' => $this->extensions('pwax.vue.middleware'),
@@ -113,6 +114,42 @@ class Shell
         return [
             'mode' => $mode,
             'delay' => (int) $this->config->get('pwax.prefetch.delay', 65),
+        ];
+    }
+
+    /**
+     * Back/forward restoration settings, or `false` when it is switched off.
+     *
+     * `false` rather than an empty array, for the same reason as `progress()` above: the
+     * runtime treats it as a signal to build nothing at all — no `popstate` listener, no
+     * store — rather than an object that holds nothing.
+     *
+     * A cap of zero is switched off too. It is a legitimate way to write it, and letting
+     * it through as `['entries' => 0]` would leave the runtime listening for pops to
+     * answer them from a store that can never hold anything.
+     *
+     * `state` is the `<KeepAlive>` half — whether a page's component instance is kept, and
+     * not merely its payload. It rides along with `entries` rather than being its own key
+     * because it cannot work alone: the runtime needs a stored options object to give Vue
+     * a stable component identity, and that object lives in the same store `entries` caps.
+     *
+     * @return array{entries: int, state: bool}|false
+     */
+    private function restore(): array|false
+    {
+        if (! $this->config->get('pwax.restore.enabled', true)) {
+            return false;
+        }
+
+        $entries = (int) $this->config->get('pwax.restore.entries', 12);
+
+        if ($entries < 1) {
+            return false;
+        }
+
+        return [
+            'entries' => $entries,
+            'state' => (bool) $this->config->get('pwax.restore.state', true),
         ];
     }
 

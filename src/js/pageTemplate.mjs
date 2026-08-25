@@ -6,10 +6,17 @@
  * that decides how they are assembled, and so the defaults below can be asserted against
  * directly in a test.
  *
- * `PwaxPage` has two root-level `<template>` blocks, so it is a *fragment* component: Vue
+ * `PwaxPage` has several root-level branches, so it is a *fragment* component: Vue
  * brackets its output with `<!--[-->` / `<!--]-->` anchors and emits a `<!---->`
  * placeholder for each branch that did not render. That is deliberate — the loader, the
  * error screen and the page share one slot and must not be able to render two at once.
+ *
+ * The branches are flat rather than nested in a `v-else` because `<KeepAlive>` has to stay
+ * mounted for its cache to survive. Nested, a navigation that failed would render the
+ * error screen *in place of* the whole else-branch, taking `<KeepAlive>` down with it and
+ * discarding every retained page — so recovering from one failed navigation would cost the
+ * state of all the others. Flat, the error screen renders alongside a `<KeepAlive>` whose
+ * slot is empty, which deactivates the current page without destroying anything.
  *
  * `.mjs`, deliberately: `package.json` is `export-ignore`d from the Composer package, so a
  * `.js` file here would be resolved against the *host application's* `package.json` and
@@ -47,15 +54,37 @@ export const DEFAULT_ERROR = `
  * Loader and error markup come from the server so they stay customisable through Blade
  * while this bundle itself remains static and cacheable.
  *
+ * `retain` is how many page instances `<KeepAlive>` may hold, or `0` for no `<KeepAlive>`
+ * at all. A retained page keeps everything a component instance owns — a half-filled
+ * form, a scrolled list, an open panel — so going back returns to the page rather than to
+ * a fresh copy of it.
+ *
+ * The key is `renderedKey`, not the path: see `pageKey()` in `page.js` for why keying a
+ * retained instance on the path is what lets `<KeepAlive>`'s cache and the restoration
+ * store disagree about which component a page is.
+ *
+ * The opted-out page renders *outside* `<KeepAlive>` rather than being excluded from it.
+ * Vue's `exclude` matches on a component's `name`, which a page compiled from a Blade view
+ * need not have; a second slot guarded on the same flag needs no name and cannot match the
+ * wrong page. Both are guarded so exactly one can render.
+ *
  * @param {{loader?: string, error?: string}} templates
+ * @param {number} retain
  * @returns {string}
  */
-export function pageTemplate(templates = {}) {
+export function pageTemplate(templates = {}, retain = 0) {
+    const page = (guard) =>
+        `<component v-if="${guard}" :is="component" :key="renderedKey"></component>`;
+
+    const slot =
+        retain > 0
+            ? `<KeepAlive :max="${retain}">${page('component && !error && keepState')}</KeepAlive>` +
+              `\n                ${page('component && !error && !keepState')}`
+            : page('component && !error');
+
     return `
             <template v-if="error">${templates.error || DEFAULT_ERROR}</template>
-            <template v-else>
-                <template v-if="!component">${templates.loader || DEFAULT_LOADER}</template>
-                <component v-if="component" :is="component" :key="renderedPath"></component>
-            </template>
+            <template v-else-if="!component">${templates.loader || DEFAULT_LOADER}</template>
+            ${slot}
         `;
 }

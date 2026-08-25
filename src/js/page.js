@@ -36,6 +36,97 @@ function pageStyleKey(payload) {
 }
 
 /**
+ * The identity Vue keys a page's instance on.
+ *
+ * Not the path, which is the obvious choice and the wrong one. `<KeepAlive>` caches by the
+ * vnode's key, and reuses a cached instance by patching the old vnode against the new one
+ * — which throws outright if the component *type* differs. So a key must change whenever
+ * the type does, and the type is a fresh object every time a page is compiled.
+ *
+ * Keying on the path alone tied `<KeepAlive>`'s cache to this module's, and left them free
+ * to disagree. They did, on the one operation an application is told to reach for:
+ * `window.pwax.restore.forget(path)` drops the payload so the page is fetched and compiled
+ * afresh, while `<KeepAlive>` still held an instance built from the previous compile under
+ * the same key — and the next visit back to that page killed the application. `clear()`
+ * did the same thing to every page at once, and the two caches falling out of step through
+ * ordinary eviction would have done it eventually without either being called.
+ *
+ * Keyed on the options object instead, the question does not arise. A page restored from
+ * the store carries the same object and so the same key, and `<KeepAlive>` reuses its
+ * instance; a page compiled afresh gets a new key, and `<KeepAlive>` builds a new instance
+ * beside the old one rather than mistaking one for the other. The stale entry is evicted in
+ * its own time by the `max` the two caches share.
+ *
+ * A `WeakMap`, so an options object that has been dropped everywhere else takes its key
+ * with it. The path is in the key only to make it legible in devtools.
+ */
+const pageKeys = new WeakMap();
+let pageKeySequence = 0;
+
+function pageKey(options, path) {
+    let key = pageKeys.get(options);
+
+    if (key === undefined) {
+        key = `${path}#${++pageKeySequence}`;
+        pageKeys.set(options, key);
+    }
+
+    return key;
+}
+
+/**
+ * The scroll offsets inside a retained page.
+ *
+ * `<KeepAlive>` keeps a page's DOM nodes, and the browser keeps what is *in* them — an
+ * input's value, a checkbox, a text selection. It does not keep where anything is scrolled
+ * to. Deactivating moves the nodes into a detached container, and a scrollable element that
+ * leaves the document has its `scrollTop` reset to zero by the browser on the way out. The
+ * nodes that come back are the same nodes, scrolled back to the top.
+ *
+ * Window scroll is not affected — the router restores that from its own saved position —
+ * so this is about the scrollable regions *within* a page: a list pane, a chat log, a
+ * sidebar, anything with `overflow: auto`.
+ *
+ * The offsets have to be read before the swap, which is why this lives here rather than in
+ * a `deactivated()` hook on the page itself. By the time `deactivated()` runs the element
+ * is already detached and already reads zero, so a hook capturing there records nothing:
+ * checked in a real browser, which is also the only place the problem is visible at all.
+ * A DOM implementation without layout — jsdom, and so this package's test suite — keeps
+ * `scrollTop` across a detach and reports every one of these cases as already working.
+ *
+ * Keyed on the options object, the same identity `<KeepAlive>` keys the instance on, so a
+ * page whose offsets are held is exactly a page whose instance is held. A `WeakMap`,
+ * because the element references it stores would otherwise pin a whole page's DOM in
+ * memory after the instance holding it had gone.
+ */
+const retainedScroll = new WeakMap();
+
+function captureScroll(root) {
+    const offsets = [];
+
+    if (!root) {
+        return offsets;
+    }
+
+    // The root itself as well as its descendants: the scrollable element is often the
+    // page's own outermost node.
+    for (const el of [root, ...root.querySelectorAll('*')]) {
+        if (el.scrollTop || el.scrollLeft) {
+            offsets.push([el, el.scrollTop, el.scrollLeft]);
+        }
+    }
+
+    return offsets;
+}
+
+function applyScroll(offsets) {
+    for (const [el, top, left] of offsets || []) {
+        el.scrollTop = top;
+        el.scrollLeft = left;
+    }
+}
+
+/**
  * Run a DOM mutation inside `document.startViewTransition` when the browser supports it.
  *
  * The View Transitions API snapshots the current document, lets the callback commit a
@@ -56,7 +147,19 @@ function pageStyleKey(payload) {
  */
 function withViewTransition(update) {
     if (typeof document !== 'undefined' && typeof document.startViewTransition === 'function') {
-        return document.startViewTransition(update);
+        // `.updateCallbackDone`, not the transition itself. `startViewTransition()` returns
+        // a `ViewTransition`, which is not a promise — awaiting it resolves on the spot, so
+        // a caller that believed it was waiting for the DOM to be committed was not waiting
+        // for anything at all. The browser does hold its snapshot until the callback's own
+        // promise settles; this is the handle on that.
+        //
+        // Guarded, because the object comes from the browser rather than from here. The
+        // swap does its own work inside `update`, so a missing handle costs ordering the
+        // caller wanted, not correctness — whereas reading a property off `undefined`
+        // would take down the navigation.
+        const transition = document.startViewTransition(update);
+
+        return transition?.updateCallbackDone ?? Promise.resolve(transition);
     }
 
     return update();
@@ -151,12 +254,27 @@ export function createPageComponent({
     // module middleware does not hold up the first paint; `await` accepts both.
     middleware = {},
     prefetcher = null,
+    restore = null,
     templates = {},
     progress = null,
 }) {
     // Consumed by the first `visit()` and cleared, so a later navigation back to this URL
     // fetches rather than replaying the payload the document was served with.
     let initialPayload = initial;
+
+    /*
+     * How many page instances `<KeepAlive>` may hold, or 0 for none.
+     *
+     * Gated on the restoration cache rather than configured apart from it, because
+     * `<KeepAlive>` cannot work without it. Vue reuses a cached instance only when the
+     * component *type object* is identical between the two visits: `patch()` compares
+     * `n1.type === n2.type`, and a type that differs tears the instance down and builds a
+     * new one — in a `<KeepAlive>` it throws outright. Every compile produces a fresh
+     * options object, so the only thing that can supply a stable identity is a store that
+     * held the first one. That store is `restore`.
+     */
+    const retain =
+        config.restore && config.restore.state !== false ? config.restore.entries || 0 : 0;
 
     return {
         name: 'PwaxPage',
@@ -191,7 +309,7 @@ export function createPageComponent({
          * Built by `pageTemplate()` rather than written here — see that module's docblock
          * for why the fragment structure is what it is.
          */
-        template: pageTemplate(templates),
+        template: pageTemplate(templates, retain),
 
         data() {
             return {
@@ -199,10 +317,19 @@ export function createPageComponent({
                 loading: true,
                 error: null,
                 currentPath: null,
-                // The path of the component actually on screen, which during a navigation
-                // is not the path being navigated to. It is what keys the transition, so
-                // it must change only when the rendered page does.
-                renderedPath: null,
+                // What Vue keys the page instance on: the identity of the component
+                // actually on screen, which during a navigation is not the one being
+                // navigated to. It moves only when the rendered page does, so a failed
+                // navigation leaves the visitor exactly where they were.
+                //
+                // An identity rather than the path, because two visits to one path can be
+                // two different components — see `pageKey()` — and the moment those share
+                // a key, `<KeepAlive>` reuses an instance built from the other one.
+                renderedKey: null,
+                // Which of the two page slots renders: inside `<KeepAlive>`, or beside
+                // it. Moved with the swap rather than ahead of it, so a page that opts out
+                // cannot switch the slot out from under the page still on screen.
+                keepState: true,
                 // The first paint is not a navigation: the browser has just read the
                 // document, so announcing it again would be noise.
                 announced: false,
@@ -253,6 +380,33 @@ export function createPageComponent({
                     this.currentPath = path;
 
                     return this.mount(payload);
+                }
+
+                /*
+                 * Back or forward to a page this document has already rendered.
+                 *
+                 * `take()` answers only for a navigation the browser started, so a link
+                 * click to a URL that happens to be held still fetches — going back asks
+                 * for the page you were on, clicking a link asks for the page as it is
+                 * now. See `restore.js` for why those are different questions.
+                 *
+                 * Nothing between here and `mount()` touches the network, so `loading`
+                 * is never set and the progress bar never starts: there is no wait to
+                 * report. The page on screen stays there for the one microtask
+                 * `mount()` needs, exactly as it does for a fetched page.
+                 */
+                const restored = restore?.take(path);
+
+                if (restored) {
+                    // A navigation already in flight is now irrelevant — the visitor has
+                    // gone back while it was running — and its payload must not be
+                    // allowed to land on top of the restored page.
+                    this.abort();
+
+                    this.error = null;
+                    this.currentPath = path;
+
+                    return this.mount(restored.payload, restored.options);
                 }
 
                 this.abort();
@@ -335,7 +489,7 @@ export function createPageComponent({
             /**
              * Turn a payload into a mounted component.
              */
-            async mount(payload) {
+            async mount(payload, retained = null) {
                 if (!payload) {
                     this.fail(new Error('pwax: empty component payload'));
                     return;
@@ -353,7 +507,14 @@ export function createPageComponent({
                     // ready, so the swap never flashes unstyled content.
                     const previous = this.mountedStyleKey;
 
-                    const options = await toOptions(payload);
+                    /*
+                     * The *same* options object as last time, when this page is being
+                     * restored. Not an optimisation: it is what lets `<KeepAlive>` reuse
+                     * the instance, and therefore what preserves the form the visitor was
+                     * filling in. Compiling again would produce an equal-but-distinct type
+                     * and Vue would throw rather than reuse.
+                     */
+                    const options = retained || (await toOptions(payload));
 
                     const key = pageStyleKey(payload);
 
@@ -388,7 +549,7 @@ export function createPageComponent({
                     // The swap, and the only point at which the page on screen changes.
                     // Everything above this line ran while the previous page was still
                     // rendered: the fetch, the compile, the external assets, the
-                    // stylesheet. `renderedPath` moves with it, because it keys the
+                    // stylesheet. `renderedKey` moves with it, because it keys the
                     // transition and must not change while a navigation is merely in
                     // flight — a failed one leaves the visitor where they were.
                     // `markRaw`, not `defineAsyncComponent`. The options object was
@@ -397,8 +558,8 @@ export function createPageComponent({
                     // extra microtask and an extra render pass in which `component` is
                     // truthy but draws nothing. Worse, it minted a *new component type* on
                     // every navigation, so returning to a path already visited unmounted
-                    // and rebuilt the page from scratch even though `renderedPath` — the
-                    // key on the `<component>` — had not changed.
+                    // and rebuilt the page from scratch even though the key on the
+                    // `<component>` had not changed.
                     //
                     // `markRaw` does what the `shallowRef` was reaching for: it keeps Vue
                     // from walking the options and making them reactive.
@@ -410,10 +571,39 @@ export function createPageComponent({
                     // single-frame empty state is the flicker that motivated this change.
                     // With it, the browser holds the old page visible until the new one
                     // is ready, even when `transition.duration` is 0.
-                    const swap = () => {
+                    /*
+                     * The outgoing page's scroll offsets, read while its nodes are still
+                     * in the document. One line later they are detached and read zero.
+                     * `this.component` is the page being replaced, and is the same object
+                     * `<KeepAlive>` has its instance filed under.
+                     */
+                    if (retain > 0 && this.component) {
+                        retainedScroll.set(
+                            this.component,
+                            captureScroll(document.getElementById(config.mount || 'pwax'))
+                        );
+                    }
+
+                    const swap = async () => {
                         this.component = Vue.markRaw(options);
-                        this.renderedPath = this.currentPath;
+                        this.renderedKey = pageKey(options, this.currentPath);
+                        this.keepState = options.restore !== false;
                         this.loading = false;
+
+                        /*
+                         * Inside the callback, not after it. A view transition takes its
+                         * "after" snapshot when this promise settles and renders that
+                         * snapshot for the length of the animation — so offsets applied
+                         * once the transition is already running are applied to something
+                         * the visitor cannot see, and are gone by the time they can. Put
+                         * back here, they are part of the picture the browser animates to.
+                         *
+                         * `$nextTick` first, because the three assignments above have only
+                         * queued a render: the nodes to scroll are not in the document yet.
+                         */
+                        await this.$nextTick();
+
+                        applyScroll(retainedScroll.get(options));
                     };
 
                     const transitionReady = withViewTransition(swap);
@@ -424,6 +614,21 @@ export function createPageComponent({
                     // new pseudo-elements have been committed; without the API, the
                     // await is a no-op on a synchronous value.
                     await transitionReady;
+
+                    /*
+                     * Kept for the back button, now that this page is definitely the one
+                     * on screen. Recorded after the swap rather than after the fetch so
+                     * that a payload which failed to compile, or a middleware that
+                     * redirected away from it, leaves nothing behind to restore.
+                     *
+                     * A page opts out by declaring `restore: false` in its script, the
+                     * same way it declares `middleware`. That is for a page whose content
+                     * is only correct at the moment it was served — a one-time token, a
+                     * checkout step, a flash of something that has since been read.
+                     */
+                    if (options.restore !== false) {
+                        restore?.remember(this.currentPath, { payload, options });
+                    }
 
                     this.$nextTick(() => {
                         this.announce();

@@ -427,8 +427,8 @@ package version (which is rarely what you want — fork it knowingly).
 
 ## 9. Config keys that cross the runtime boundary
 
-The three Vue extensions are emitted into the page as JavaScript; they
-all live under `pwax.vue.*`:
+The three Vue extensions are resolved server-side into a module URL or a
+dotted path and emitted as JSON; they all live under `pwax.vue.*`:
 
 ```php
 'vue' => [
@@ -439,9 +439,12 @@ all live under `pwax.vue.*`:
 ```
 
 Each value is either a `@pwaxImport('view.name')` reference or a dotted
-path to a global on `window`. Values are configuration, **never** a
-place for request input. They are emitted verbatim into a `<script
-type="application/json">` block.
+path to a global on `window`. `Shell::extensions()` turns each one into
+a `{type: 'module', url}` or `{type: 'global', path}` entry inside the
+`<script type="application/json">` config island, and `extensions.js`
+imports the URL or walks the path — it never evaluates a configured
+string. Values are still configuration, **never** a place for request
+input.
 
 The `pwax.middleware` config is a **different** key — it lists Laravel
 middleware groups to inject the package's HTTP middleware into. The
@@ -532,7 +535,7 @@ shared domain with Nova, Telescope or a Filament panel.
 
 ---
 
-## 12. Prefetching
+## 12. Prefetching and going back
 
 `pwax.prefetch.{mode,delay}` controls whether the runtime fetches the
 next page before the visitor clicks:
@@ -550,6 +553,73 @@ worker is what stores pages.
 
 Costs a request for a link someone hovers and does not click. Turn it
 off for an application with expensive pages or metered users.
+
+### The back button
+
+`pwax.restore.{enabled,entries}` controls the other half. A router turns
+back into an ordinary navigation, so the page is fetched again; the
+browser's own back/forward cache does no such thing for a server-rendered
+site. The runtime keeps every page it renders and answers a navigation the
+**browser** started — back, forward, `router.go()` — from memory with no
+request.
+
+Only those. A link click to a page already held still fetches. Going back
+asks for the page you were on; clicking a link asks for the page as it is
+now. (Turbo calls these restoration and application visits.)
+
+So going back shows the page **as it was**. After a mutation that makes a
+held page wrong, say so:
+
+```js
+window.pwax.restore.forget('/posts/1');   // that page only
+window.pwax.restore.clear();              // everything, e.g. on sign-out
+```
+
+A page that must never be restored declares it in its own script, next to
+`middleware` — for a one-time token, a checkout step, anything only correct
+at the moment it was served. Such a page is not held at all: its payload is
+never stored, and its instance is destroyed on the way out rather than
+parked in `<KeepAlive>`, so nothing typed into it outlives the visit:
+
+```vue
+<script>
+export default {
+    restore: false,
+};
+</script>
+```
+
+Retained pages also keep their **component instance** alive in a Vue
+`<KeepAlive>` (`pwax.restore.state`, default `true`), so a half-filled
+form, a scrolled list or an open panel is still there on the way back.
+
+This changes lifecycle, and it is the thing that catches people:
+
+```js
+export default {
+    mounted()   { this.load(); },   // runs once, NOT again on the way back
+    activated() { this.load(); },   // first render AND every return — use this
+};
+```
+
+A page that must be current every time it is shown loads in
+`activated()`; `deactivated()` is its pair for stopping timers. Set
+`pwax.restore.state => false` to keep the round-trip saving without the
+instances, for an application whose pages assume `mounted()` runs every
+visit.
+
+Held in memory only, never written to disk, capped at `entries` (default
+12, which caps `<KeepAlive>` too) and never expiring while the document
+lives. A retained page is a live component instance and its DOM, not
+just a payload, so the cap is a real memory decision — lower it for an
+application with heavy pages. A reload or a new tab starts with nothing, because a payload can
+carry a signed-in visitor's data. Do **not** reach for `sessionStorage`
+to make it survive a reload; that is the reason it does not.
+
+Two scrolls, two mechanisms: the **window** position comes from the
+router's saved position, while scrolling **inside** a page (`overflow:
+auto` panes) is restored by Pwax — `<KeepAlive>` does not keep it,
+because detaching the nodes makes the browser zero their `scrollTop`.
 
 ---
 

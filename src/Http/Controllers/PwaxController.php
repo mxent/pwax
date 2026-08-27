@@ -101,6 +101,47 @@ class PwaxController extends Controller
     }
 
     /**
+     * Serve the JSON renderer.
+     *
+     * A second bundle rather than part of the runtime: it carries @json-render/vue,
+     *
+     * @json-render/core and zod, which is around 82 kB gzipped against the runtime's
+     * 9.7 kB, and only an application that renders a `<PwaxJson>` ever needs it. The
+     * client fetches it the first time one is rendered.
+     *
+     * 404 when the feature is off, rather than serving a bundle nothing can reach: the
+     * runtime is told the same thing through a null `json.runtime`, so a request that
+     * gets here at all is one somebody wrote by hand.
+     */
+    public function jsonRuntime(Request $request): SymfonyResponse
+    {
+        if (! $this->config->get('pwax.json.enabled', true)) {
+            return $this->plain(
+                '// pwax: JSON rendering is disabled (pwax.json.enabled)',
+                404,
+                'application/javascript; charset=utf-8'
+            );
+        }
+
+        $path = dirname(__DIR__, 3) . '/dist/pwax-json.js';
+
+        if (! is_file($path)) {
+            Log::error('pwax: dist/pwax-json.js is missing. Run `npm run build` or reinstall the package.');
+
+            return $this->plain('// pwax: JSON renderer bundle missing', 500, 'application/javascript; charset=utf-8');
+        }
+
+        $body = (string) file_get_contents($path);
+
+        $response = new Response($body, 200, ['Content-Type' => 'application/javascript; charset=utf-8']);
+
+        $response->headers->set('Cache-Control', 'public, max-age=31536000, immutable');
+        $response->headers->set('ETag', '"' . substr(hash('xxh128', $body), 0, 16) . '"');
+
+        return $this->finish($request, $response);
+    }
+
+    /**
      * Serve the runtime's source map.
      *
      * The bundle ends with a `sourceMappingURL` comment and nothing answered it, so every
@@ -111,6 +152,14 @@ class PwaxController extends Controller
     public function sourceMap(Request $request): SymfonyResponse
     {
         return $this->map($request, dirname(__DIR__, 3) . '/dist/pwax.js.map');
+    }
+
+    /**
+     * Serve the JSON renderer's source map.
+     */
+    public function jsonRuntimeSourceMap(Request $request): SymfonyResponse
+    {
+        return $this->map($request, dirname(__DIR__, 3) . '/dist/pwax-json.js.map');
     }
 
     /**

@@ -215,6 +215,17 @@
 @endforeach
 
 {{--
+    The JSON renderer, but only for a page that renders one.
+
+    `<PwaxJson>` loads it on first render, which is the latest possible moment for the
+    largest asset the page will fetch. Hinted here, it arrives alongside the framework
+    instead of after it. Emitted for no other page — see `Shell::jsonPreloadUrl()`.
+--}}
+@if ($pwaxJsonRuntime = $shell->jsonPreloadUrl($component ?? null))
+    <link rel="preload" as="script" href="{{ $pwaxJsonRuntime }}">
+@endif
+
+{{--
     This page's own external stylesheets, hinted at rather than loaded.
 
     The runtime attaches them with `styles.link()` as the page component mounts, and it has

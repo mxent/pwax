@@ -218,6 +218,24 @@ distinct namespaces by design; the two were once confused for each other,
 and grouping all client-side Vue extensions under `pwax.vue.*` was the
 fix.
 
+### A JSON catalog entry is a component, not a render function
+
+`src/js/json/index.js` gives every `pwax.json.components` entry its own
+generated Vue component rather than the arrow function
+`@json-render/vue`'s README shows. This looks like ceremony and is not.
+A registry entry is handed `{props, children, emit, on, bindings,
+loading}` — no element, no slot map, no instance — so a plain function
+cannot discover which events the document bound (it reads them off the
+loaded component's own `emits`) and cannot reach `useStateStore()` to
+honour a `$bindState` (a composable needs a `setup()`).
+
+Simplify it back to a function and every document renders perfectly and
+does nothing: no `on:` binding fires, no two-way binding writes.
+`tests/js/jsonRender.test.js` runs the real bundle against the real Vue
+for exactly this reason, and pins three more behaviours of version
+0.20.0 that are not documented contracts — `children` rather than named
+slots, `repeat` on the container, and the patch-shaped `onStateChange`.
+
 ### Components are Blade views, but their compile output is JavaScript
 
 `src/Compiler/ComponentCompiler` (and its helpers `BlockExtractor`,
@@ -305,6 +323,11 @@ reachable from this object is part of the contract:
 - `window.pwax.share(data)` — Web Share integration.
 - `window.pwax.prefetch(path)` — explicit prefetch.
 - `window.pwax.progress.{start,done,reset}` — the progress bar.
+- `window.pwax.json.{load,prompt,jsonSchema}` — the JSON document renderer.
+  `load()` fetches `dist/pwax-json.js` early; `prompt()` and `jsonSchema()`
+  describe the configured catalog for a model. Rendering itself is the
+  globally registered `<PwaxJson :json="…" />` component, which is also part
+  of the contract — see §5.
 
 `types/pwax.d.ts` is the authority for every shape above and is type-checked in
 CI (`npm run types`). When this list and that file disagree, the file is right —
@@ -424,7 +447,21 @@ If a setting needs to reach the client runtime:
    its purpose.
 5. CHANGELOG entry under `### Added` (not `### Internal`).
 
-### 9.5 Adding a new prefab shell partial or extension point
+### 9.5 Adding a component to the JSON catalog
+
+1. Write it as an ordinary component. Children come through **one default
+   `<slot />`** — a document cannot address a named one — and whatever it
+   declares in `emits` is what a document may bind with `on`.
+2. Add it to `pwax.json.components` in `config/pwax.php`. A bare
+   reference is enough; the array form adds `description` and `props`,
+   which is what constrains a generated document.
+3. Nothing else. It is precached by `ComponentRegistry` like any other
+   component, and `Shell::json()` resolves the reference with the same
+   `moduleEntry()` the `vue.*` groups use.
+4. `php artisan pwax:doctor` names a reference that points at no view,
+   and a prop `type` the schema builder does not know.
+
+### 9.6 Adding a new prefab shell partial or extension point
 
 The shell ships several partials (`layouts/shell`, `components/includes/head`,
 `components/includes/foot`, `components/content`, `components/loader`,
@@ -439,7 +476,7 @@ Adding a new partial:
 3. Document it in `resources/ai/pwax-skill.md` and the README so consumers
    know it exists.
 
-### 9.6 Adding a new runner config key (CLI)
+### 9.7 Adding a new runner config key (CLI)
 
 `pwax.assets.{render_functions,node,vue_build}` controls the `pwax:compile`
 runner. Adding another option:

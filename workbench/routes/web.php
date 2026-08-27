@@ -63,6 +63,50 @@ Route::get('/items', fn () => pwaxRender('pages.items')
     ->description('A list fetched over HTTP, and still there offline.'))
     ->name('items');
 
+/*
+|--------------------------------------------------------------------------
+| A JSON document
+|--------------------------------------------------------------------------
+|
+| An ordinary `pwaxRender()` route. The document is controller data like any other, and
+| the page renders it with `<PwaxJson>` alongside markup it wrote by hand.
+|
+| Three things the document exercises, because all three are easy to get wrong:
+| `$template` reading state, `$bindState` writing it back, and `on` dispatching an action
+| the runtime provides — `navigate` here, so the button routes without a page load.
+|
+| `->cacheable()` is what puts it in the offline cache: the document is the same for every
+| visitor, so there is nothing visitor-specific to keep off disk.
+|
+*/
+
+Route::get('/sample', fn () => pwaxRender('pages.sample', [
+    'doc' => [
+        'root' => 'card',
+        'state' => ['user' => ['name' => 'Ada']],
+        'elements' => [
+            'card' => [
+                'type' => 'Card',
+                'props' => ['title' => ['$template' => 'Hello, ${/user/name}!'], 'variant' => 'raised'],
+                'children' => ['field', 'home'],
+            ],
+            'field' => [
+                'type' => 'Field',
+                'props' => ['label' => 'Your name', 'modelValue' => ['$bindState' => '/user/name']],
+            ],
+            'home' => [
+                'type' => 'Button',
+                'props' => ['label' => 'Back home', 'variant' => 'secondary'],
+                'on' => ['press' => ['action' => 'navigate', 'params' => ['to' => '/']]],
+            ],
+        ],
+    ],
+])
+    ->cacheable()
+    ->title('A JSON document')
+    ->description('A page that is half Blade template and half JSON document.'))
+    ->name('sample');
+
 Route::get('/api/items', fn () => response()->json([
     'items' => [
         ['id' => 1, 'title' => 'First'],

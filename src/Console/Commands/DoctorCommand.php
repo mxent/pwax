@@ -51,6 +51,7 @@ class DoctorCommand extends Command
         $this->checkAssets($config);
         $this->checkCrossOriginPolicy($config);
         $this->checkRuntimeBundle();
+        $this->checkJson($config);
         $this->checkPrecompiledTemplates($pwax);
         $this->checkManifest($config);
         $this->checkServiceWorker($config);
@@ -287,6 +288,124 @@ class DoctorCommand extends Command
             'Client runtime bundle is present',
             'dist/pwax.js is missing from the package. Reinstall with `composer reinstall mxent/pwax`.'
         );
+    }
+
+    /**
+     * The JSON catalog, and the bundle that renders against it.
+     *
+     * Everything here fails at render time in the browser if it fails at all, which for a
+     * config typo means an empty node and a console line nobody is watching. The four
+     * things worth catching before then:
+     *
+     *   - The renderer is missing from the package while the feature is on. The one that
+     *     is a problem rather than a warning: every `<PwaxJson>` on the site is blank.
+     *   - An entry that names no component, so the catalog silently loses it.
+     *   - An entry pointing at a view that does not exist. Signing means the URL is minted
+     *     happily and 400s when the browser asks for it.
+     *   - A prop type the schema builder does not know. It falls back to accepting
+     *     anything, which is a validation rule that quietly is not one.
+     */
+    private function checkJson(Config $config): void
+    {
+        if (! $config->get('pwax.json.enabled', true)) {
+            return;
+        }
+
+        /** @var array<string, mixed> $components */
+        $components = (array) $config->get('pwax.json.components', []);
+
+        if ($components === []) {
+            return;
+        }
+
+        $this->assert(
+            is_file(dirname(__DIR__, 3) . '/dist/pwax-json.js'),
+            'JSON renderer bundle is present',
+            'dist/pwax-json.js is missing but pwax.json.components names components. '
+            . 'Every <PwaxJson> will render nothing. Reinstall with `composer reinstall mxent/pwax`.'
+        );
+
+        $views = $this->laravel->make('view');
+        $types = ['string', 'number', 'boolean', 'enum', 'array', 'object', 'any'];
+        $directive = (string) $config->get('pwax.components.directive', 'pwaxImport');
+        $pattern = '/^@' . preg_quote($directive, '/') . '\s*\(\s*[\'"]?(.+?)[\'"]?\s*\)$/';
+        $healthy = true;
+
+        foreach ($components as $name => $entry) {
+            $reference = is_array($entry) ? ($entry['component'] ?? null) : $entry;
+
+            if (! is_string($reference) || trim($reference) === '') {
+                $this->fail_(sprintf(
+                    'pwax.json.components["%s"] names no component. A value is either the '
+                    . 'component reference itself or an array with a "component" key.',
+                    $name
+                ));
+                $healthy = false;
+
+                continue;
+            }
+
+            $reference = trim($reference);
+            $view = null;
+
+            if (preg_match($pattern, $reference, $matches) === 1) {
+                $view = $matches[1];
+            } elseif (str_starts_with($reference, 'module:')) {
+                $view = substr($reference, 7);
+            }
+
+            if ($view !== null) {
+                // The export half of `Modal from components.modal` is not a view name.
+                $view = str_contains($view, ' from ')
+                    ? trim(explode(' from ', $view, 2)[1])
+                    : trim($view);
+
+                if (! $views->exists($view)) {
+                    $this->fail_(sprintf(
+                        'pwax.json.components["%s"] points at the view "%s", which does not '
+                        . 'exist. A document naming "%s" will render nothing.',
+                        $name,
+                        $view,
+                        $name
+                    ));
+                    $healthy = false;
+                }
+            }
+
+            if (! is_array($entry)) {
+                continue;
+            }
+
+            foreach ((array) ($entry['props'] ?? []) as $prop => $declaration) {
+                $type = is_array($declaration) ? ($declaration['type'] ?? null) : $declaration;
+
+                if (is_string($type) && ! in_array($type, $types, true)) {
+                    $this->warn_(sprintf(
+                        'pwax.json.components["%s"].props["%s"] has type "%s", which is not '
+                        . 'one of %s. It will accept any value.',
+                        $name,
+                        $prop,
+                        $type,
+                        implode(', ', $types)
+                    ));
+                }
+
+                if (is_array($declaration)
+                    && ($declaration['type'] ?? null) === 'enum'
+                    && ! ($declaration['values'] ?? [])) {
+                    $this->warn_(sprintf(
+                        'pwax.json.components["%s"].props["%s"] is an enum with no "values", '
+                        . 'so it accepts any string.',
+                        $name,
+                        $prop
+                    ));
+                }
+            }
+        }
+
+        if ($healthy) {
+            $this->ok(sprintf('JSON catalog resolves (%d component(s))', count($components)));
+        }
     }
 
     /**

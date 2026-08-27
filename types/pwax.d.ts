@@ -58,6 +58,66 @@ declare namespace Pwax {
         plugins: Record<string, RuntimeExtension>;
         directives: Record<string, RuntimeExtension>;
         middleware: Record<string, RuntimeExtension>;
+        json: JsonConfig;
+    }
+
+    /** One prop of a catalog component, as `pwax.json.components` declares it. */
+    interface JsonPropDeclaration {
+        type?: 'string' | 'number' | 'boolean' | 'enum' | 'array' | 'object' | 'any';
+        /** The permitted values, for `type: 'enum'`. */
+        values?: string[];
+        required?: boolean;
+    }
+
+    /**
+     * One entry of the JSON catalog, resolved server-side.
+     *
+     * The component half is a `RuntimeExtension` — the same `module`/`global` shape the
+     * `vue.*` groups use. The rest is the description a document is validated and a
+     * generator is constrained against.
+     */
+    type JsonCatalogEntry = RuntimeExtension & {
+        description?: string;
+        slots?: string[];
+        /**
+         * Events the component raises that a document may bind with `on`.
+         *
+         * Rarely needed: a component's own `emits` is read once its module loads, and
+         * that is where these normally come from. Declared only for a component whose
+         * options the runtime cannot see, such as one resolved from a `window` global.
+         */
+        events?: string[];
+        props?: Record<string, JsonPropDeclaration>;
+    };
+
+    /** `pwax.json`, resolved. Every field is present and empty when disabled. */
+    interface JsonConfig {
+        enabled: boolean;
+        /** The renderer bundle's fingerprinted URL, or null when disabled. */
+        runtime: string | null;
+        components: Record<string, JsonCatalogEntry>;
+        actions: Record<string, RuntimeExtension>;
+    }
+
+    /**
+     * `window.pwax.json` — the JSON document renderer.
+     *
+     * Rendering is done with the global `<PwaxJson :json="…" />` component; this is the
+     * surface for the things around it. `prompt()` and `jsonSchema()` load the renderer
+     * if it is not already loaded, because the catalog they describe lives inside it.
+     */
+    interface Json {
+        /**
+         * Load the renderer now rather than on first render.
+         *
+         * Never required — `<PwaxJson>` loads it itself — and worth calling only to move
+         * the fetch somewhere less noticeable than the render it would otherwise delay.
+         */
+        load(): Promise<unknown>;
+        /** The system prompt that constrains a model to this application's catalog. */
+        prompt(options?: Record<string, unknown>): Promise<string>;
+        /** The JSON Schema for a model that supports structured output. */
+        jsonSchema(options?: Record<string, unknown>): Promise<object>;
     }
 
     /**
@@ -220,6 +280,7 @@ declare namespace Pwax {
          */
         share(data: ShareData): Promise<'shared' | 'dismissed' | 'unavailable'>;
         readonly progress: Progress | null;
+        readonly json: Json;
     }
 
     /** Events dispatched on `document`. */

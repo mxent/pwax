@@ -7,7 +7,41 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`<PwaxJson :json="…" />`**, a globally registered component that renders a JSON
+  document — a tree of components and props — against a catalog declared in
+  `pwax.json.components`. A document can only name components the catalog lists and
+  only pass props it describes, which is what makes a structure assembled on the
+  server, stored in a database or produced by a language model safe to render. Nothing
+  about `pwaxRender()` or the payload format changes: the document is controller data
+  like any other, and the page around it is an ordinary Pwax component.
+
+- **A catalog component is an ordinary Pwax component.** Children arrive through one
+  default `<slot />`, and whatever the component declares in `emits` is what a document
+  may bind with `on` — configuration never repeats it. Scoped styles, lazy loading and
+  offline precaching all work as they already did.
+
+- **Built-in actions `navigate`, `submit` and `reload`.** `navigate` routes through the
+  SPA router, and `submit` posts with the CSRF token and queues the write through
+  `window.pwax.sync` when the connection is gone. Applications add their own under
+  `pwax.json.actions`, resolved exactly like `pwax.vue.middleware`, or pass `:handlers`
+  for one instance.
+
+- **`window.pwax.json.{load,prompt,jsonSchema}`.** `prompt()` and `jsonSchema()`
+  describe the configured catalog for a model that is generating documents.
+
+- **`dist/pwax-json.js`**, a second prebuilt bundle carrying
+  [json-render](https://github.com/vercel-labs/json-render) and its dependencies. It is
+  about 82 kB gzipped against the runtime's 9.7 kB, so it is served, precached and
+  fetched only when `pwax.json.enabled` is on and a `<PwaxJson>` actually renders — and
+  hinted at with a `<link rel="preload">` on the pages whose templates use one. Like
+  every other bundle it ships built, so there is still nothing to install and nothing to
+  compile.
+
+- `php artisan pwax:doctor` checks the catalog: a reference that names no component, one
+  pointing at a view that does not exist, an unknown prop type, and an `enum` with no
+  values.
 
 ## [1.0.0]
 

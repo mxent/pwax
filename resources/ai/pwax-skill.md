@@ -158,6 +158,95 @@ a path on `window`. Inside a `<script>` block, a string is just a string.
 
 ---
 
+## 3b. `<PwaxJson>` — the other way to wire components up
+
+A page whose shape is not known when you write it — a dashboard assembled
+from what a user enabled, a form driven by a schema, a screen a model
+produced — renders a **JSON document** instead of a template:
+
+```blade
+<template>
+    <div class="page">
+        <h1>Your report</h1>
+        <PwaxJson :json="doc" />
+    </div>
+</template>
+
+<script>
+export default {
+    data() {
+        return { doc: @json($doc) };
+    },
+};
+</script>
+```
+
+The route is unchanged — `pwaxRender('pages.report', ['doc' => $doc])`.
+`<PwaxJson>` is registered globally, so there is nothing to import, and it
+works anywhere a component works.
+
+**What a document may contain is `pwax.json.components`**, and only that:
+
+```php
+'json' => [
+    'components' => [
+        'Card' => "@pwaxImport('components.card')",
+        'Button' => [
+            'component' => "@pwaxImport('components.button')",
+            'description' => 'A clickable button that emits a "press" event.',
+            'props' => ['label' => ['type' => 'string', 'required' => true]],
+        ],
+    ],
+],
+```
+
+Same reference vocabulary as `pwax.vue.*`: `@pwaxImport(...)`,
+`module:view.name`, or a dotted path on `window`. Never evaluated.
+
+**A catalog component is an ordinary Pwax component.** Two rules:
+
+- Children arrive through **one default `<slot />`**. A document lists
+  child keys under `children` and cannot address a named slot.
+- **`emits` is the contract.** Whatever the component declares there is
+  what a document can bind with `on`. Configuration never repeats it.
+
+A document is a flat map, not a nested tree:
+
+```php
+[
+    'root' => 'card',
+    'state' => ['user' => ['name' => 'Ada']],
+    'elements' => [
+        'card' => [
+            'type' => 'Card',
+            'props' => ['title' => ['$template' => 'Hello, ${/user/name}!']],
+            'children' => ['go'],
+        ],
+        'go' => [
+            'type' => 'Button',
+            'props' => ['label' => 'Settings'],
+            'on' => ['press' => ['action' => 'navigate', 'params' => ['to' => '/settings']]],
+        ],
+    ],
+]
+```
+
+Props may be `{"$state": ptr}`, `{"$bindState": ptr}`,
+`{"$template": "… ${ptr} …"}`, `{"$cond": …, "$then": …, "$else": …}`,
+`{"$item": field}` or `{"$index": true}`. Elements may carry `children`,
+`visible`, `repeat` and `on`.
+
+Built-in actions: `navigate`, `submit` (CSRF, and queued offline) and
+`reload`. Add more under `pwax.json.actions`, or pass `:handlers` for one
+instance. `@action` fires for every dispatch; `@state-change` reports the
+pointers a `$bindState` wrote.
+
+The renderer is a second bundle, `dist/pwax-json.js`, ~82 kB gzipped. It
+is fetched by the first `<PwaxJson>` that renders and never on a page that
+has none. It is precached, so a `->cacheable()` page works offline.
+
+---
+
 ## 4. The `@pwaxImport` directive
 
 One component reaches another with `@pwaxImport('view.name')`, **inside the
@@ -834,6 +923,24 @@ a Pwax component, every Vue interpolation **must be** `@{{ }}` so
 Blade passes it through. Forgetting the `@` makes Blade consume it and
 ship an empty template — the symptom is a runtime warning and a blank
 value where one was expected.
+
+### A JSON document that renders nothing
+
+Three shapes look right and draw an empty box. Pwax warns about the first
+two in the console; the third is a catalog problem.
+
+- **`slots` on an element.** The renderer reads `children` and never
+  `slots`, so content placed under `slots` never renders. List child keys
+  under `children`, and give the component one default `<slot />`.
+- **`repeat` on the row.** `repeat` repeats an element's *children*, so it
+  goes on the container. On an element with no `children` it produces one
+  empty row.
+- **A `type` that is not in the catalog.** Renders nothing and names
+  itself in the console. Add it to `pwax.json.components`.
+
+Two more worth knowing: `@state-change` emits the *changed pointers*, not
+a state snapshot; and props are camelCase in a document because they are
+Vue props (`modelValue`, not `model-value`).
 
 ### The `@` literal in JSON-LD
 

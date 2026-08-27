@@ -12,6 +12,7 @@ import { loadConfig, loadInitialPayload } from './config.js';
 import { resolveExtensions } from './extensions.js';
 import { createHttp } from './http.js';
 import { createBadgeApi, createInstallApi, createStorageApi, watchInstall } from './install.js';
+import { createJson } from './json.js';
 import { createLaunchApi, createShareApi, watchLaunch } from './launch.js';
 import { importModule } from './modules.js';
 import { createPushApi } from './push.js';
@@ -115,6 +116,21 @@ async function boot() {
         throw new Error(`pwax: mount element #${config.mount || 'pwax'} was not found.`);
     }
 
+    // Built before the app so `<PwaxJson>` can be registered below, but nothing is
+    // fetched here: the renderer bundle and the catalog are resolved by the first
+    // component that actually renders, so a page without one costs nothing at all.
+    const json = createJson({
+        config,
+        loader,
+        http,
+        sync: window.pwax.sync,
+        // Read through `window.pwax` rather than closed over, because the router is
+        // built below this line and a `navigate` action can only fire long after that.
+        navigate: (path) => window.pwax.router.push(path),
+    });
+
+    window.pwax.json = { load: json.load, prompt: json.prompt, jsonSchema: json.jsonSchema };
+
     const page = createPageComponent({
         http,
         styles,
@@ -149,6 +165,12 @@ async function boot() {
             app.directive(name, directive.default || directive);
         }
     }
+
+    // Global, and registered whatever `pwax.json.enabled` says. A component that is not
+    // registered fails as "Failed to resolve component: PwaxJson", which points at the
+    // template rather than at the setting that turned it off; registered, it renders
+    // nothing and says which key to change.
+    app.component('PwaxJson', json.PwaxJson);
 
     window.pwax.app = app;
     window.pwax.router = router;

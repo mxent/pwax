@@ -34,6 +34,7 @@ if (!Vue) {
 
 export const camelize = Vue.camelize;
 export const capitalize = Vue.capitalize;
+export const Comment = Vue.Comment;
 export const computed = Vue.computed;
 export const defineComponent = Vue.defineComponent;
 export const h = Vue.h;

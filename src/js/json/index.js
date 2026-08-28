@@ -16,7 +16,15 @@
  * `load()` function; `src/js/json.js` is what turns Pwax component URLs into those.
  */
 
-import { camelize, defineComponent, h, markRaw, shallowRef, toHandlerKey } from 'vue';
+import {
+    camelize,
+    Comment as CommentNode,
+    defineComponent,
+    h,
+    markRaw,
+    shallowRef,
+    toHandlerKey,
+} from 'vue';
 import { JSONUIProvider, Renderer, defineRegistry, schema, useStateStore } from '@json-render/vue';
 import { defineCatalog } from '@json-render/core';
 import { z } from 'zod';
@@ -52,8 +60,14 @@ function toSchema(props) {
                 type = z.boolean();
                 break;
             case 'enum':
+                // Strings only. `z.enum()` throws on anything else, and it is called while
+                // the catalog is being built — so one number in one config entry would
+                // take down the whole renderer rather than loosen one prop.
+                // `pwax:doctor` names the entry; this keeps the page rendering meanwhile.
                 type =
-                    Array.isArray(spec.values) && spec.values.length
+                    Array.isArray(spec.values) &&
+                    spec.values.length > 0 &&
+                    spec.values.every((value) => typeof value === 'string')
                         ? z.enum(spec.values)
                         : z.string();
                 break;
@@ -110,8 +124,9 @@ function resolveGlobal(path) {
  *     through the same `load()` that `@pwaxImport` uses, so styles, scoped CSS and
  *     external assets all arrive with it.
  *
- * Memoised by the caller on url + export, so a narrowed registry and the full one share
- * one component type instead of remounting the subtree when a page uses both.
+ * Memoised on the entry itself by {@see catalogItemFor}, so a narrowed registry and the
+ * full one share one component type instead of remounting the subtree when a page uses
+ * both, and load the module once between them.
  *
  * @param {{resolve: () => Promise<object>|object, events: string[], name: string}} entry
  */
@@ -132,11 +147,26 @@ function catalogItem({ resolve, events, name }) {
                 Promise.resolve()
                     .then(resolve)
                     .then((options) => {
+                        // A `global` entry whose dotted path reaches nothing resolves to
+                        // `undefined`, and an element that renders nothing while saying
+                        // nothing is the hardest kind of catalog mistake to find. Named
+                        // here the way `extensions.js` names an undefined plugin.
+                        if (!options) {
+                            console.warn(
+                                `pwax: the "${name}" catalog component resolved to ` +
+                                    'nothing. Check its entry in pwax.json.components — a ' +
+                                    'dotted path is looked up on `window`, and its script ' +
+                                    'must have run before the document renders.'
+                            );
+
+                            return;
+                        }
+
                         // `markRaw` because these are component options, not data. Without
                         // it Vue walks the whole definition — template string, methods,
                         // nested component references — and makes every one of them
                         // reactive for no benefit.
-                        target.value = options ? markRaw(options) : null;
+                        target.value = markRaw(options);
                     })
                     .catch((error) => {
                         console.error(
@@ -189,10 +219,100 @@ function catalogItem({ resolve, events, name }) {
                 // `children` and not `slots`: the shipped Vue renderer passes the default
                 // slot only — it never reads an element's `slots` key — so a component
                 // written for a document has one `<slot />` and this is all of it.
-                return h(options, { ...ctx.props, ...bound }, { default: () => ctx.children });
+                //
+                // Omitted entirely when the element has no children, rather than passed
+                // as a slot that renders nothing. A card or a panel that writes
+                // `v-if="$slots.default"` is asking whether it was given content, and
+                // handing it an empty slot answers yes.
+                //
+                // Emptiness is a comment node, not an absence: the renderer always passes
+                // a default slot, and Vue normalises a slot that returned nothing into a
+                // single placeholder comment. That is what has to be recognised here.
+                return h(
+                    options,
+                    { ...ctx.props, ...bound },
+                    isEmpty(ctx.children) ? null : { default: () => ctx.children }
+                );
             };
         },
     });
+}
+
+/**
+ * Did this element actually get any children?
+ *
+ * The renderer always passes a default slot, so `children` is never absent — an element
+ * with nothing inside it arrives as a single placeholder comment, which Vue produced when
+ * it normalised a slot that returned nothing.
+ *
+ * Vue's `Comment` is imported under another name deliberately. `Comment` is also a DOM
+ * global, and bundling the shim's export beside it produced a renamed declaration and an
+ * unrenamed use — so the comparison silently ran against the DOM interface and this
+ * function always answered "not empty".
+ *
+ * @param {unknown} children
+ */
+function isEmpty(children) {
+    if (children === undefined || children === null) {
+        return true;
+    }
+
+    const nodes = Array.isArray(children) ? children : [children];
+
+    return nodes.every((node) => node && node.type === CommentNode);
+}
+
+/**
+ * Every catalog item built so far, keyed by what makes one distinct.
+ *
+ * Module scope rather than per-`createRenderer`, which is the whole point: a page with a
+ * full `<PwaxJson>` and an `:only` one builds two registries, and without this each got
+ * its own component type for the same catalog name — a second `load()` call, a second
+ * `target` ref, and a remount if a component ever moved between the two.
+ *
+ * The name is part of the key because two catalog names may point at one component with
+ * different declared `events`, and those are genuinely different items.
+ *
+ * @type {Map<string, object>}
+ */
+const items = new Map();
+
+/**
+ * The component for one catalog entry, built at most once.
+ *
+ * @param {string} name
+ * @param {{type?: string, url?: string, export?: string, path?: string, events?: string[]}} entry
+ * @param {(url: string, exportName: string) => Promise<object>} load
+ */
+function catalogItemFor(name, entry, load) {
+    const events = Array.isArray(entry.events) ? entry.events : [];
+    const key = [name, entry.type === 'global' ? entry.path : entry.url, entry.export || '']
+        .concat(events)
+        .join('|');
+
+    const cached = items.get(key);
+
+    if (cached) {
+        return cached;
+    }
+
+    const item = catalogItem({
+        name,
+        events,
+        resolve:
+            entry.type === 'global'
+                ? () => resolveGlobal(entry.path)
+                : () => load(entry.url, entry.export || ''),
+    });
+
+    items.set(key, item);
+
+    return item;
+}
+
+/** Test seam: forget every built catalog item. */
+export function resetCatalogItems() {
+    items.clear();
 }
 
 /**
@@ -237,14 +357,7 @@ export function createRenderer({ components = {}, actions = {}, load }) {
             description: entry.description || '',
         };
 
-        const item = catalogItem({
-            name,
-            events: Array.isArray(entry.events) ? entry.events : [],
-            resolve:
-                entry.type === 'global'
-                    ? () => resolveGlobal(entry.path)
-                    : () => load(entry.url, entry.export || ''),
-        });
+        const item = catalogItemFor(name, entry, load);
 
         implementations[name] = (ctx) => h(item, { ctx });
     }

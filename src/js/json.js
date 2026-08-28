@@ -213,7 +213,7 @@ export function createJson({ config, loader, http, sync, navigate }) {
      *
      * Keyed on the sorted names so the full catalog and a `:only` subset are built once
      * each rather than on every render. The wrappers inside the bundle are memoised on
-     * the component URL, so two subsets that share a component share its module and its
+     * the component too, so two subsets that share a component share its module and its
      * stylesheet.
      *
      * @type {Map<string, Promise<any>>}
@@ -221,8 +221,17 @@ export function createJson({ config, loader, http, sync, navigate }) {
     const renderers = new Map();
 
     function rendererFor(only) {
-        const names = Array.isArray(only) && only.length ? [...only].sort() : null;
-        const key = names ? names.join('|') : '*';
+        // An array is a restriction, whatever its length. Testing `only.length` instead
+        // made `:only="[]"` mean "no restriction" — so a page narrowing the catalog from
+        // a role or a feature flag was handed *all* of it on the one path where the
+        // allowed list came back empty. This prop exists so a document nobody wrote by
+        // hand cannot reach past a named subset; failing open is the one thing it must
+        // never do.
+        const names = Array.isArray(only) ? [...only].sort() : null;
+
+        // Prefixed, so the restricted-to-nothing key (`only:`) cannot collide with the
+        // unrestricted one.
+        const key = names ? `only:${names.join('|')}` : '*';
         const cached = renderers.get(key);
 
         if (cached) {
@@ -235,6 +244,18 @@ export function createJson({ config, loader, http, sync, navigate }) {
             for (const [name, entry] of Object.entries(settings.components || {})) {
                 if (!names || names.includes(name)) {
                     components[name] = entry;
+                }
+            }
+
+            // A name in `only` that matches nothing is a typo, and a silent one: the
+            // subset is narrower than the author asked for, and the document then reports
+            // an unknown component for something the catalog does contain.
+            for (const name of names || []) {
+                if (!(name in (settings.components || {}))) {
+                    console.warn(
+                        `pwax: <PwaxJson :only> names "${name}", which is not in the ` +
+                            'catalog. Check pwax.json.components.'
+                    );
                 }
             }
 
@@ -258,9 +279,20 @@ export function createJson({ config, loader, http, sync, navigate }) {
             };
         });
 
-        renderers.set(key, promise);
+        // Not cached if it failed, which is the same rule — and the same shape — as
+        // `importModule()` in `modules.js`: a transient network error must not poison the
+        // renderer for the rest of the session. `createBundleLoader` already clears its
+        // own memo, and without this one the retry it exists for could never happen.
+        renderers.set(
+            key,
+            promise.catch((error) => {
+                renderers.delete(key);
 
-        return promise;
+                throw error;
+            })
+        );
+
+        return renderers.get(key);
     }
 
     const PwaxJson = Vue.defineComponent({
@@ -298,7 +330,11 @@ export function createJson({ config, loader, http, sync, navigate }) {
                         'on in config/pwax.php, or remove the component.'
                 );
             } else {
-                warnAboutDocument(props.json);
+                // Watched rather than called once. These guard rails are for documents
+                // nobody hand-checked — generated ones — and a generated document is
+                // precisely the thing swapped into `:json` after mount, so checking only
+                // the first one missed the case the warnings were written for.
+                Vue.watch(() => props.json, warnAboutDocument, { immediate: true });
 
                 rendererFor(props.only)
                     .then((resolved) => {

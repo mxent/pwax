@@ -437,6 +437,36 @@ class PrecompileTest extends TestCase
     }
 
     /**
+     * A page that renders a JSON document, under the build that has no compiler in it.
+     *
+     * `<PwaxJson>` is registered on the application rather than imported, so a precompiled
+     * template has to reach it through `resolveComponent` at render time. That is the one
+     * combination where the feature and `assets.vue_build => 'runtime'` could disagree —
+     * and it would disagree by rendering nothing, on a page whose markup compiled fine.
+     */
+    public function test_a_page_using_the_json_component_precompiles(): void
+    {
+        $this->requireCompiler();
+
+        config()->set('pwax.service_worker.components', ['pages.json']);
+
+        $this->artisan('pwax:compile')->assertSuccessful();
+
+        $this->store()->forget();
+
+        $render = $this->store()->get($this->template('pages.json'));
+
+        $this->assertNotNull($render, 'pages.json was not compiled.');
+
+        $this->assertStringContainsString(
+            'PwaxJson',
+            $render,
+            'The compiled render function no longer names PwaxJson, so a JSON document on '
+            . 'a precompiled page would resolve to nothing and render nothing.'
+        );
+    }
+
+    /**
      * A view that cannot render without controller data cannot be precompiled. Reporting
      * it by name and failing is the point: silently compiling everything else would leave
      * a store that looks complete and an application that renders one page blank.

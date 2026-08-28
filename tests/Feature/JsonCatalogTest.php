@@ -114,6 +114,40 @@ class JsonCatalogTest extends TestCase
         );
     }
 
+    /**
+     * Every one of these is a mistake whose only symptom is an element that renders
+     * nothing, on a page that otherwise works. The doctor is where they get named.
+     */
+    public function test_the_doctor_names_an_entry_that_points_at_no_component(): void
+    {
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('Broken')
+            ->assertFailed();
+    }
+
+    public function test_the_doctor_names_a_reference_to_a_view_that_does_not_exist(): void
+    {
+        config()->set('pwax.json.components', ['Ghost' => "@pwaxImport('components.nope')"]);
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('components.nope')
+            ->assertFailed();
+    }
+
+    public function test_the_doctor_names_an_enum_whose_values_are_not_strings(): void
+    {
+        config()->set('pwax.json.components', [
+            'Rating' => [
+                'component' => "@pwaxImport('components.badge')",
+                'props' => ['stars' => ['type' => 'enum', 'values' => [1, 2, 3]]],
+            ],
+        ]);
+
+        // A warning rather than a problem: the schema builder falls back to accepting any
+        // string, so the page still renders. Silently, which is what this exists to fix.
+        $this->artisan('pwax:doctor')->expectsOutputToContain('not all strings');
+    }
+
     public function test_the_runtime_is_told_where_to_fetch_the_renderer(): void
     {
         $runtime = $this->app->make(Shell::class)->runtimeConfig()['json']['runtime'];

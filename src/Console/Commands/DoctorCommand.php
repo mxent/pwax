@@ -390,12 +390,32 @@ class DoctorCommand extends Command
                     ));
                 }
 
-                if (is_array($declaration)
-                    && ($declaration['type'] ?? null) === 'enum'
-                    && ! ($declaration['values'] ?? [])) {
+                if (! is_array($declaration) || ($declaration['type'] ?? null) !== 'enum') {
+                    continue;
+                }
+
+                /** @var list<mixed> $values */
+                $values = (array) ($declaration['values'] ?? []);
+
+                if ($values === []) {
                     $this->warn_(sprintf(
                         'pwax.json.components["%s"].props["%s"] is an enum with no "values", '
                         . 'so it accepts any string.',
+                        $name,
+                        $prop
+                    ));
+
+                    continue;
+                }
+
+                // The schema builder needs strings. It falls back to accepting any string
+                // rather than throwing — a number here would otherwise take down the whole
+                // renderer while the catalog was being built — so this is the only place
+                // the mistake is ever reported.
+                if (count(array_filter($values, 'is_string')) !== count($values)) {
+                    $this->warn_(sprintf(
+                        'pwax.json.components["%s"].props["%s"] is an enum whose "values" are '
+                        . 'not all strings. It will accept any string instead.',
                         $name,
                         $prop
                     ));

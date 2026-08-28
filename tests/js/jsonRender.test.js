@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeLoader, loadRenderer, settle } from './helpers/jsonHarness.js';
 
 /**
@@ -16,6 +16,13 @@ let PwaxJson;
 
 beforeAll(() => {
     ({ Vue, PwaxJson } = loadRenderer());
+});
+
+beforeEach(() => {
+    // Catalog items are memoised for the life of the bundle, which is the behaviour one
+    // of the tests below is about. Every other test wants a clean slate, or a component
+    // loaded by an earlier one is already resolved when this one mounts.
+    PwaxJson.resetCatalogItems();
 });
 
 const CARD = {
@@ -37,7 +44,17 @@ const FIELD = {
         '<label>{{ label }}<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)"></label>',
 };
 
-const MODULES = { '/c/card.js': CARD, '/c/button.js': BUTTON, '/c/field.js': FIELD };
+/** Renders its wrapper only when it was actually given content. */
+const SHELL = {
+    template: '<div class="shell"><main v-if="$slots.default"><slot /></main></div>',
+};
+
+const MODULES = {
+    '/c/card.js': CARD,
+    '/c/button.js': BUTTON,
+    '/c/field.js': FIELD,
+    '/c/shell.js': SHELL,
+};
 
 const CATALOG = {
     Card: { type: 'module', url: '/c/card.js', export: '' },
@@ -266,6 +283,98 @@ describe('the JSON renderer', () => {
         });
 
         expect(view.loader.calls).toEqual(['/c/button.js']);
+    });
+
+    /**
+     * A panel that asks whether it was given content — `v-if="$slots.default"` — is
+     * ordinary Vue. Handing it a slot that renders nothing answers yes, and it draws its
+     * wrapper around an empty hole.
+     */
+    it('gives a childless element no default slot at all', async () => {
+        const view = await render(
+            { root: 'a', elements: { a: { type: 'Shell', props: {} } } },
+            { components: { Shell: { type: 'module', url: '/c/shell.js', export: '' } } }
+        );
+
+        expect(view.html()).toBe('<div class="shell"></div>');
+    });
+
+    it('gives an element with children the slot it was passed', async () => {
+        const view = await render(
+            {
+                root: 'a',
+                elements: {
+                    a: { type: 'Shell', props: {}, children: ['b'] },
+                    b: { type: 'Button', props: { label: 'Inside' } },
+                },
+            },
+            {
+                components: {
+                    Shell: { type: 'module', url: '/c/shell.js', export: '' },
+                    Button: { type: 'module', url: '/c/button.js', export: '' },
+                },
+            }
+        );
+
+        expect(view.html()).toContain('<main><button>Inside</button></main>');
+    });
+
+    /**
+     * A page with a full <PwaxJson> and an `:only` one builds two registries. Without a
+     * shared memo each got its own component type for the same catalog name — a second
+     * module load, and a remount if a component ever moved between the two.
+     */
+    it('loads a shared component once across two registries', async () => {
+        const loader = fakeLoader(MODULES);
+        const entry = { type: 'module', url: '/c/card.js', export: '' };
+        const load = (url, exportName) => loader.load(url, exportName);
+
+        const mount = (renderer) => {
+            const host = window.document.createElement('div');
+            window.document.body.appendChild(host);
+
+            const app = Vue.createApp({
+                render: () =>
+                    Vue.h(renderer.Root, {
+                        spec: { root: 'a', elements: { a: { type: 'Card', props: {} } } },
+                    }),
+            });
+
+            app.config.warnHandler = () => {};
+            app.mount(host);
+        };
+
+        mount(PwaxJson.createRenderer({ components: { Card: entry }, actions: {}, load }));
+        mount(
+            PwaxJson.createRenderer({
+                components: {
+                    Card: entry,
+                    Button: { type: 'module', url: '/c/button.js', export: '' },
+                },
+                actions: {},
+                load,
+            })
+        );
+
+        await settle();
+
+        expect(loader.calls).toEqual(['/c/card.js']);
+    });
+
+    /**
+     * A `global` entry whose dotted path reaches nothing resolves to undefined. Rendering
+     * nothing while saying nothing is the hardest kind of catalog mistake to find.
+     */
+    it('names a window component whose path resolves to nothing', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        await render(
+            { root: 'a', elements: { a: { type: 'Ghost', props: {} } } },
+            { components: { Ghost: { type: 'global', path: 'Nope.Missing' } } }
+        );
+
+        expect(warn.mock.calls.flat().join(' ')).toContain('"Ghost"');
+        expect(warn.mock.calls.flat().join(' ')).toContain('pwax.json.components');
     });
 
     /**

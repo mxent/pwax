@@ -18,6 +18,13 @@ function stubVue() {
         shallowRef: vi.fn((value) => ({ value })),
         markRaw: vi.fn((value) => value),
         h: vi.fn((type, props) => ({ type, props })),
+        // Runs the callback once for `immediate` and never again, which is what the
+        // tests that are not about the watcher itself need. The one that is replaces it.
+        watch: vi.fn((source, callback, options) => {
+            if (options && options.immediate) {
+                callback(source());
+            }
+        }),
     };
 
     vi.stubGlobal('Vue', Vue);
@@ -212,6 +219,50 @@ describe('the catalog it hands the renderer', () => {
         ]);
     });
 
+    /**
+     * The prop exists so a document nobody wrote by hand cannot reach past a named
+     * subset. An empty list is the narrowest possible statement of that, and it used to
+     * be read as "no restriction" — so a page narrowing the catalog from a role or a
+     * feature flag was handed all of it on the one path where the list came back empty.
+     */
+    it('treats an empty :only as a restriction to nothing, not to everything', async () => {
+        const bundle = stubBundle();
+        disconnect = serveBundle(bundle);
+
+        const json = createJson(deps());
+
+        mount(json.PwaxJson, { only: [] });
+        await new Promise((resolve) => setTimeout(resolve, 4));
+
+        expect(Object.keys(bundle.calls[0].components)).toEqual([]);
+    });
+
+    it('keeps an empty :only apart from no :only at all', async () => {
+        const bundle = stubBundle();
+        disconnect = serveBundle(bundle);
+
+        const json = createJson(deps());
+        const component = json.PwaxJson;
+
+        mount(component, { only: [] });
+        mount(component);
+        await new Promise((resolve) => setTimeout(resolve, 4));
+
+        expect(bundle.createRenderer).toHaveBeenCalledTimes(2);
+        expect(Object.keys(bundle.calls[0].components)).toEqual([]);
+        expect(Object.keys(bundle.calls[1].components)).toEqual(['Card', 'Button']);
+    });
+
+    it('names a :only entry that matches nothing in the catalog', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        disconnect = serveBundle(stubBundle());
+
+        mount(createJson(deps()).PwaxJson, { only: ['Card', 'Crad'] });
+        await new Promise((resolve) => setTimeout(resolve, 4));
+
+        expect(warn.mock.calls.flat().join(' ')).toContain('"Crad"');
+    });
+
     it('builds one renderer per catalog subset and reuses it', async () => {
         const bundle = stubBundle();
         disconnect = serveBundle(bundle);
@@ -227,6 +278,25 @@ describe('the catalog it hands the renderer', () => {
         expect(bundle.createRenderer).toHaveBeenCalledTimes(2);
         expect(Object.keys(bundle.calls[0].components)).toEqual(['Card']);
         expect(Object.keys(bundle.calls[1].components)).toEqual(['Card', 'Button']);
+    });
+
+    /**
+     * `createBundleLoader` clears its own memo on failure so the next component retries.
+     * Caching the rejected renderer promise on top of it made that impossible: one
+     * dropped request and every <PwaxJson> took the error slot for the rest of the
+     * session, including after the connection came back.
+     */
+    it('does not remember a renderer that failed to build', async () => {
+        disconnect = serveBundle(null, { fail: true });
+
+        const json = createJson(deps());
+
+        await expect(json.prompt()).rejects.toThrow(/failed to load/i);
+
+        disconnect();
+        disconnect = serveBundle(stubBundle());
+
+        await expect(json.prompt()).resolves.toBe('PROMPT');
     });
 });
 
@@ -254,6 +324,38 @@ describe('the document guard rails', () => {
         });
 
         expect(warn.mock.calls.flat().join(' ')).toMatch(/repeat.*children/s);
+    });
+
+    /**
+     * The warnings are for documents nobody hand-checked — generated ones — and a
+     * generated document is exactly what gets swapped into `:json` after mount.
+     */
+    it('warns again when a new document is swapped in', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        disconnect = serveBundle(stubBundle());
+
+        // `Vue.watch` is stubbed to a real watcher for this test only: the module-level
+        // stub is a bare recorder, and what is under test is that the watch happens.
+        const watchers = [];
+        Vue.watch = (source, callback, options) => {
+            watchers.push({ source, callback });
+
+            if (options && options.immediate) {
+                callback(source());
+            }
+        };
+
+        const document = { root: 'a', elements: { a: { type: 'Card' } } };
+        mount(createJson(deps()).PwaxJson, { json: document });
+
+        expect(warn).not.toHaveBeenCalled();
+
+        watchers[0].callback({
+            root: 'a',
+            elements: { a: { type: 'Card', slots: { header: ['b'] } } },
+        });
+
+        expect(warn.mock.calls.flat().join(' ')).toContain('"slots"');
     });
 
     it('says which setting turned it off rather than rendering silently', () => {

@@ -751,15 +751,70 @@ And an element itself can carry:
 
 ### Actions
 
-An `on` binding dispatches a named action. Three are built in:
+An `on` binding dispatches a named action when a component raises an event. In full, a
+binding looks like this — every key but `action` is optional:
+
+```php
+'on' => [
+    'press' => [
+        'action' => 'submit',
+        'params' => ['url' => '/orders', 'data' => ['id' => ['$state' => '/order/id']]],
+        'confirm' => ['title' => 'Place this order?', 'message' => 'This cannot be undone.'],
+        'onSuccess' => ['navigate' => '/thanks'],
+        'onError' => ['set' => ['/error' => 'Could not place the order.']],
+    ],
+],
+```
+
+`params` may use the same expressions props do, so an action can read state without the
+page passing anything down. Give an event a list instead of one binding and all of them
+run, in order.
+
+#### What needs a handler, and what does not
+
+This is the first thing to know, because most of it needs nothing from you at all:
+
+| Action | Comes from | Needs a handler? |
+| --- | --- | --- |
+| `setState`, `pushState`, `removeState` | the renderer | **no** |
+| `validateForm` | the renderer | **no** |
+| `navigate`, `submit`, `reload` | Pwax | **no** |
+| anything else | you | yes — in config, or `:handlers` |
+
+#### State actions: a document that drives itself
+
+`setState` writes a value; anything reading that pointer re-renders. A disclosure panel
+needs no PHP, no handler and no configuration:
+
+```php
+'toggle' => [
+    'type' => 'Button',
+    'props' => ['label' => 'Show details'],
+    'on' => ['press' => ['action' => 'setState', 'params' => ['statePath' => '/open', 'value' => true]]],
+],
+'details' => [
+    'type' => 'Card',
+    'props' => ['title' => 'Details'],
+    'visible' => ['$state' => '/open', 'eq' => true],
+],
+```
+
+`pushState` appends to an array — `{"statePath": "/rows", "value": {…}}`, with an optional
+`clearStatePath` to blank the input it came from — and `removeState` takes one out by
+`index`. Together with `repeat`, that is an editable list with no server round trip.
+
+#### Pwax's actions
 
 | | |
 | --- | --- |
 | `navigate` | `{"to": "/settings"}` — routes through the SPA router, no page load |
-| `submit` | `{"url": "/orders", "data": {…}}` — posts with the CSRF token, and queues the write for later if the connection is gone |
+| `submit` | `{"url": "/orders", "data": {…}}` — posts with the CSRF token, and queues the write when the connection is gone |
 | `reload` | reloads the page |
 
-Add your own in configuration, resolved the same way client middleware is:
+#### Your own actions
+
+Declare one in configuration when several documents use it. The value resolves exactly
+like client middleware, and the module default-exports the handler:
 
 ```php
 'json' => [
@@ -781,16 +836,119 @@ Add your own in configuration, resolved the same way client middleware is:
 </script>
 ```
 
-Or handle them on the page, which is often simpler for something that only one document
-does:
+Or pass one on the page, which is simpler for something only this document does:
 
 ```blade
-<PwaxJson :json="doc" :handlers="{ addToCart: add }" @action="log" />
+<PwaxJson :json="doc" :handlers="{ addToCart: add }" />
 ```
 
-`@action` fires for every action the document dispatches, handled or not, which makes it
-a good place to hang analytics or a debug log. A `handlers` entry wins over a configured
-action of the same name, and over a built-in.
+Where a name is defined more than once, the page wins over configuration, and
+configuration wins over a Pwax built-in — so you can replace `submit` for one document
+without touching anything else.
+
+#### After the action
+
+`onSuccess` runs when the handler resolves, `onError` when it throws. Each takes one of
+three shapes:
+
+| | |
+| --- | --- |
+| `{"navigate": "/thanks"}` | route there, through the SPA router |
+| `{"set": {"/saved": true}}` | write to state |
+| `{"action": "refresh"}` | dispatch another action |
+
+A handler that throws is contained: `onError` runs and the rest of the document keeps
+working.
+
+#### Asking first
+
+Add `confirm` to a binding and the action waits for a dialog:
+
+```php
+'confirm' => ['title' => 'Delete this?', 'message' => 'This cannot be undone.', 'variant' => 'danger'],
+```
+
+Two things to weigh before using it. The dialog is the renderer's own, with its own
+inline styling, and will not match your application. And cancelling surfaces as an
+unhandled promise rejection in the console — harmless, but enough to show up in an error
+reporter. For anything user-facing, prefer confirming inside your own handler and leaving
+`confirm` off.
+
+#### Watching the traffic
+
+`@action` fires for every action that reaches a handler — every Pwax built-in, everything
+in `pwax.json.actions`, and every `:handlers` key — which makes it a good place to hang
+analytics or a debug log:
+
+```blade
+<PwaxJson :json="doc" @action="(name, params) => console.log(name, params)" />
+```
+
+It does **not** report `setState` and the other renderer actions. Those are handled before
+any handler is consulted, so nothing in Pwax ever sees them; watch `@state-change`
+instead, which reports the pointers each one wrote.
+
+#### A form, end to end
+
+Everything above, in the shape most documents actually take — a bound field, a submit
+carrying its value, an error on failure and a redirect on success:
+
+```php
+Route::get('/order', fn () => pwaxRender('pages.order', [
+    'doc' => [
+        'root' => 'form',
+        'state' => ['note' => '', 'error' => null],
+        'elements' => [
+            'form' => [
+                'type' => 'Card',
+                'props' => ['title' => 'Place an order'],
+                'children' => ['note', 'error', 'place'],
+            ],
+            'note' => [
+                'type' => 'Field',
+                'props' => ['label' => 'Note', 'modelValue' => ['$bindState' => '/note']],
+            ],
+            'error' => [
+                'type' => 'Card',
+                'props' => ['title' => ['$state' => '/error']],
+                'visible' => [['$state' => '/error', 'neq' => null]],
+            ],
+            'place' => [
+                'type' => 'Button',
+                'props' => ['label' => 'Place order'],
+                'on' => ['press' => [
+                    'action' => 'submit',
+                    'params' => ['url' => '/orders', 'data' => ['note' => ['$state' => '/note']]],
+                    'onSuccess' => ['navigate' => '/thanks'],
+                    'onError' => ['set' => ['/error' => 'Could not place the order.']],
+                ]],
+            ],
+        ],
+    ],
+]));
+```
+
+No handler, no JavaScript, and no page reload on the way to `/thanks`.
+
+#### Computed values
+
+A prop can call a function you supply, which is the escape hatch for anything the
+expressions cannot say:
+
+```blade
+<PwaxJson :json="doc" :functions="{ fullName: ({ first, last }) => `${first} ${last}` }" />
+```
+
+```php
+'props' => ['title' => [
+    '$computed' => 'fullName',
+    'args' => ['first' => ['$state' => '/first'], 'last' => ['$state' => '/last']],
+]],
+```
+
+These are functions, so they are a prop rather than configuration — `config/pwax.php`
+holds data the runtime reads, never code it runs. `:validation-functions` works the same
+way for the `validateForm` action.
 
 ### Two-way binding
 
@@ -833,15 +991,23 @@ changed if the page wants to know.
 | `json` | required | The document |
 | `state` | | Initial state, when you keep it out of the document |
 | `handlers` | | Action handlers for this instance |
+| `functions` | | Functions a `$computed` prop may call |
+| `validation-functions` | | Validators the `validateForm` action runs |
 | `only` | | Names to narrow the catalog to, for this instance |
 
 `only` is worth reaching for when the document was generated: a page that should only ever
 draw a chart and a caption can say so, and nothing else in the catalog is reachable even
-if the document asks.
+if the document asks. An empty list means exactly that — nothing. It is read when the
+component mounts rather than watched, so give the component a `:key` if it has to change.
+
+`functions` and `validation-functions` are props rather than configuration because they
+are JavaScript. `config/pwax.php` carries data the runtime reads; it never carries code
+the runtime runs, and that line is what keeps a configuration value from becoming a way
+to execute something.
 
 | Event | |
 | --- | --- |
-| `@action` | `(name, params)` for every action dispatched |
+| `@action` | `(name, params)` for every action that reaches a handler |
 | `@state-change` | the state pointers that changed |
 | `@error` | the renderer failed to load |
 

@@ -451,6 +451,70 @@ describe('the built-in actions', () => {
         expect(dependencies.http.json).toHaveBeenCalled();
     });
 
+    /**
+     * The only path with no coverage on either side: the PHP tests prove the config
+     * resolves to a module entry, and nothing proved the runtime then imports it.
+     */
+    it('resolves a configured action module and hands it to the renderer', async () => {
+        const bundle = stubBundle();
+        disconnect = serveBundle(bundle);
+
+        const addToCart = vi.fn();
+        const dependencies = deps({
+            config: {
+                ...config(),
+                json: {
+                    ...config().json,
+                    actions: { addToCart: { type: 'module', url: '/a.js' } },
+                },
+            },
+            loader: { load: vi.fn().mockResolvedValue(addToCart) },
+        });
+
+        const json = createJson(dependencies);
+        await json.prompt();
+
+        expect(dependencies.loader.load).toHaveBeenCalledWith('/a.js', '');
+        expect(Object.keys(bundle.calls[0].actions)).toContain('addToCart');
+    });
+
+    /**
+     * Three sources, one name. The README promises this order, and nothing tested it.
+     */
+    it('lets a page handler beat a configured action, and a configured one beat a built-in', async () => {
+        const bundle = stubBundle();
+        disconnect = serveBundle(bundle);
+
+        const configured = vi.fn();
+        const dependencies = deps({
+            config: {
+                ...config(),
+                json: {
+                    ...config().json,
+                    actions: { reload: { type: 'module', url: '/reload.js' } },
+                },
+            },
+            loader: { load: vi.fn().mockResolvedValue(configured) },
+        });
+
+        const json = createJson(dependencies);
+        const page = vi.fn();
+        const render = mount(json.PwaxJson, { handlers: { navigate: page } });
+
+        await new Promise((resolve) => setTimeout(resolve, 4));
+
+        const shallow = Vue.shallowRef.mock.results[0].value;
+        shallow.value = { Root: { name: 'StubRoot' }, actions: { reload: configured } };
+
+        const handlers = render().props.handlers;
+
+        // `reload` is a built-in that configuration replaced; `navigate` is a built-in
+        // that this page replaced; `submit` is a built-in nobody touched.
+        expect(handlers.reload).toBe(configured);
+        expect(handlers.navigate).toBe(page);
+        expect(typeof handlers.submit).toBe('function');
+    });
+
     it('names the missing parameter rather than posting to nowhere', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const dependencies = deps();

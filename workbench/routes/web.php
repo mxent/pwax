@@ -83,16 +83,31 @@ Route::get('/items', fn () => pwaxRender('pages.items')
 Route::get('/sample', fn () => pwaxRender('pages.sample', [
     'doc' => [
         'root' => 'card',
-        'state' => ['user' => ['name' => 'Ada']],
+        'state' => ['user' => ['name' => 'Ada'], 'open' => false],
         'elements' => [
             'card' => [
                 'type' => 'Card',
                 'props' => ['title' => ['$template' => 'Hello, ${/user/name}!'], 'variant' => 'raised'],
-                'children' => ['field', 'home'],
+                'children' => ['field', 'reveal', 'details', 'home'],
             ],
             'field' => [
                 'type' => 'Field',
                 'props' => ['label' => 'Your name', 'modelValue' => ['$bindState' => '/user/name']],
+            ],
+            // No handler, no configuration, no PHP: the renderer owns `setState`, and
+            // the panel below reads the pointer it writes.
+            'reveal' => [
+                'type' => 'Button',
+                'props' => ['label' => 'Show the details', 'variant' => 'secondary'],
+                'on' => ['press' => [
+                    'action' => 'setState',
+                    'params' => ['statePath' => '/open', 'value' => true],
+                ]],
+            ],
+            'details' => [
+                'type' => 'Card',
+                'props' => ['title' => 'Nothing was fetched to show this.'],
+                'visible' => ['$state' => '/open', 'eq' => true],
             ],
             'home' => [
                 'type' => 'Button',

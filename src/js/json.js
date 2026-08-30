@@ -306,6 +306,16 @@ export function createJson({ config, loader, http, sync, navigate }) {
             /** Extra action handlers for this instance only. */
             handlers: { type: Object, default: () => ({}) },
             /**
+             * Functions a `{"$computed": "name"}` prop may call.
+             *
+             * A prop rather than configuration, and necessarily: these are JavaScript,
+             * and `config/pwax.php` carries data the runtime walks — never code it
+             * evaluates. See `src/js/extensions.js` for why that line is where it is.
+             */
+            functions: { type: Object, default: null },
+            /** Field validators the `validateForm` action runs. Same reasoning. */
+            validationFunctions: { type: Object, default: null },
+            /**
              * Restrict this instance to a subset of the catalog.
              *
              * Read when the component mounts, not watched: it is a statement about what
@@ -387,6 +397,12 @@ export function createJson({ config, loader, http, sync, navigate }) {
                     spec: props.json,
                     state: props.state,
                     handlers: merged,
+                    functions: props.functions,
+                    validationFunctions: props.validationFunctions,
+                    // The same router push the built-in `navigate` action uses, so a
+                    // document's `onSuccess: {navigate}` and its `{"action": "navigate"}`
+                    // go the same way — through the SPA router, with no page load.
+                    navigate,
                     onAction: (name, params) => emit('action', name, params),
                     onStateChange: (changes) => emit('state-change', changes),
                 });

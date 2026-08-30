@@ -236,10 +236,30 @@ Props may be `{"$state": ptr}`, `{"$bindState": ptr}`,
 `{"$item": field}` or `{"$index": true}`. Elements may carry `children`,
 `visible`, `repeat` and `on`.
 
-Built-in actions: `navigate`, `submit` (CSRF, and queued offline) and
-`reload`. Add more under `pwax.json.actions`, or pass `:handlers` for one
-instance. `@action` fires for every dispatch; `@state-change` reports the
-pointers a `$bindState` wrote.
+**Actions divide into three, and most need nothing from you:**
+
+| Action | From | Handler? |
+| --- | --- | --- |
+| `setState`, `pushState`, `removeState`, `validateForm` | the renderer | no |
+| `navigate`, `submit`, `reload` | Pwax | no |
+| anything else | you | yes — `pwax.json.actions` or `:handlers` |
+
+`setState` is the one to reach for first: a document can show and hide its
+own panels with no PHP and no handler at all.
+
+A binding may also carry `params` (which may read state), `onSuccess` /
+`onError` (`{navigate}`, `{set}` or `{action}`), and `confirm`. An event may
+name a list of bindings and all of them run.
+
+Precedence where a name is defined twice: `:handlers` > `pwax.json.actions` >
+Pwax built-in.
+
+`@action` fires for every action **that reaches a handler** — not for the
+renderer's own state actions, which are handled before any handler is
+consulted. Use `@state-change` to see those; it reports the pointers written.
+
+`:functions` and `:validation-functions` are props, not config, because they
+are JavaScript — config carries data the runtime reads, never code it runs.
 
 The renderer is a second bundle, `dist/pwax-json.js`, ~82 kB gzipped. It
 is fetched by the first `<PwaxJson>` that renders and never on a page that

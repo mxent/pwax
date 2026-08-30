@@ -25,7 +25,15 @@ import {
     shallowRef,
     toHandlerKey,
 } from 'vue';
-import { JSONUIProvider, Renderer, defineRegistry, schema, useStateStore } from '@json-render/vue';
+import {
+    ConfirmDialog,
+    JSONUIProvider,
+    Renderer,
+    defineRegistry,
+    schema,
+    useActions,
+    useStateStore,
+} from '@json-render/vue';
 import { defineCatalog } from '@json-render/core';
 import { z } from 'zod';
 
@@ -338,6 +346,46 @@ const Unknown = defineComponent({
 });
 
 /**
+ * The confirmation dialog for an action that asked to be confirmed.
+ *
+ * A binding may carry `confirm`, and the renderer honours it by parking the action on
+ * `pendingConfirmation` and awaiting a promise that the dialog resolves. The library
+ * ships a `ConfirmationDialogManager` for that, and in 0.20.0 it cannot work: it
+ * destructures `pendingConfirmation` out of the action context in `setup()`, and that
+ * context exposes it as a *getter* over a ref — so the destructure captures `null` once
+ * and never sees another value.
+ *
+ * The consequence is the worst shape a failure can take. No dialog appears, the awaited
+ * promise is never settled, and the action neither runs nor fails — it hangs, silently,
+ * for the life of the page.
+ *
+ * This reads the same context without destructuring, so the render tracks the ref and
+ * updates. Nothing is forked: `useActions` and `ConfirmDialog` are both exported, and
+ * the library's own manager stays in the tree rendering nothing, as it already did.
+ */
+const Confirmation = defineComponent({
+    name: 'PwaxJsonConfirmation',
+
+    setup() {
+        const actions = useActions();
+
+        return () => {
+            const pending = actions.pendingConfirmation;
+
+            if (!pending || !pending.action.confirm) {
+                return null;
+            }
+
+            return h(ConfirmDialog, {
+                confirm: pending.action.confirm,
+                onConfirm: actions.confirm,
+                onCancel: actions.cancel,
+            });
+        };
+    },
+});
+
+/**
  * Build a renderer for one catalog.
  *
  * @param {{
@@ -399,6 +447,16 @@ export function createRenderer({ components = {}, actions = {}, load }) {
             spec: { type: Object, required: true },
             state: { type: Object, default: null },
             handlers: { type: Object, default: () => ({}) },
+            // Forwarded to the provider rather than used here. Each one is a piece of
+            // vocabulary the renderer offers a document and cannot supply itself:
+            // `navigate` is what makes `onSuccess: {navigate}` work, `functions` is what
+            // `$computed` calls, `validationFunctions` is what `validateForm` runs.
+            // Left unforwarded, all three fail quietly — and the prompt the catalog
+            // generates tells a model that `$computed` is available, so a document can
+            // arrive using a feature that was never wired up.
+            navigate: { type: Function, default: null },
+            functions: { type: Object, default: null },
+            validationFunctions: { type: Object, default: null },
             onAction: { type: Function, default: null },
             onStateChange: { type: Function, default: null },
         },
@@ -431,11 +489,16 @@ export function createRenderer({ components = {}, actions = {}, load }) {
                         registry,
                         handlers,
                         initialState: props.state || props.spec.state || {},
+                        navigate: props.navigate || undefined,
+                        functions: props.functions || undefined,
+                        validationFunctions: props.validationFunctions || undefined,
                         onStateChange: props.onStateChange || undefined,
                     },
                     {
-                        default: () =>
+                        default: () => [
                             h(Renderer, { spec: props.spec, registry, fallback: Unknown }),
+                            h(Confirmation),
+                        ],
                     }
                 );
             };

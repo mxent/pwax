@@ -68,17 +68,33 @@ const CATALOG = {
     Field: { type: 'module', url: '/c/field.js', export: '' },
 };
 
-/** Mount a document and return the container plus what the actions saw. */
-async function render(spec, { state = null, handlers = {}, components = CATALOG } = {}) {
+/**
+ * Mount a document and return the container plus everything the actions touched.
+ *
+ * `changes` accumulates the renderer's state patches, which is how a test asserts what a
+ * `setState` or an `onSuccess: {set}` actually wrote — there is no other way in, because
+ * the store belongs to the provider.
+ */
+async function render(
+    spec,
+    {
+        state = null,
+        handlers = {},
+        components = CATALOG,
+        actions = { save: { description: 'Save' } },
+        functions = null,
+    } = {}
+) {
     const loader = fakeLoader(MODULES);
     const { Root } = PwaxJson.createRenderer({
         components,
-        actions: { save: { description: 'Save' }, navigate: { description: 'Go' } },
+        actions,
         load: (url, exportName) => loader.load(url, exportName),
     });
 
     const dispatched = [];
     const changes = [];
+    const navigated = [];
     const host = document.createElement('div');
     document.body.appendChild(host);
 
@@ -88,6 +104,8 @@ async function render(spec, { state = null, handlers = {}, components = CATALOG 
                 spec,
                 state,
                 handlers,
+                functions,
+                navigate: (path) => navigated.push(path),
                 onAction: (name, params) => dispatched.push([name, params]),
                 onStateChange: (patch) => changes.push(patch),
             }),
@@ -102,8 +120,43 @@ async function render(spec, { state = null, handlers = {}, components = CATALOG 
         loader,
         dispatched,
         changes,
+        navigated,
         app,
         html: () => host.innerHTML.replace(/<!---->/g, ''),
+        /** The latest value written to a pointer, across every patch so far. */
+        wrote: (path) =>
+            changes
+                .flat()
+                .filter((change) => change.path === path)
+                .map((change) => change.value)
+                .pop(),
+        click: (index = 0) => {
+            host.querySelectorAll('button')[index].dispatchEvent(
+                new window.MouseEvent('click', { bubbles: true })
+            );
+
+            return settle();
+        },
+        /**
+         * Click the button with this label.
+         *
+         * By text rather than index, because the confirm dialog injects its own two
+         * buttons above the document's and an index would silently start meaning
+         * something else the moment a test grew a second button.
+         */
+        clickLabelled: (label) => {
+            const button = [...host.querySelectorAll('button')].find(
+                (el) => el.textContent.trim() === label
+            );
+
+            if (!button) {
+                throw new Error(`no button labelled "${label}"`);
+            }
+
+            button.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+            return settle();
+        },
     };
 }
 
@@ -391,5 +444,287 @@ describe('the JSON renderer', () => {
         });
 
         expect(view.html()).toContain('<button extra="kept">Go</button>');
+    });
+});
+
+/**
+ * Actions, end to end through the real renderer.
+ *
+ * Worth pinning here rather than against a stub, because who handles what is not
+ * obvious: some actions never reach Pwax at all. `setState` and its siblings are
+ * intercepted by the renderer and returned early, so they need no catalog entry, no
+ * handler and no configuration — and no `@action` is reported for them. Everything else
+ * goes through the handler map, and is rejected before it gets there if nothing declares
+ * it.
+ */
+describe('actions', () => {
+    const PRESS = (action, extra = {}) => ({
+        root: 'b',
+        elements: {
+            b: {
+                type: 'Button',
+                props: { label: 'Go' },
+                on: { press: { action, ...extra } },
+            },
+        },
+    });
+
+    it('runs a handler and reports it through onAction', async () => {
+        const ran = [];
+        const view = await render(PRESS('save', { params: { id: 7 } }), {
+            handlers: { save: async (params) => ran.push(params) },
+        });
+
+        await view.click();
+
+        expect(ran).toEqual([{ id: 7 }]);
+        expect(view.dispatched).toEqual([['save', { id: 7 }]]);
+    });
+
+    it('resolves a param from state before the handler sees it', async () => {
+        const ran = [];
+        const view = await render(PRESS('save', { params: { id: { $state: '/order/id' } } }), {
+            state: { order: { id: 42 } },
+            handlers: { save: async (params) => ran.push(params) },
+        });
+
+        await view.click();
+
+        expect(ran).toEqual([{ id: 42 }]);
+    });
+
+    it('runs every binding when an event names more than one', async () => {
+        const ran = [];
+        const view = await render(
+            {
+                root: 'b',
+                elements: {
+                    b: {
+                        type: 'Button',
+                        props: { label: 'Go' },
+                        on: { press: [{ action: 'save' }, { action: 'log' }] },
+                    },
+                },
+            },
+            {
+                actions: { save: { description: '' }, log: { description: '' } },
+                handlers: { save: async () => ran.push('save'), log: async () => ran.push('log') },
+            }
+        );
+
+        await view.click();
+
+        expect(ran).toEqual(['save', 'log']);
+    });
+
+    /**
+     * The free path. No catalog entry, no handler, no PHP — a document can drive its own
+     * UI, and this is the thing the docs most need to say.
+     */
+    it('writes state with setState, and re-renders what reads it', async () => {
+        const view = await render({
+            root: 'card',
+            state: { open: false, who: 'Ada' },
+            elements: {
+                card: {
+                    type: 'Card',
+                    props: { title: { $template: 'Hello, ${/who}!' } },
+                    children: ['toggle', 'panel'],
+                },
+                toggle: {
+                    type: 'Button',
+                    props: { label: 'Open' },
+                    on: {
+                        press: { action: 'setState', params: { statePath: '/open', value: true } },
+                    },
+                },
+                panel: {
+                    type: 'Button',
+                    props: { label: 'Now visible' },
+                    visible: { $state: '/open', eq: true },
+                },
+            },
+        });
+
+        expect(view.html()).not.toContain('Now visible');
+
+        await view.click();
+
+        expect(view.html()).toContain('Now visible');
+        expect(view.wrote('/open')).toBe(true);
+    });
+
+    it('does not report a renderer state action through onAction', async () => {
+        const view = await render(PRESS('setState', { params: { statePath: '/x', value: 1 } }), {
+            state: { x: 0 },
+        });
+
+        await view.click();
+
+        // It never reaches the handler map, which is where onAction is wired. Documented,
+        // because "@action fires for everything" is the natural assumption and is wrong.
+        expect(view.dispatched).toEqual([]);
+        expect(view.wrote('/x')).toBe(1);
+    });
+
+    it('appends with pushState and removes with removeState', async () => {
+        const view = await render({
+            root: 'list',
+            state: { rows: [{ label: 'One' }] },
+            elements: {
+                list: { type: 'Card', props: { title: 'Rows' }, children: ['add', 'drop'] },
+                add: {
+                    type: 'Button',
+                    props: { label: 'Add' },
+                    on: {
+                        press: {
+                            action: 'pushState',
+                            params: { statePath: '/rows', value: { label: 'Two' } },
+                        },
+                    },
+                },
+                drop: {
+                    type: 'Button',
+                    props: { label: 'Drop' },
+                    on: {
+                        press: { action: 'removeState', params: { statePath: '/rows', index: 0 } },
+                    },
+                },
+            },
+        });
+
+        await view.click(0);
+        expect(view.wrote('/rows')).toEqual([{ label: 'One' }, { label: 'Two' }]);
+
+        await view.click(1);
+        expect(view.wrote('/rows')).toEqual([{ label: 'Two' }]);
+    });
+
+    it('writes state after the handler resolves with onSuccess', async () => {
+        const view = await render(PRESS('save', { onSuccess: { set: { '/saved': true } } }), {
+            handlers: { save: async () => {} },
+        });
+
+        await view.click();
+
+        expect(view.wrote('/saved')).toBe(true);
+    });
+
+    /**
+     * The one that was broken. Core guards this branch with
+     * `if ("navigate" in onSuccess && navigate)`, so a provider that was never handed a
+     * `navigate` skipped it in silence — and submitting a form then going somewhere is
+     * the commonest thing a document does.
+     */
+    it('routes through navigate after the handler resolves', async () => {
+        const view = await render(PRESS('save', { onSuccess: { navigate: '/thanks' } }), {
+            handlers: { save: async () => {} },
+        });
+
+        await view.click();
+
+        expect(view.navigated).toEqual(['/thanks']);
+    });
+
+    it('writes state when the handler throws, and keeps the document standing', async () => {
+        const view = await render(
+            PRESS('save', { onError: { set: { '/error': 'Could not save.' } } }),
+            {
+                handlers: {
+                    save: async () => {
+                        throw new Error('nope');
+                    },
+                },
+            }
+        );
+
+        await view.click();
+
+        expect(view.wrote('/error')).toBe('Could not save.');
+        expect(view.html()).toContain('<button>Go</button>');
+    });
+
+    it('asks before running a confirmed action, and runs it when confirmed', async () => {
+        const ran = [];
+        const view = await render(
+            PRESS('save', { confirm: { title: 'Sure?', message: 'This cannot be undone.' } }),
+            { handlers: { save: async () => ran.push('save') } }
+        );
+
+        await view.click();
+
+        expect(ran).toEqual([]);
+        expect(view.host.textContent).toContain('Sure?');
+
+        // The dialog is the library's own, rendered by the provider — nothing in Pwax
+        // draws it, which is also why it arrives unstyled.
+        await view.clickLabelled('Confirm');
+
+        expect(ran).toEqual(['save']);
+    });
+
+    /**
+     * Cancelling rejects the promise the renderer is awaiting, and it rethrows into an
+     * `emit` that nobody awaited — so a cancel reaches the page as an unhandled
+     * rejection. That is the library's, not ours, and there is no handle on that promise
+     * to attach a catch to; it is caught here so the suite does not carry the noise, and
+     * called out in the README, which already steers people towards confirming inside
+     * their own handler.
+     */
+    it('does not run a confirmed action that was cancelled', async () => {
+        const rejections = [];
+        const capture = (error) => rejections.push(error);
+        process.on('unhandledRejection', capture);
+
+        try {
+            const ran = [];
+            const view = await render(
+                PRESS('save', { confirm: { title: 'Sure?', message: 'This cannot be undone.' } }),
+                { handlers: { save: async () => ran.push('save') } }
+            );
+
+            await view.click();
+            await view.clickLabelled('Cancel');
+            await settle();
+
+            expect(ran).toEqual([]);
+            expect(view.host.textContent).not.toContain('Sure?');
+            expect(rejections.map(String)).toEqual(['Error: Action cancelled']);
+        } finally {
+            process.off('unhandledRejection', capture);
+        }
+    });
+
+    it('calls a $computed function with resolved args', async () => {
+        const view = await render(
+            {
+                root: 'card',
+                state: { first: 'Ada', last: 'Lovelace' },
+                elements: {
+                    card: {
+                        type: 'Card',
+                        props: {
+                            title: {
+                                $computed: 'fullName',
+                                args: { a: { $state: '/first' }, b: { $state: '/last' } },
+                            },
+                        },
+                    },
+                },
+            },
+            { functions: { fullName: ({ a, b }) => `${a} ${b}` } }
+        );
+
+        expect(view.html()).toContain('<h2>Ada Lovelace</h2>');
+    });
+
+    it('warns about an action nothing declares, and leaves the page standing', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const view = await render(PRESS('nope'));
+        await view.click();
+
+        expect(warn.mock.calls.flat().join(' ')).toContain('nope');
+        expect(view.html()).toContain('<button>Go</button>');
     });
 });

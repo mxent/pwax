@@ -22,11 +22,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   may bind with `on` — configuration never repeats it. Scoped styles, lazy loading and
   offline precaching all work as they already did.
 
-- **Built-in actions `navigate`, `submit` and `reload`.** `navigate` routes through the
-  SPA router, and `submit` posts with the CSRF token and queues the write through
-  `window.pwax.sync` when the connection is gone. Applications add their own under
-  `pwax.json.actions`, resolved exactly like `pwax.vue.middleware`, or pass `:handlers`
-  for one instance.
+- **Actions.** A binding carries an action name, `params` that may read state,
+  `onSuccess` / `onError`, and an optional `confirm`. Most need no handler: the renderer
+  supplies `setState`, `pushState`, `removeState` and `validateForm`, and Pwax adds
+  `navigate` (through the SPA router), `submit` (with the CSRF token, queued through
+  `window.pwax.sync` when the connection is gone) and `reload`. Applications add their own
+  under `pwax.json.actions`, resolved exactly like `pwax.vue.middleware`, or pass
+  `:handlers` for one instance — where a name is defined twice, the page wins over
+  configuration, and configuration over a built-in.
+
+- **`:functions` and `:validation-functions`**, for `$computed` props and the
+  `validateForm` action. Props rather than configuration, because they are JavaScript and
+  `config/pwax.php` carries data the runtime reads, never code it runs.
 
 - **`window.pwax.json.{load,prompt,jsonSchema}`.** `prompt()` and `jsonSchema()`
   describe the configured catalog for a model that is generating documents.

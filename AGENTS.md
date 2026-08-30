@@ -231,6 +231,16 @@ honour a `$bindState` (a composable needs a `setup()`).
 
 Simplify it back to a function and every document renders perfectly and
 does nothing: no `on:` binding fires, no two-way binding writes.
+
+Two more things about actions are worth knowing before changing any of
+this. The renderer handles `setState`, `pushState`, `removeState`,
+`validateForm`, `push` and `pop` itself and returns before consulting the
+handler map — so `@action` cannot report them, and "fixing" that is not
+possible from our side. And `Root` renders its own confirmation dialog
+host: the library's `ConfirmationDialogManager` destructures a
+getter-backed context in `setup()`, capturing `null` for good, so a
+`confirm` binding otherwise hangs its action forever with no dialog and no
+error.
 `tests/js/jsonRender.test.js` runs the real bundle against the real Vue
 for exactly this reason, and pins three more behaviours of version
 0.20.0 that are not documented contracts — `children` rather than named

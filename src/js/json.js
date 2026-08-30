@@ -87,19 +87,30 @@ function createBundleLoader(url, nonce) {
 }
 
 /**
- * Warn about the two document shapes that render nothing and say nothing.
+ * The actions the renderer intercepts before any handler is consulted.
  *
- * Both are things the format appears to support and this version of the renderer does
- * not act on, which is the worst combination: a document that looks right, renders
- * blank, and logs nothing at all.
+ * Listed because a `confirm` on one of them is ignored: the renderer returns as soon as
+ * it recognises the name, and the confirmation branch is further down.
+ */
+const RENDERER_ACTIONS = ['setState', 'pushState', 'removeState', 'validateForm', 'push', 'pop'];
+
+/**
+ * Warn about the document shapes that do nothing and say nothing.
+ *
+ * Each is something the format appears to support and this version of the renderer does
+ * not act on, which is the worst combination: a document that looks right, does less
+ * than it says, and logs nothing at all.
  *
  *   - `slots` on an element is never read. The renderer walks `children` only, so a
  *     document that puts its content under `slots` renders an empty component.
  *   - `repeat` repeats an element's `children`. On an element that has none it
  *     produces one empty row rather than the list the author meant.
+ *   - `confirm` on one of the renderer's own actions never asks. Those are handled and
+ *     returned before the confirmation branch is reached, so the action simply happens —
+ *     which for `removeState` is the difference between a prompt and a deletion.
  *
- * Once per mounted `<PwaxJson>`, over its own elements only — a walk of a handful of
- * objects, next to a render that is about to load a bundle.
+ * Runs whenever the document changes, over its own elements only — a walk of a handful
+ * of objects, next to a render that is about to load a bundle.
  *
  * @param {any} json
  */
@@ -124,6 +135,18 @@ function warnAboutDocument(json) {
                 `pwax: element "${key}" has a "repeat" but no "children". "repeat" repeats ` +
                     "an element's children, so it belongs on the container, not on the row."
             );
+        }
+
+        for (const binding of Object.values(element.on || {})) {
+            for (const one of Array.isArray(binding) ? binding : [binding]) {
+                if (one && one.confirm && RENDERER_ACTIONS.includes(one.action)) {
+                    console.warn(
+                        `pwax: element "${key}" puts a "confirm" on "${one.action}", which the ` +
+                            'renderer handles before any confirmation — it will run without ' +
+                            'asking. Confirm an action of your own instead.'
+                    );
+                }
+            }
         }
     }
 }

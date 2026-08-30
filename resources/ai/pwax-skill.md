@@ -231,10 +231,11 @@ A document is a flat map, not a nested tree:
 ]
 ```
 
-Props may be `{"$state": ptr}`, `{"$bindState": ptr}`,
-`{"$template": "… ${ptr} …"}`, `{"$cond": …, "$then": …, "$else": …}`,
-`{"$item": field}` or `{"$index": true}`. Elements may carry `children`,
-`visible`, `repeat` and `on`.
+Eight prop expressions: `$state`, `$bindState`, `$template`, `$cond`
+(with `$then`/`$else`), `$item`, `$bindItem`, `$index`, `$computed`
+(with `args`). Elements may carry `children`, `visible`, `repeat`, `on`
+and `watch`. `visible` takes `eq`/`neq`/`gt`/`gte`/`lt`/`lte` plus `not`,
+a list (meaning and), or `$and`/`$or`.
 
 **Actions divide into three, and most need nothing from you:**
 
@@ -957,6 +958,9 @@ two in the console; the third is a catalog problem.
   empty row.
 - **A `type` that is not in the catalog.** Renders nothing and names
   itself in the console. Add it to `pwax.json.components`.
+- **`confirm` on `setState`/`pushState`/`removeState`.** The renderer
+  handles its own actions and returns before the confirmation, so the
+  action runs without asking. Confirm an action of your own instead.
 
 Two more worth knowing: `@state-change` emits the *changed pointers*, not
 a state snapshot; and props are camelCase in a document because they are

@@ -44,6 +44,12 @@ const FIELD = {
         '<label>{{ label }}<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)"></label>',
 };
 
+/** Renders whatever it is handed, of whatever type — for the expression tests. */
+const TEXT = {
+    props: { value: { type: [String, Number, Boolean], default: '' } },
+    template: '<i>{{ value }}</i>',
+};
+
 /** Renders its wrapper only when it was actually given content. */
 const SHELL = {
     template: '<div class="shell"><main v-if="$slots.default"><slot /></main></div>',
@@ -54,6 +60,14 @@ const MODULES = {
     '/c/button.js': BUTTON,
     '/c/field.js': FIELD,
     '/c/shell.js': SHELL,
+    '/c/text.js': TEXT,
+};
+
+/** Text and Shell together cover the expression cases: a leaf and a container. */
+const VOCABULARY = {
+    Text: { type: 'module', url: '/c/text.js', export: '' },
+    Shell: { type: 'module', url: '/c/shell.js', export: '' },
+    Field: { type: 'module', url: '/c/field.js', export: '' },
 };
 
 const CATALOG = {
@@ -726,5 +740,199 @@ describe('actions', () => {
 
         expect(warn.mock.calls.flat().join(' ')).toContain('nope');
         expect(view.html()).toContain('<button>Go</button>');
+    });
+});
+
+/**
+ * The expression and element vocabulary, in full.
+ *
+ * json-render defines eight prop expressions and five element keys beyond `type` and
+ * `props`. All of them work through this integration — none needed a change — and that
+ * is worth holding still: they are the surface a generated document draws on, and a
+ * regression in any one of them would show up as a document that renders almost right.
+ */
+describe('the document vocabulary', () => {
+    const leaf = (value) => ({ root: 'a', elements: { a: { type: 'Text', props: { value } } } });
+
+    const show = (visible, state) =>
+        render(
+            { root: 'a', elements: { a: { type: 'Text', props: { value: 'shown' }, visible } } },
+            { state, components: VOCABULARY }
+        );
+
+    it('reads a value straight off state', async () => {
+        const view = await render(leaf({ $state: '/who' }), {
+            state: { who: 'Ada' },
+            components: VOCABULARY,
+        });
+
+        expect(view.html()).toContain('<i>Ada</i>');
+    });
+
+    it('chooses between two values with $cond', async () => {
+        const spec = leaf({ $cond: { $state: '/on', eq: true }, $then: 'yes', $else: 'no' });
+
+        expect(
+            (await render(spec, { state: { on: true }, components: VOCABULARY })).html()
+        ).toContain('yes');
+        expect(
+            (await render(spec, { state: { on: false }, components: VOCABULARY })).html()
+        ).toContain('no');
+    });
+
+    it('numbers the rows of a repeat with $index', async () => {
+        const view = await render(
+            {
+                root: 'list',
+                elements: {
+                    list: {
+                        type: 'Shell',
+                        props: {},
+                        repeat: { statePath: '/rows' },
+                        children: ['row'],
+                    },
+                    row: { type: 'Text', props: { value: { $index: true } } },
+                },
+            },
+            { state: { rows: ['a', 'b', 'c'] }, components: VOCABULARY }
+        );
+
+        expect(view.html()).toContain('<i>0</i>');
+        expect(view.html()).toContain('<i>2</i>');
+    });
+
+    it('repeats a repeat, walking into the item with $item', async () => {
+        const view = await render(
+            {
+                root: 'groups',
+                elements: {
+                    groups: {
+                        type: 'Shell',
+                        props: {},
+                        repeat: { statePath: '/groups' },
+                        children: ['items'],
+                    },
+                    items: {
+                        type: 'Shell',
+                        props: {},
+                        repeat: { statePath: { $item: 'items' } },
+                        children: ['leaf'],
+                    },
+                    leaf: { type: 'Text', props: { value: { $item: '' } } },
+                },
+            },
+            { state: { groups: [{ items: ['a', 'b'] }] }, components: VOCABULARY }
+        );
+
+        expect(view.html()).toContain('<i>a</i>');
+        expect(view.html()).toContain('<i>b</i>');
+    });
+
+    /** The repeat-scoped half of two-way binding: a field editing one row's field. */
+    it('binds a field to a repeat item with $bindItem', async () => {
+        const view = await render(
+            {
+                root: 'list',
+                elements: {
+                    list: {
+                        type: 'Shell',
+                        props: {},
+                        repeat: { statePath: '/rows' },
+                        children: ['edit'],
+                    },
+                    edit: { type: 'Field', props: { modelValue: { $bindItem: 'name' } } },
+                },
+            },
+            { state: { rows: [{ name: 'Ada' }] }, components: VOCABULARY }
+        );
+
+        const input = view.host.querySelector('input');
+        expect(input.value).toBe('Ada');
+
+        input.value = 'Grace';
+        input.dispatchEvent(new window.Event('input', { bubbles: true }));
+        await settle();
+
+        expect(view.wrote('/rows/0/name')).toBe('Grace');
+    });
+
+    it.each([
+        ['gt', { $state: '/n', gt: 5 }, { n: 10 }, true],
+        ['lt', { $state: '/n', lt: 5 }, { n: 10 }, false],
+        ['gte', { $state: '/n', gte: 10 }, { n: 10 }, true],
+        ['lte', { $state: '/n', lte: 9 }, { n: 10 }, false],
+        ['neq', { $state: '/s', neq: 'x' }, { s: 'y' }, true],
+        ['not', { $state: '/b', eq: true, not: true }, { b: true }, false],
+        [
+            'a list, which means and',
+            [
+                { $state: '/a', eq: 1 },
+                { $state: '/b', eq: 2 },
+            ],
+            { a: 1, b: 2 },
+            true,
+        ],
+        [
+            '$and',
+            {
+                $and: [
+                    { $state: '/a', eq: 1 },
+                    { $state: '/b', eq: 9 },
+                ],
+            },
+            { a: 1, b: 2 },
+            false,
+        ],
+        [
+            '$or',
+            {
+                $or: [
+                    { $state: '/a', eq: 9 },
+                    { $state: '/b', eq: 2 },
+                ],
+            },
+            { a: 1, b: 2 },
+            true,
+        ],
+    ])('decides visibility with %s', async (_name, condition, state, expected) => {
+        const view = await show(condition, state);
+
+        expect(view.html().includes('shown')).toBe(expected);
+    });
+
+    /**
+     * `watch` is the last element key, and the only one that fires without anybody
+     * touching the element it is declared on — a state change somewhere else runs it.
+     */
+    it('runs an action when a watched pointer changes', async () => {
+        const fired = [];
+        const view = await render(
+            {
+                root: 'box',
+                elements: {
+                    box: {
+                        type: 'Shell',
+                        props: {},
+                        watch: { '/name': { action: 'save' } },
+                        children: ['edit'],
+                    },
+                    edit: { type: 'Field', props: { modelValue: { $bindState: '/name' } } },
+                },
+            },
+            {
+                state: { name: 'Ada' },
+                components: VOCABULARY,
+                handlers: { save: async () => fired.push('save') },
+            }
+        );
+
+        expect(fired).toEqual([]);
+
+        const input = view.host.querySelector('input');
+        input.value = 'Grace';
+        input.dispatchEvent(new window.Event('input', { bubbles: true }));
+        await settle();
+
+        expect(fired).toEqual(['save']);
     });
 });

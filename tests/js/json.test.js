@@ -358,6 +358,56 @@ describe('the document guard rails', () => {
         expect(warn.mock.calls.flat().join(' ')).toContain('"slots"');
     });
 
+    /**
+     * `confirm` on `removeState` is the difference between a prompt and a deletion: the
+     * renderer handles the action and returns long before the confirmation branch.
+     */
+    it('warns about a confirm the renderer will never ask', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        disconnect = serveBundle(stubBundle());
+
+        mount(createJson(deps()).PwaxJson, {
+            json: {
+                root: 'a',
+                elements: {
+                    a: {
+                        type: 'Card',
+                        on: {
+                            press: {
+                                action: 'removeState',
+                                confirm: { title: 'Sure?', message: '…' },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        expect(warn.mock.calls.flat().join(' ')).toContain('without');
+        expect(warn.mock.calls.flat().join(' ')).toContain('removeState');
+    });
+
+    it('leaves a confirm on an action of your own alone', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        disconnect = serveBundle(stubBundle());
+
+        mount(createJson(deps()).PwaxJson, {
+            json: {
+                root: 'a',
+                elements: {
+                    a: {
+                        type: 'Card',
+                        on: {
+                            press: { action: 'save', confirm: { title: 'Sure?', message: '…' } },
+                        },
+                    },
+                },
+            },
+        });
+
+        expect(warn).not.toHaveBeenCalled();
+    });
+
     it('says which setting turned it off rather than rendering silently', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 

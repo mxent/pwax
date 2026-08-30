@@ -725,29 +725,46 @@ Elements are a flat map rather than a nested tree, and `children` holds keys. Th
 lets a document be streamed or patched a piece at a time — and it means a deeply nested
 layout is no harder to build in PHP than a shallow one.
 
-A prop can be a literal, or one of these:
+A prop can be a literal, or any of these eight expressions:
 
 | | |
 | --- | --- |
 | `{"$state": "/user/name"}` | read a value from state, by [JSON Pointer](https://datatracker.ietf.org/doc/html/rfc6901) |
-| `{"$bindState": "/user/name"}` | read it *and* write it back — see below |
+| `{"$bindState": "/user/name"}` | read it *and* write it back — see [Two-way binding](#two-way-binding) |
 | `{"$template": "Hi ${/user/name}"}` | interpolate state into a string |
 | `{"$cond": …, "$then": …, "$else": …}` | choose between two values |
-| `{"$item": "name"}` | a field of the current item, inside a `repeat` |
+| `{"$item": "name"}` | a field of the current item, inside a `repeat`; `""` is the item itself |
+| `{"$bindItem": "name"}` | read and write a field of the current item |
 | `{"$index": true}` | the current index, inside a `repeat` |
+| `{"$computed": "fullName", "args": {…}}` | call a function you supplied — see [Computed values](#computed-values) |
 
 And an element itself can carry:
 
 | | |
 | --- | --- |
 | `children` | keys of the elements rendered inside it |
-| `visible` | a condition — `{"$state": "/open", "eq": true}` |
+| `visible` | a condition, below |
 | `repeat` | `{"statePath": "/rows", "key": "id"}` — renders this element's **children** once per item |
 | `on` | events to actions — `{"press": {"action": "save"}}` |
+| `watch` | pointers to actions — `{"/note": {"action": "save"}}`, run when the pointer changes |
 
-> `repeat` goes on the container whose children repeat, not on the row. An element with a
-> `repeat` and no `children` renders one empty row; Pwax warns in the console when it sees
-> that, and when it sees an element using `slots`, which the renderer does not read.
+A `visible` condition names a source — `$state`, `$item` or `$index` — and one comparison:
+
+| | |
+| --- | --- |
+| `{"$state": "/n", "eq": 3}` | `eq`, `neq`, `gt`, `gte`, `lt`, `lte` |
+| `{"$state": "/n", "eq": 3, "not": true}` | `not` inverts whatever the rest decided |
+| `[{…}, {…}]` | a list means **and** |
+| `{"$and": [{…}, {…}]}` / `{"$or": […]}` | spelled out, and nestable |
+
+`repeat` nests: an inner `repeat` can walk into the current item with
+`{"statePath": {"$item": "items"}}`.
+
+> **Three things render quietly wrong, so Pwax warns about each in the console.** `repeat`
+> goes on the container whose children repeat, not on the row — an element with a `repeat`
+> and no `children` renders one empty row. An element using `slots` renders nothing,
+> because the renderer reads only `children`. And a `confirm` on one of the renderer's own
+> actions never asks; see [Asking first](#asking-first).
 
 ### Actions
 
@@ -854,11 +871,12 @@ three shapes:
 | | |
 | --- | --- |
 | `{"navigate": "/thanks"}` | route there, through the SPA router |
-| `{"set": {"/saved": true}}` | write to state |
+| `{"set": {"/saved": true}}` | write to state — in `onError`, the value `"$error.message"` becomes the thrown message |
 | `{"action": "refresh"}` | dispatch another action |
 
-A handler that throws is contained: `onError` runs and the rest of the document keeps
-working.
+A handler receives the resolved `params` and nothing else — no state setter — so writing
+a result back is what `onSuccess` is for. A handler that throws is contained: `onError`
+runs and the rest of the document keeps working.
 
 #### Asking first
 
@@ -868,11 +886,17 @@ Add `confirm` to a binding and the action waits for a dialog:
 'confirm' => ['title' => 'Delete this?', 'message' => 'This cannot be undone.', 'variant' => 'danger'],
 ```
 
-Two things to weigh before using it. The dialog is the renderer's own, with its own
-inline styling, and will not match your application. And cancelling surfaces as an
-unhandled promise rejection in the console — harmless, but enough to show up in an error
-reporter. For anything user-facing, prefer confirming inside your own handler and leaving
-`confirm` off.
+**It only works on an action that reaches a handler.** The renderer handles `setState`,
+`pushState`, `removeState` and the rest of its own actions and returns before the
+confirmation is ever considered, so a `confirm` on one of those runs without asking —
+which for `removeState` is the difference between a prompt and a deletion. Pwax warns in
+the console when it sees one; put the confirmation on an action of your own instead.
+
+Two more things to weigh. The dialog is the renderer's own, with its own inline styling,
+and will not match your application. And cancelling surfaces as an unhandled promise
+rejection in the console — harmless, but enough to show up in an error reporter. For
+anything user-facing, prefer confirming inside your own handler and leaving `confirm`
+off.
 
 #### Watching the traffic
 

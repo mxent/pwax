@@ -122,6 +122,180 @@ Route::get('/sample', fn () => pwaxRender('pages.sample', [
     ->description('A page that is half Blade template and half JSON document.'))
     ->name('sample');
 
+/*
+|--------------------------------------------------------------------------
+| Every expression and element key, on one page
+|--------------------------------------------------------------------------
+|
+| `/sample` is the readable introduction. This is the reference: each of the eight prop
+| expressions and each element key beyond `type` and `props` appears at least once, so a
+| regression in any of them is visible rather than theoretical.
+|
+| Worth noticing while reading it: only `save` needs a handler. `setState`, `pushState`,
+| `removeState` and `navigate` are supplied by the renderer or by Pwax, and the document
+| below drives most of its own behaviour without a line of JavaScript.
+|
+*/
+
+Route::get('/vocabulary', fn () => pwaxRender('pages.vocabulary', [
+    'doc' => [
+        'root' => 'page',
+        'state' => [
+            'note' => 'Ada Lovelace',
+            'open' => false,
+            'status' => null,
+            'people' => [
+                ['name' => 'Ada Lovelace'],
+                ['name' => 'Grace Hopper'],
+            ],
+        ],
+        'elements' => [
+            // `watch` fires an action when a pointer changes, wherever the change came
+            // from — here, from the field bound with `$bindState` further down.
+            'page' => [
+                'type' => 'Card',
+                'props' => ['title' => ['$template' => 'Editing ${/note}'], 'variant' => 'raised'],
+                'watch' => ['/note' => ['action' => 'save']],
+                'children' => [
+                    'stateRead', 'computed', 'cond', 'bound',
+                    'toggle', 'secret',
+                    'peopleList', 'addPerson',
+                    'status', 'save', 'home',
+                ],
+            ],
+
+            // $state — read a pointer straight into a prop.
+            'stateRead' => [
+                'type' => 'Text',
+                'props' => ['value' => ['$state' => '/note'], 'tone' => 'loud'],
+            ],
+
+            // $computed — call a function the page supplied.
+            'computed' => [
+                'type' => 'Text',
+                'props' => [
+                    'tone' => 'quiet',
+                    'value' => [
+                        '$computed' => 'initials',
+                        'args' => ['name' => ['$state' => '/note']],
+                    ],
+                ],
+            ],
+
+            // $cond — choose between two values.
+            'cond' => [
+                'type' => 'Text',
+                'props' => [
+                    'tone' => 'quiet',
+                    'value' => [
+                        '$cond' => ['$state' => '/open', 'eq' => true],
+                        '$then' => 'The panel is open.',
+                        '$else' => 'The panel is closed.',
+                    ],
+                ],
+            ],
+
+            // $bindState — read and write the same pointer.
+            'bound' => [
+                'type' => 'Field',
+                'props' => ['label' => 'Note', 'modelValue' => ['$bindState' => '/note']],
+            ],
+
+            // setState — no handler, no configuration.
+            'toggle' => [
+                'type' => 'Button',
+                'props' => ['label' => 'Toggle the panel', 'variant' => 'secondary'],
+                'on' => ['press' => [
+                    'action' => 'setState',
+                    'params' => ['statePath' => '/open', 'value' => true],
+                ]],
+            ],
+
+            // visible — a list of conditions, which means all of them.
+            'secret' => [
+                'type' => 'Text',
+                'props' => ['value' => 'Only shown when open, and only past two people.'],
+                'visible' => [
+                    ['$state' => '/open', 'eq' => true],
+                    ['$state' => '/people/1', 'neq' => null],
+                ],
+            ],
+
+            // repeat — renders its children once per item, with $item and $index in scope.
+            // $bindItem edits the row the field is standing in.
+            'peopleList' => [
+                'type' => 'Card',
+                'props' => ['title' => 'People'],
+                'repeat' => ['statePath' => '/people', 'key' => 'name'],
+                'children' => ['personIndex', 'personField', 'removePerson'],
+            ],
+            'personIndex' => [
+                'type' => 'Text',
+                'props' => ['tone' => 'quiet', 'value' => ['$index' => true]],
+            ],
+            'personField' => [
+                'type' => 'Field',
+                'props' => ['label' => 'Name', 'modelValue' => ['$bindItem' => 'name']],
+            ],
+            'removePerson' => [
+                'type' => 'Button',
+                'props' => ['label' => 'Remove the first', 'variant' => 'secondary'],
+                'on' => ['press' => [
+                    'action' => 'removeState',
+                    'params' => ['statePath' => '/people', 'index' => 0],
+                ]],
+            ],
+
+            // pushState — append. No `confirm` here on purpose: the renderer handles its
+            // own actions and returns before the confirmation branch, so a `confirm` on
+            // this would never ask. It goes on `save` below, which has a handler.
+            'addPerson' => [
+                'type' => 'Button',
+                'props' => ['label' => 'Add someone'],
+                'on' => ['press' => [
+                    'action' => 'pushState',
+                    'params' => ['statePath' => '/people', 'value' => ['name' => 'New person']],
+                ]],
+            ],
+
+            // What a handler wrote back. A handler only ever receives `params` — writing
+            // to state is `onSuccess`'s job, which is why the two are shown together.
+            'status' => [
+                'type' => 'Text',
+                'props' => ['tone' => 'quiet', 'value' => ['$state' => '/status']],
+                'visible' => ['$state' => '/status', 'neq' => null],
+            ],
+
+            // Two bindings on one event: one that needs a handler and one that does not.
+            // `$error.message` is substituted with the thrown message if `save` rejects.
+            'save' => [
+                'type' => 'Button',
+                'props' => ['label' => 'Save'],
+                'on' => ['press' => [
+                    [
+                        'action' => 'save',
+                        'params' => ['note' => ['$state' => '/note']],
+                        'confirm' => ['title' => 'Save this note?', 'message' => 'The dialog is the renderer\'s own, and unstyled.'],
+                        'onSuccess' => ['set' => ['/status' => 'Saved.']],
+                        'onError' => ['set' => ['/status' => '$error.message']],
+                    ],
+                    ['action' => 'setState', 'params' => ['statePath' => '/open', 'value' => false]],
+                ]],
+            ],
+
+            'home' => [
+                'type' => 'Button',
+                'props' => ['label' => 'Back home', 'variant' => 'secondary'],
+                'on' => ['press' => ['action' => 'navigate', 'params' => ['to' => '/']]],
+            ],
+        ],
+    ],
+])
+    ->cacheable()
+    ->title('The document vocabulary')
+    ->description('Every expression and element key json-render defines, on one page.'))
+    ->name('vocabulary');
+
 Route::get('/api/items', fn () => response()->json([
     'items' => [
         ['id' => 1, 'title' => 'First'],

@@ -118,6 +118,11 @@ php vendor/bin/testbench serve
 pages with scoped styles, a component pulled in with `@pwaxImport` and held in `data()`,
 a route that redirects, a page whose list arrives from a `fetch` after mount, and the
 service worker on. Between them they cover the checks below.
+
+Two more pages cover `<PwaxJson>`. `/sample` is a page that is half Blade template and
+half JSON document — the readable introduction. `/vocabulary` is the reference: every
+prop expression and every element key on one page, so a regression in any of them is
+visible rather than theoretical.
 `php vendor/bin/testbench pwax:doctor` reports a handful of warnings against it and no
 problems; the warnings are deliberate.
 
@@ -130,6 +135,10 @@ rather than what a browser builds from it:
 3. `/elsewhere` redirects through the SPA router rather than throwing.
 4. DevTools offline mode still boots the app, and still navigates between pages.
 5. `/items` still shows its list with DevTools offline, on a second visit.
+6. `/sample` renders both halves, and still does with DevTools offline.
+7. `/vocabulary` renders with no console errors, and every control on it does something:
+   the toggle reveals the hidden text, editing a field moves the heading and the
+   initials, adding and removing rows changes the list, and saving asks first.
 
 The last two are the ones worth the trouble. Offline is the claim this package makes that
 is hardest to check by reading code, and the failure is silent: everything works on the

@@ -45,6 +45,15 @@ $config['json']['components'] = [
         ],
     ],
 
+    'Text' => [
+        'component' => "@pwaxImport('components.text')",
+        'description' => 'A line of text, for whatever an expression resolved to.',
+        'props' => [
+            'value' => ['type' => 'any'],
+            'tone' => ['type' => 'enum', 'values' => ['quiet', 'loud']],
+        ],
+    ],
+
     'Field' => [
         'component' => "@pwaxImport('components.field')",
         'description' => 'A labelled text input, for a prop bound with $bindState.',
@@ -53,6 +62,12 @@ $config['json']['components'] = [
             'modelValue' => ['type' => 'string'],
         ],
     ],
+];
+
+// The one action on `/vocabulary` that needs a handler. Everything else in that
+// document is either a renderer action or one Pwax supplies.
+$config['json']['actions'] = [
+    'save' => "@pwaxImport('actions.save')",
 ];
 
 // A stable identity, so the demo is not reinstalled as a second app whenever `start_url`

@@ -31,6 +31,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `:handlers` for one instance — where a name is defined twice, the page wins over
   configuration, and configuration over a built-in.
 
+- **The whole document vocabulary.** All eight prop expressions (`$state`, `$bindState`,
+  `$template`, `$cond`, `$item`, `$bindItem`, `$index`, `$computed`) and every element key
+  (`children`, `visible`, `repeat`, `on`, `watch`), including nested `repeat` and the full
+  set of `visible` comparisons. `workbench/resources/views/pages/vocabulary.blade.php`
+  demonstrates every one of them on a single page.
+
 - **`:functions` and `:validation-functions`**, for `$computed` props and the
   `validateForm` action. Props rather than configuration, because they are JavaScript and
   `config/pwax.php` carries data the runtime reads, never code it runs.

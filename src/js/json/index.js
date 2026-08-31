@@ -404,18 +404,7 @@ function catalogItem({ resolve, events, name }) {
                 const ctx = props.ctx;
                 const bound = {};
 
-                const declared = Array.isArray(options.emits)
-                    ? options.emits
-                    : Object.keys(options.emits || {});
-
-                for (const event of new Set([...declared, ...events])) {
-                    // `update:x` is the write half of a two-way binding, and is wired from
-                    // `bindings` below. Treating it as an ordinary event here would bind it
-                    // to an action the document never asked for.
-                    if (event.startsWith('update:')) {
-                        continue;
-                    }
-
+                for (const event of eventsOf(options, events)) {
                     const handle = ctx.on(event);
 
                     // Only what the document bound. Attaching the rest would be harmless
@@ -475,6 +464,29 @@ function isEmpty(children) {
     const nodes = Array.isArray(children) ? children : [children];
 
     return nodes.every((node) => node && node.type === CommentNode);
+}
+
+/**
+ * The events a document may bind on a component.
+ *
+ * `emits` is the contract — whatever a component declares there is what a document can
+ * bind with `on`, which is why configuration never repeats it. A catalog entry may still
+ * name `events` explicitly, and has to for a `global`: a component reached by dotted path
+ * arrives as options nobody compiled, so there is nothing to read.
+ *
+ * `update:x` is dropped. It is the write half of a two-way binding, wired from
+ * `bindings`, and binding it to an action the document never asked for is not the same
+ * thing as an event.
+ *
+ * @param {object|null|undefined} options
+ * @param {string[]} extra
+ * @returns {string[]}
+ */
+function eventsOf(options, extra) {
+    const emits = options && options.emits;
+    const declared = Array.isArray(emits) ? emits : Object.keys(emits || {});
+
+    return [...new Set([...declared, ...extra])].filter((name) => !name.startsWith('update:'));
 }
 
 /**
@@ -611,6 +623,7 @@ export function createRenderer({ components = {}, actions = {}, load }) {
             props: toSchema(entry.props),
             slots: Array.isArray(entry.slots) ? entry.slots : ['default'],
             description: entry.description || '',
+            events: Array.isArray(entry.events) ? entry.events : [],
         };
 
         const item = catalogItemFor(name, entry, load);
@@ -636,6 +649,64 @@ export function createRenderer({ components = {}, actions = {}, load }) {
         components: declarations,
         actions: actionDeclarations,
     });
+
+    /**
+     * The catalog again, with every component's own events filled in.
+     *
+     * `prompt()` tells a model that each key of `on` is "an event name (from the
+     * component's supported events)" and then has to list them, or the model guesses —
+     * and an event name no component emits binds to nothing and reports nothing. The
+     * names live on the loaded component's `emits`, which is the whole reason a catalog
+     * entry does not repeat them, so they are not known until the component is fetched.
+     *
+     * Which is why this is separate from the catalog the registry uses. Rendering stays
+     * lazy: a page fetches the components its document actually names. Describing the
+     * catalog fetches all of them, once, on a call that is already asynchronous and is
+     * made when generating a document rather than when showing one.
+     *
+     * A component that fails to load still gets its entry, with whatever `events` the
+     * configuration named. A prompt missing one component's events is worth having; no
+     * prompt at all is not.
+     *
+     * @type {Promise<any>|null}
+     */
+    let described = null;
+
+    function describedCatalog() {
+        if (described) {
+            return described;
+        }
+
+        described = Promise.all(
+            Object.entries(components).map(async ([name, entry]) => {
+                const extra = Array.isArray(entry.events) ? entry.events : [];
+
+                try {
+                    const options =
+                        entry.type === 'global'
+                            ? resolveGlobal(entry.path)
+                            : await load(entry.url, entry.export || '');
+
+                    return [name, eventsOf(options, extra)];
+                } catch {
+                    return [name, extra];
+                }
+            })
+        ).then((resolved) => {
+            const described = {};
+
+            for (const [name, events] of resolved) {
+                described[name] = { ...declarations[name], events };
+            }
+
+            return defineCatalog(schema, {
+                components: described,
+                actions: actionDeclarations,
+            });
+        });
+
+        return described;
+    }
 
     const { registry } = defineRegistry(catalog, {
         components: implementations,
@@ -720,8 +791,9 @@ export function createRenderer({ components = {}, actions = {}, load }) {
         Root,
         catalog,
         /** The system prompt that constrains a model to this catalog. */
-        prompt: (options) => catalog.prompt(options),
+        prompt: (options) => describedCatalog().then((described) => described.prompt(options)),
         /** The JSON Schema for structured output, for a model that supports it. */
-        jsonSchema: (options) => catalog.jsonSchema(options),
+        jsonSchema: (options) =>
+            describedCatalog().then((described) => described.jsonSchema(options)),
     };
 }

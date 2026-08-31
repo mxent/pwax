@@ -1134,6 +1134,19 @@ are reachable from the browser once the renderer has loaded:
 const prompt = await window.pwax.json.prompt();
 ```
 
+Each component appears with its description, its declared props, and **the events it
+emits** — so a model binding an `on` key writes an event the component actually has,
+rather than guessing at `click` for something that emits `press`:
+
+```
+- Button: { label: string } - A clickable button. [accepts children] [events: press]
+```
+
+Those event names come from the component's own `emits`, which is why describing the
+catalog fetches every component in it. It happens once, on a call that is already
+asynchronous, and rendering is unaffected — a page still fetches only the components its
+document names.
+
 Generating server-side is the more usual arrangement, and there the honest answer today is
 that you write the prompt yourself from the same catalog you configured — Pwax does not
 run JavaScript on the server to call `prompt()` for you. Whatever produces the document,

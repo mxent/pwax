@@ -246,6 +246,26 @@ for exactly this reason, and pins three more behaviours of version
 0.20.0 that are not documented contracts — `children` rather than named
 slots, `repeat` on the container, and the patch-shaped `onStateChange`.
 
+### `prompt()` describes a catalog the registry never builds
+
+`createRenderer` builds two catalogs from the same declarations. The one the
+registry uses is synchronous and knows no events; `describedCatalog()` loads
+every component, reads `emits` off each, and builds a second one that
+`prompt()` and `jsonSchema()` answer from.
+
+The split is the point. Event names are the component's own `emits` — that is
+why a catalog entry does not repeat them — so they cannot be known until the
+component is fetched, and fetching them all at `createRenderer` would make
+every page pay for the whole catalog. Describing it is a generation-time call
+that is already asynchronous, so it pays instead. Collapse the two and either
+rendering stops being lazy or the prompt goes back to telling a model to bind
+"an event name (from the component's supported events)" without ever naming
+one — which is what it did, and a bound `click` on something that emits
+`press` is silent on both sides.
+
+`eventsOf()` is shared with the render path so the two cannot disagree about
+what an event is; `update:x` is not one, in either.
+
 ### A document's props are filtered before they reach `h()`
 
 `safeProps()` in `src/js/json/index.js` drops any prop whose name begins

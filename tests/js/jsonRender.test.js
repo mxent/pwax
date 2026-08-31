@@ -971,14 +971,12 @@ describe('the catalog as prompt material', () => {
             load: () => Promise.resolve(TEXT),
         });
 
-    const schemaFor = (props) => {
-        const json = JSON.stringify(build(props).jsonSchema());
+    // Both are asynchronous because describing the catalog loads its components, to read
+    // the events off their `emits`. Rendering stays lazy; only this call fetches them all.
+    const schemaFor = async (props) => JSON.stringify(await build(props).jsonSchema());
 
-        return json;
-    };
-
-    it('describes each declared prop type', () => {
-        const schema = schemaFor({
+    it('describes each declared prop type', async () => {
+        const schema = await schemaFor({
             name: { type: 'string' },
             size: { type: 'number' },
             live: { type: 'boolean' },
@@ -992,8 +990,10 @@ describe('the catalog as prompt material', () => {
         expect(schema).toContain('"array"');
     });
 
-    it('holds a generator to the values an enum allows', () => {
-        expect(schemaFor({ tone: { type: 'enum', values: ['quiet', 'loud'] } })).toContain('quiet');
+    it('holds a generator to the values an enum allows', async () => {
+        const schema = await schemaFor({ tone: { type: 'enum', values: ['quiet', 'loud'] } });
+
+        expect(schema).toContain('quiet');
     });
 
     /**
@@ -1006,11 +1006,82 @@ describe('the catalog as prompt material', () => {
         expect(() => build({ n: { type: 'nonsense' } })).not.toThrow();
     });
 
-    it('names the components and actions in the prompt it generates', () => {
-        const prompt = build({ name: { type: 'string' } }).prompt();
+    it('names the components and actions in the prompt it generates', async () => {
+        const prompt = await build({ name: { type: 'string' } }).prompt();
 
         expect(prompt).toContain('Widget');
         expect(prompt).toContain('Save the thing');
+    });
+
+    /**
+     * The prompt tells a model that each key of `on` is "an event name (from the
+     * component's supported events)" and then has to say what they are, or the model
+     * guesses — and an event no component emits binds to nothing and reports nothing.
+     * The names are on the loaded component's `emits`, which is exactly why a catalog
+     * entry does not repeat them, so describing the catalog has to fetch it.
+     */
+    it('names the events a component emits', async () => {
+        const renderer = PwaxJson.createRenderer({
+            components: {
+                Button: { type: 'module', url: '/c/button.js', export: '', props: {} },
+            },
+            actions: {},
+            load: () => Promise.resolve(BUTTON),
+        });
+
+        expect(await renderer.prompt()).toContain('[events: press]');
+    });
+
+    /** `update:x` is the write half of a two-way binding, not an event to bind. */
+    it('leaves a two-way binding out of the events it names', async () => {
+        const renderer = PwaxJson.createRenderer({
+            components: {
+                Field: { type: 'module', url: '/c/field.js', export: '', props: {} },
+            },
+            actions: {},
+            load: () => Promise.resolve(FIELD),
+        });
+
+        const prompt = await renderer.prompt();
+
+        expect(prompt).not.toContain('update:modelValue');
+        expect(prompt).not.toContain('[events:');
+    });
+
+    /**
+     * A `global` has no options to read, which is the one case where configuration has
+     * to name the events — and the one where the prompt was silent about them even
+     * though the catalog knew.
+     */
+    it('names the events a catalog entry declares for a component it cannot read', async () => {
+        const renderer = PwaxJson.createRenderer({
+            components: {
+                Stamp: { type: 'global', path: 'Nothing.Here', events: ['stamped'] },
+            },
+            actions: {},
+            load: () => Promise.reject(new Error('never called')),
+        });
+
+        expect(await renderer.prompt()).toContain('[events: stamped]');
+    });
+
+    /** A prompt missing one component's events beats no prompt at all. */
+    it('still describes a catalog whose component will not load', async () => {
+        const renderer = PwaxJson.createRenderer({
+            components: {
+                Broken: { type: 'module', url: '/c/gone.js', export: '', events: ['poke'] },
+                Card: { type: 'module', url: '/c/card.js', export: '', props: {} },
+            },
+            actions: {},
+            load: (url) =>
+                url === '/c/gone.js' ? Promise.reject(new Error('404')) : Promise.resolve(CARD),
+        });
+
+        const prompt = await renderer.prompt();
+
+        expect(prompt).toContain('Broken');
+        expect(prompt).toContain('[events: poke]');
+        expect(prompt).toContain('Card');
     });
 });
 

@@ -129,6 +129,18 @@ empty page is worth nothing.
 | `/vocabulary` | every prop expression and element key in one document, plus a catalog component from a `window` global |
 | `/hostile` | a document that tries to set handlers, markup, a `javascript:` URL and one buried in a list — the page audits its own DOM and prints a verdict |
 
+The catalog's prompt is worth reading once against the real config, since it is what a
+model is held to and nothing in the test suite shows you the whole thing:
+
+```js
+await page.evaluate(() => window.pwax.json.prompt());
+```
+
+Each component should appear with its props *and* `[events: …]` where it emits any —
+`Button` has `[events: press]`, `Field` has none because `update:modelValue` is a binding
+rather than an event, and `Stamp` gets its from configuration because a `window` global
+has no options to read.
+
 Offline is the claim most worth the trouble, and needs the worker warmed first:
 
 ```js
@@ -137,6 +149,16 @@ await page.waitForFunction(() => navigator.serviceWorker.controller !== null, { 
 await page.waitForTimeout(3000);           // let the precache settle
 await context.setOffline(true);
 await page.reload({ waitUntil: 'load' });
+```
+
+On `/sample`, offline is not just "the page painted": check that the document rendered
+(`Hello, Ada!`), that a catalog component and its bound field are there, and that clicking
+`Show the details` still runs `setState` — the renderer has to work from cache, not merely
+be visible. Confirm the worker really stored it rather than trusting the HTTP cache:
+
+```js
+await page.evaluate(async () => (await (await caches.open((await caches.keys())[0])).keys())
+    .map((k) => new URL(k.url).pathname));
 ```
 
 For `/vocabulary`, every control should do something: the toggle reveals an

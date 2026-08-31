@@ -63,7 +63,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is the component list.
 
 - **`window.pwax.json.{load,prompt,jsonSchema}`.** `prompt()` and `jsonSchema()`
-  describe the configured catalog for a model that is generating documents.
+  describe the configured catalog for a model that is generating documents — each
+  component with its description, its declared props and the events it emits, so a model
+  binding an `on` key writes an event the component actually has instead of guessing.
+  Event names come from the component's own `emits`, so describing the catalog loads
+  every component in it; rendering is unaffected and still fetches only what a document
+  names.
 
 - **`dist/pwax-json.js`**, a second prebuilt bundle carrying
   [json-render](https://github.com/vercel-labs/json-render) and its dependencies. It is

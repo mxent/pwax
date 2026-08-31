@@ -208,7 +208,11 @@ Same reference vocabulary as `pwax.vue.*`: `@pwaxImport(...)`,
 - Children arrive through **one default `<slot />`**. A document lists
   child keys under `children` and cannot address a named slot.
 - **`emits` is the contract.** Whatever the component declares there is
-  what a document can bind with `on`. Configuration never repeats it.
+  what a document can bind with `on`. Configuration never repeats it —
+  `prompt()` reads it off the component and lists it as `[events: press]`,
+  so a model binds an event that exists. A `global` reached by dotted path
+  has no options to read, and is the one case where the catalog entry has
+  to name `events` itself.
 
 A document is a flat map, not a nested tree:
 

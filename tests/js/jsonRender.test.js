@@ -50,6 +50,12 @@ const TEXT = {
     template: '<i>{{ value }}</i>',
 };
 
+/** A URL prop on an anchor — the shape that makes a `javascript:` value reachable. */
+const LINK = {
+    props: { href: String, label: { type: String, default: 'go' } },
+    template: '<a :href="href">{{ label }}</a>',
+};
+
 /** Renders its wrapper only when it was actually given content. */
 const SHELL = {
     template: '<div class="shell"><main v-if="$slots.default"><slot /></main></div>',
@@ -61,6 +67,7 @@ const MODULES = {
     '/c/field.js': FIELD,
     '/c/shell.js': SHELL,
     '/c/text.js': TEXT,
+    '/c/link.js': LINK,
 };
 
 /** Text and Shell together cover the expression cases: a leaf and a container. */
@@ -72,6 +79,7 @@ const VOCABULARY = {
 
 const CATALOG = {
     Card: { type: 'module', url: '/c/card.js', export: '' },
+    Link: { type: 'module', url: '/c/link.js', export: '' },
     Button: {
         type: 'module',
         url: '/c/button.js',
@@ -1054,5 +1062,226 @@ describe('a catalog component from a window global', () => {
         await view.click();
 
         expect(ran).toEqual(['save']);
+    });
+});
+
+/**
+ * The line the catalog draws.
+ *
+ * A document names components and passes them data. Nothing in `@json-render/vue`
+ * enforces the second half: `ctx.props` is whatever the document wrote, and every key
+ * a component did not declare falls through to its root element as an attribute — which
+ * is a DOM sink for a handful of names. Verified against real Chromium before these were
+ * written, because jsdom does not run inline handlers and would have called the first
+ * two of these safe while a browser executed them.
+ */
+describe('what a document may not put in a prop', () => {
+    /** Mount one element with these props and return the root element it rendered to. */
+    async function withProps(props, { type = 'Card' } = {}) {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const view = await render({ root: 'a', elements: { a: { type, props } } });
+
+        return {
+            view,
+            warn,
+            el: view.host.querySelector(type === 'Link' ? 'a' : 'section'),
+            warnings: () => warn.mock.calls.map((call) => String(call[0])).join('\n'),
+        };
+    }
+
+    /**
+     * `onclick` is not one of Vue's event props — `isOn` wants a non-lowercase character
+     * after `on` — so it takes the attribute path, and `setAttribute('onclick', …)` is a
+     * live inline handler. This is the plain form of the attack and the one that works.
+     */
+    it('drops an on* prop rather than writing an inline handler', async () => {
+        const { el, warnings } = await withProps({
+            title: 'hi',
+            onclick: 'window.__owned = true',
+        });
+
+        expect(el.getAttribute('onclick')).toBeNull();
+        expect(el.outerHTML).not.toContain('__owned');
+        expect(warnings()).toContain('sets "onclick" on a "Card" element');
+    });
+
+    /** `shouldSetAsProp` answers `'innerHTML' in el`, so this one is set as a property. */
+    it('drops innerHTML rather than parsing the document as markup', async () => {
+        const { el, warnings } = await withProps({
+            title: 'hi',
+            innerHTML: '<img src=x onerror="window.__owned = true">',
+        });
+
+        expect(el.querySelector('img')).toBeNull();
+        expect(el.innerHTML).toContain('<h2>hi</h2>');
+        expect(warnings()).toContain('sets "innerHTML" on a "Card" element');
+    });
+
+    /**
+     * Vue's own escape hatches. `^name` forces the attribute path — and an HTML element
+     * lowercases an attribute name, so `^onClick` becomes a live `onclick` — while
+     * `.name` forces the DOM property. A check on the written key would miss both.
+     */
+    it("drops a prop hidden behind Vue's ^ and . prefixes", async () => {
+        const { el, warnings } = await withProps({
+            title: 'hi',
+            '^onClick': 'window.__owned = true',
+            '.innerHTML': '<img src=x>',
+        });
+
+        expect(el.getAttribute('onclick')).toBeNull();
+        expect(el.getAttribute('onClick')).toBeNull();
+        expect(el.querySelector('img')).toBeNull();
+        expect(warnings()).toContain('sets "^onClick"');
+        expect(warnings()).toContain('sets ".innerHTML"');
+    });
+
+    it('matches the name whatever its case', async () => {
+        const { el, warnings } = await withProps({
+            title: 'hi',
+            ONCLICK: 'window.__owned = true',
+            outerHTML: '<b>gone</b>',
+        });
+
+        expect(el.getAttribute('onclick')).toBeNull();
+        expect(el.tagName).toBe('SECTION');
+        expect(warnings()).toContain('sets "ONCLICK"');
+        expect(warnings()).toContain('sets "outerHTML"');
+    });
+
+    /**
+     * The blunt half of the rule: everything beginning with `on` goes, not a list of
+     * known event names. A list is a thing to keep current, and the cost of being blunt
+     * is this — a dropped prop with a console line saying exactly what happened.
+     */
+    it('drops an innocent prop that begins with on, and says so', async () => {
+        const { el, warnings } = await withProps({ title: 'hi', online: 'yes' });
+
+        expect(el.getAttribute('online')).toBeNull();
+        expect(warnings()).toContain('sets "online" on a "Card" element');
+    });
+
+    /**
+     * The name check does nothing about a value, and a value reaches a sink whenever a
+     * component renders one as a URL. Confirmed live: clicking it ran the expression and
+     * its result replaced the document.
+     */
+    it('drops a javascript: URL from any prop', async () => {
+        const { el, warnings } = await withProps(
+            { href: 'javascript:window.__owned = true', label: 'go' },
+            { type: 'Link' }
+        );
+
+        expect(el.getAttribute('href')).toBeNull();
+        expect(el.textContent).toBe('go');
+        expect(warnings()).toContain('passes a script URL to "href" on a "Link" element');
+    });
+
+    /**
+     * Matched the way the URL parser reads a scheme. It removes tab, newline and
+     * carriage return from anywhere in a URL and strips leading control characters, so
+     * this is a `javascript:` URL and a check for the literal prefix would pass it.
+     */
+    it('drops a javascript: URL split up with control characters', async () => {
+        const { el } = await withProps(
+            { href: '  java\tscri\npt:window.__owned = true' },
+            { type: 'Link' }
+        );
+
+        expect(el.getAttribute('href')).toBeNull();
+    });
+
+    it('drops a data:text/html URL, for a component that frames one', async () => {
+        const { el } = await withProps(
+            { href: 'data:text/html,<script>window.__owned = true</script>' },
+            { type: 'Link' }
+        );
+
+        expect(el.getAttribute('href')).toBeNull();
+    });
+
+    it('leaves an ordinary URL, and every other prop, alone', async () => {
+        const { el, warn } = await withProps(
+            { href: '/orders/1?tab=items#top', label: 'Order' },
+            { type: 'Link' }
+        );
+
+        expect(el.getAttribute('href')).toBe('/orders/1?tab=items#top');
+        expect(el.textContent).toBe('Order');
+        expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('passes through the attributes a document legitimately sets', async () => {
+        const { el, warn } = await withProps({
+            title: 'hi',
+            class: 'wide',
+            'data-testid': 'summary',
+            'aria-label': 'Summary',
+        });
+
+        expect(el.className).toContain('wide');
+        expect(el.getAttribute('data-testid')).toBe('summary');
+        expect(el.getAttribute('aria-label')).toBe('Summary');
+        expect(warn).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The filter runs inside a render function, so a document that re-renders on every
+     * keystroke would otherwise print the same line forever and bury everything else.
+     */
+    it('reports a dropped prop once, not once per render', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const view = await render(
+            {
+                root: 'box',
+                state: { name: 'Ada' },
+                elements: {
+                    box: { type: 'Shell', props: {}, children: ['edit', 'card'] },
+                    edit: { type: 'Field', props: { modelValue: { $bindState: '/name' } } },
+                    card: {
+                        type: 'Card',
+                        props: { title: { $template: '${/name}' }, onclick: 'x' },
+                    },
+                },
+            },
+            { components: { ...VOCABULARY, Card: CATALOG.Card } }
+        );
+
+        const before = warn.mock.calls.length;
+
+        const input = view.host.querySelector('input');
+        input.value = 'Grace';
+        input.dispatchEvent(new window.Event('input', { bubbles: true }));
+        await settle();
+
+        expect(view.html()).toContain('<h2>Grace</h2>');
+        expect(warn.mock.calls.length).toBe(before);
+        expect(before).toBe(1);
+    });
+
+    /**
+     * The point of the whole rule: the document is not left without a way to be
+     * interactive, it is left with the one the format already has.
+     */
+    it('still wires an event through the element\'s "on" key', async () => {
+        const ran = [];
+        const view = await render(
+            {
+                root: 'a',
+                elements: {
+                    a: {
+                        type: 'Button',
+                        props: { label: 'Save', onclick: 'window.__owned = true' },
+                        on: { press: { action: 'save' } },
+                    },
+                },
+            },
+            { handlers: { save: async () => ran.push('save') } }
+        );
+
+        await view.click();
+
+        expect(ran).toEqual(['save']);
+        expect(view.host.querySelector('button').getAttribute('onclick')).toBeNull();
     });
 });

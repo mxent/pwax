@@ -62,6 +62,16 @@ $config['json']['components'] = [
             'modelValue' => ['type' => 'string'],
         ],
     ],
+
+    // Renders a prop as a URL, which is the sink `/hostile` checks.
+    'Link' => [
+        'component' => "@pwaxImport('components.link')",
+        'description' => 'A link to somewhere in the application.',
+        'props' => [
+            'href' => ['type' => 'string', 'required' => true],
+            'label' => ['type' => 'string'],
+        ],
+    ],
 ];
 
 // A component that is not a Pwax component: `workbench/public/js/demo-lib.js` puts it

@@ -110,6 +110,161 @@ function resolveGlobal(path) {
 }
 
 /**
+ * Prop names that write markup rather than data, keyed lowercase.
+ *
+ * Vue sets each of these as a DOM property on whatever element a component has at its
+ * root — `shouldSetAsProp` answers `key in el` — so a string arriving here is parsed as
+ * HTML, not shown as text.
+ */
+const MARKUP_PROPS = new Set(['innerhtml', 'outerhtml', 'textcontent', 'innertext', 'srcdoc']);
+
+/**
+ * Would setting this prop hand the document a script or a markup sink?
+ *
+ * Two families, and both are reached through props a component never declared: Vue
+ * passes those through to the root element as fallthrough attributes, where they stop
+ * being data and start being DOM.
+ *
+ *   - **`on*`.** `onclick` is not one of Vue's event props — `isOn` wants `on` followed
+ *     by a non-lowercase character — so it takes the attribute path and comes out as
+ *     `setAttribute('onclick', …)`, which is an inline handler and runs. `onClick` *is*
+ *     an event prop, and a string is not a function, so that one is inert; the check
+ *     does not try to tell them apart, because the distinction is a Vue implementation
+ *     detail and the document has a proper channel for events either way.
+ *   - **The markup sinks above.** `innerHTML` is the plain case, and it executes:
+ *     `<img src=x onerror=…>` fires on insertion.
+ *
+ * Vue's own prefixes have to be undone first. `.name` forces the DOM-property path and
+ * `^name` forces the attribute path, so `^onClick` reaches `setAttribute('onClick', …)`
+ * — which an HTML element lowercases into a live `onclick` — and `.innerHTML` reaches
+ * the property directly. A check on the written key would miss both.
+ *
+ * @param {string} key
+ */
+function unsafeProp(key) {
+    const name = key[0] === '.' || key[0] === '^' ? key.slice(1) : key;
+    const lower = name.toLowerCase();
+
+    // Everything beginning with `on`, not a list of known event names. A list is a thing
+    // to keep up to date, and the cost of being blunt is a dropped `online` prop with a
+    // console line saying so — against a missed handler attribute nobody finds.
+    return lower.startsWith('on') || MARKUP_PROPS.has(lower);
+}
+
+/**
+ * Is this value a URL that is really a script?
+ *
+ * The prop-name check above stops a document putting a handler on an element. It does
+ * nothing about a value, and a value reaches a sink whenever a component renders one as
+ * a URL — `<a :href>`, `<iframe :src>`, `<form :action>`, all of them perfectly ordinary
+ * things for a catalog component to do. A `javascript:` href runs on click with the
+ * page's own origin, and it does not even have to look like an attack: the expression's
+ * result replaces the document, so the visible symptom is a blank page.
+ *
+ * Matched the way the URL parser reads a scheme, not the way the string looks. It strips
+ * leading C0 controls and spaces, and removes tab, newline and carriage return from
+ * anywhere in the URL — so `java&#9;script:…` is a `javascript:` URL and a check for the
+ * literal prefix would wave it through. Only the head of the string is normalised; a
+ * scheme cannot begin later than that.
+ *
+ * `v-html` is deliberately not in scope. A component that renders a prop as markup is
+ * accepting markup on purpose, which is the component author's decision to make and to
+ * validate — the same decision they make about a controller's data today.
+ *
+ * @param {unknown} value
+ */
+function unsafeValue(value) {
+    if (typeof value !== 'string') {
+        return false;
+    }
+
+    const head = value
+        .slice(0, 64)
+        .replace(/^[\u0000-\u0020]+/, '')
+        .replace(/[\t\n\r]/g, '')
+        .toLowerCase();
+
+    // `data:text/html` is here for an `<iframe :src>`: browsers already refuse a
+    // top-level navigation to one, and a frame is where it still runs — with its own
+    // origin, but with the page in reach through `window.parent` if anything opts in.
+    return (
+        head.startsWith('javascript:') ||
+        head.startsWith('vbscript:') ||
+        head.startsWith('data:text/html')
+    );
+}
+
+/**
+ * Names already reported, so a dropped prop is one console line and not one per render.
+ *
+ * @type {Set<string>}
+ */
+const reported = new Set();
+
+/**
+ * Report a dropped prop, the first time it is dropped.
+ *
+ * @param {string} seen
+ * @param {string} message
+ */
+function warnOnce(seen, message) {
+    if (reported.has(seen)) {
+        return;
+    }
+
+    reported.add(seen);
+
+    console.warn(message);
+}
+
+/**
+ * The document's props, minus anything that would make the document itself executable.
+ *
+ * This is the line the catalog draws. A document names components and passes them data;
+ * what those components then render is the application's code, reviewed and served from
+ * its own origin. Without this, any prop name at all reaches the root element, and a
+ * document — which may be generated, stored, or arrive from somewhere nobody audits —
+ * can put `onclick` or `innerHTML` on any component in the catalog and run script with
+ * it. Dropped rather than rejected: one bad prop should cost that prop, not the page.
+ *
+ * @param {Record<string, unknown>} props
+ * @param {string} name
+ */
+function safeProps(props, name) {
+    const safe = {};
+
+    for (const key of Object.keys(props || {})) {
+        if (unsafeProp(key)) {
+            warnOnce(
+                `${name}.${key}`,
+                `pwax: the JSON document sets "${key}" on a "${name}" element. It was ` +
+                    'dropped — a document cannot set event handlers or markup on a ' +
+                    'component. Bind an event under the element\'s "on" key, and pass ' +
+                    'content as a prop the component renders as text.'
+            );
+
+            continue;
+        }
+
+        if (unsafeValue(props[key])) {
+            warnOnce(
+                `${name}.${key}:value`,
+                `pwax: the JSON document passes a script URL to "${key}" on a "${name}" ` +
+                    'element. It was dropped — a "javascript:" URL runs with this ' +
+                    "application's origin. Use a path, or an action under the element's " +
+                    '"on" key.'
+            );
+
+            continue;
+        }
+
+        safe[key] = props[key];
+    }
+
+    return safe;
+}
+
+/**
  * The component json-render renders for one catalog entry.
  *
  * A real component rather than the render function the library's README shows, and the
@@ -238,7 +393,7 @@ function catalogItem({ resolve, events, name }) {
                 // single placeholder comment. That is what has to be recognised here.
                 return h(
                     options,
-                    { ...ctx.props, ...bound },
+                    { ...safeProps(ctx.props, name), ...bound },
                     isEmpty(ctx.children) ? null : { default: () => ctx.children }
                 );
             };
@@ -318,9 +473,10 @@ function catalogItemFor(name, entry, load) {
     return item;
 }
 
-/** Test seam: forget every built catalog item. */
+/** Test seam: forget every built catalog item, and every prop already warned about. */
 export function resetCatalogItems() {
     items.clear();
+    reported.clear();
 }
 
 /**

@@ -659,6 +659,105 @@ describe('the built-in actions', () => {
         }
     });
 
+    /**
+     * `http.json()` puts this session's CSRF token on every request it makes, and the URL
+     * here comes from the document — the one input in this file nobody hand-checked. The
+     * browser will not let the page read the reply, but the request goes out, and a
+     * server that answers the preflight is handed the header. `sync.enqueue()` already
+     * refuses a cross-origin URL in these words, so without this the same document leaked
+     * the token when online and was refused when offline.
+     */
+    it('refuses to submit to another origin', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const dependencies = deps();
+        const handlers = await handlersOf(dependencies);
+
+        await handlers.submit({ url: 'https://evil.example/collect', data: { id: 1 } });
+
+        expect(dependencies.http.json).not.toHaveBeenCalled();
+        expect(error.mock.calls.flat().join(' ')).toContain('CSRF token');
+    });
+
+    /** Checked before the queue, too — offline is not a way around it. */
+    it('refuses to queue a cross-origin submit when offline', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        const dependencies = deps({
+            sync: { supported: true, enqueue: vi.fn().mockResolvedValue(true) },
+        });
+
+        vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(false);
+
+        const handlers = await handlersOf(dependencies);
+        await handlers.submit({ url: '//evil.example/collect' });
+
+        expect(dependencies.sync.enqueue).not.toHaveBeenCalled();
+        expect(dependencies.http.json).not.toHaveBeenCalled();
+    });
+
+    it('submits to a relative URL, which is the ordinary case', async () => {
+        const dependencies = deps();
+        const handlers = await handlersOf(dependencies);
+
+        await handlers.submit({ url: 'orders/1', data: {} });
+
+        expect(dependencies.http.json).toHaveBeenCalledWith('orders/1', expect.anything());
+    });
+
+    /**
+     * The router would throw a `SecurityError` on `pushState` to another origin rather
+     * than go there, but an open redirect wearing the application's own address bar is
+     * not something to leave to the browser's discretion.
+     */
+    it('refuses to navigate to another origin', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const dependencies = deps();
+        const handlers = await handlersOf(dependencies);
+
+        await handlers.navigate({ to: 'https://evil.example/login' });
+
+        expect(dependencies.navigate).not.toHaveBeenCalled();
+        expect(error.mock.calls.flat().join(' ')).toContain('within this application');
+    });
+
+    /** Resolved, so a document may write a full URL for a page of its own application. */
+    it('navigates to an absolute URL on this origin, as a path', async () => {
+        const dependencies = deps();
+        const handlers = await handlersOf(dependencies);
+
+        await handlers.navigate({ to: `${window.location.origin}/orders?tab=open#top` });
+
+        expect(dependencies.navigate).toHaveBeenCalledWith('/orders?tab=open#top');
+    });
+
+    /**
+     * A relative reference cannot have changed origin, so it goes to the router as
+     * written. Resolving it would be wrong, not merely different: the router reads
+     * `?tab=open` against the current route, which under hash routing is not the one the
+     * URL parser sees.
+     */
+    it('leaves a relative destination as the document wrote it', async () => {
+        const dependencies = deps();
+        const handlers = await handlersOf(dependencies);
+
+        await handlers.navigate({ to: '?tab=open' });
+        await handlers.navigate({ to: '#top' });
+
+        expect(dependencies.navigate.mock.calls.flat()).toEqual(['?tab=open', '#top']);
+    });
+
+    /** A backslash pair introduces an authority too, for an http URL. */
+    it('refuses a destination that reaches another origin with backslashes', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        const dependencies = deps();
+        const handlers = await handlersOf(dependencies);
+
+        await handlers.navigate({ to: '\\\\evil.example/login' });
+
+        expect(dependencies.navigate).not.toHaveBeenCalled();
+    });
+
     it('names the missing parameter rather than posting to nowhere', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const dependencies = deps();

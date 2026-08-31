@@ -124,6 +124,104 @@ Route::get('/sample', fn () => pwaxRender('pages.sample', [
 
 /*
 |--------------------------------------------------------------------------
+| A document that tries things it is not allowed to try
+|--------------------------------------------------------------------------
+|
+| The catalog's claim is that a document brings no markup and no script of its own. Vue
+| passes any prop a component did not declare through to that component's root element,
+| where `onclick` is an inline handler and `innerHTML` is parsed as HTML — so the claim
+| holds only because `safeProps()` in `src/js/json/index.js` drops them first.
+|
+| This is that check, by hand. Every prop below is a live vector against an unfiltered
+| renderer, confirmed executing in Chromium before the filter existed. The page audits its
+| own DOM after mount and prints a verdict, and the console names each dropped prop.
+|
+*/
+
+Route::get('/hostile', fn () => pwaxRender('pages.hostile', [
+    'doc' => [
+        'root' => 'card',
+        'elements' => [
+            'card' => [
+                'type' => 'Card',
+                'props' => ['title' => 'Every one of these was dropped', 'variant' => 'raised'],
+                'children' => [
+                    'handler', 'innocent', 'markup', 'prefixed', 'shouty',
+                    'scriptUrl', 'obfuscated', 'ok',
+                ],
+            ],
+
+            // The plain one, and the one that works: `onclick` is not a Vue event prop —
+            // `isOn` wants a non-lowercase character after `on` — so it takes the
+            // attribute path, and `setAttribute('onclick', …)` runs on click.
+            'handler' => [
+                'type' => 'Text',
+                'props' => ['value' => 'onclick', 'onclick' => 'window.__owned = true'],
+            ],
+
+            // The cost of the rule being blunt. `online` is nobody's attack; it is
+            // dropped because the check is "anything beginning with on" rather than a
+            // list of event names to keep current, and the console line is how a
+            // developer finds out in a second rather than an afternoon.
+            'innocent' => [
+                'type' => 'Text',
+                'props' => ['value' => 'online — an innocent prop, dropped too', 'online' => true],
+            ],
+
+            // `shouldSetAsProp` answers `'innerHTML' in el`, so these are set as DOM
+            // properties and the string is parsed as HTML. `<img src=x onerror>` fires
+            // on insertion, with no click needed.
+            'markup' => [
+                'type' => 'Text',
+                'props' => [
+                    'value' => 'innerHTML',
+                    'innerHTML' => '<img src=x data-owned onerror="window.__owned = true">',
+                    'textContent' => 'replaced',
+                ],
+            ],
+
+            // Vue's own escape hatches, reaching the same two sinks by another spelling.
+            // `^onClick` becomes a live `onclick`, because an HTML element lowercases an
+            // attribute name; `.innerHTML` goes straight to the property.
+            'prefixed' => [
+                'type' => 'Text',
+                'props' => [
+                    'value' => 'prefixed',
+                    '^onClick' => 'window.__owned = true',
+                    '.innerHTML' => '<b data-owned>replaced</b>',
+                ],
+            ],
+
+            'shouty' => [
+                'type' => 'Text',
+                'props' => ['value' => 'ONCLICK', 'ONCLICK' => 'window.__owned = true'],
+            ],
+
+            // The name check does nothing about a value. This one needs a component that
+            // renders a prop as a URL, which `Link` does, as any link component would.
+            'scriptUrl' => [
+                'type' => 'Link',
+                'props' => ['label' => 'A script URL', 'href' => 'javascript:window.__owned = true'],
+            ],
+
+            // The URL parser strips tab and newline from anywhere in a URL, so this is a
+            // `javascript:` URL and a check for the literal prefix would pass it.
+            'obfuscated' => [
+                'type' => 'Link',
+                'props' => ['label' => 'obfuscated', 'href' => "  java\tscri\npt:window.__owned = true"],
+            ],
+
+            // And the control: an ordinary URL, untouched.
+            'ok' => ['type' => 'Link', 'props' => ['label' => 'A real link, kept', 'href' => '/about']],
+        ],
+    ],
+])
+    ->title('What a document cannot do')
+    ->description('A deliberately hostile JSON document, and the page auditing itself.'))
+    ->name('hostile');
+
+/*
+|--------------------------------------------------------------------------
 | Every expression and element key, on one page
 |--------------------------------------------------------------------------
 |

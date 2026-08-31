@@ -246,6 +246,31 @@ for exactly this reason, and pins three more behaviours of version
 0.20.0 that are not documented contracts — `children` rather than named
 slots, `repeat` on the container, and the patch-shaped `onStateChange`.
 
+### A document's props are filtered before they reach `h()`
+
+`safeProps()` in `src/js/json/index.js` drops any prop whose name begins
+with `on`, the five markup sinks (`innerHTML` and friends), and any value
+whose scheme is `javascript:`, `vbscript:` or `data:text/html`. This is not
+defensive tidiness: Vue passes every prop a component did not declare
+through to its root element as an attribute, `setAttribute('onclick', …)`
+is a live inline handler, and `innerHTML` is set as a DOM property. Both
+were confirmed executing in Chromium before the filter existed. The
+catalog's whole claim — that a document brings no markup and no script of
+its own — rests on this function, so widening it needs the same proof.
+
+Vue's `^prop` and `.prop` prefixes are stripped before the name is tested,
+because they reach the same two sinks by another spelling. The name rule
+covers *everything* starting with `on` rather than a list of event names;
+that costs an innocent `online` prop, which is the intended trade and is
+what the console line is for.
+
+For the same reason the `submit` and `navigate` built-ins in
+`src/js/json.js` resolve their URL and refuse another origin: `http.json()`
+attaches the session's CSRF token to every request it makes, and
+`sync.enqueue()` already refused cross-origin for that exact reason — so
+without the check the same document leaked the token while online and was
+refused while offline.
+
 ### Components are Blade views, but their compile output is JavaScript
 
 `src/Compiler/ComponentCompiler` (and its helpers `BlockExtractor`,
@@ -470,6 +495,11 @@ If a setting needs to reach the client runtime:
    `moduleEntry()` the `vue.*` groups use.
 4. `php artisan pwax:doctor` names a reference that points at no view,
    and a prop `type` the schema builder does not know.
+5. Do not name a prop `online`, `once`, or anything else beginning with
+   `on`: `safeProps()` drops those, since it cannot tell them from
+   `onclick`. Whatever the component does with a prop it renders as
+   markup or as a URL is its own to validate — the filter stops the
+   document supplying a handler, not the component trusting one.
 
 ### 9.6 Adding a new prefab shell partial or extension point
 

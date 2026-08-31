@@ -152,6 +152,55 @@ function warnAboutDocument(json) {
 }
 
 /**
+ * A URL that begins with a scheme or an authority, and so can name another origin.
+ *
+ * Both slash characters, in either order: the URL parser treats a backslash as a slash
+ * for an http(s) URL, so `\\evil.example` introduces an authority exactly as `//` does.
+ */
+const ABSOLUTE_URL = /^(?:[a-z][a-z0-9+.-]*:|[/\\]{2})/i;
+
+/**
+ * What a document's URL should be used as, or null if it leaves this origin.
+ *
+ * Both built-ins that take a URL take it from the document, and a document is the one
+ * input here nobody hand-checked — it may be generated, stored, or fetched. Neither
+ * destination is safe to leave open:
+ *
+ *   - `submit` sends this session's CSRF token, because `http.json()` puts it on every
+ *     request it makes. Off-origin that is a token handed to somebody else; the browser
+ *     will not let the page *read* the reply, but the request goes out all the same, and
+ *     a server that answers the preflight gets the header. `sync.enqueue()` already
+ *     refuses a cross-origin URL for exactly this reason, so without the check here the
+ *     same document leaked the token when online and was refused when offline.
+ *   - `navigate` goes through the SPA router, and a router asked for another origin is
+ *     an open redirect wearing the application's own address bar.
+ *
+ * An absolute URL comes back as a path, because that is what the router takes. A relative
+ * one comes back as written: it could not have changed origin, and rewriting it would
+ * change where it lands — the router resolves `?tab=open` and `#top` against the current
+ * route, and an application on hash routing has a current route the URL parser cannot
+ * see.
+ *
+ * @param {string} url
+ */
+function sameOriginTarget(url) {
+    const value = String(url);
+    let target;
+
+    try {
+        target = new URL(value, window.location.href);
+    } catch {
+        return null;
+    }
+
+    if (target.origin !== window.location.origin) {
+        return null;
+    }
+
+    return ABSOLUTE_URL.test(value) ? target.pathname + target.search + target.hash : value;
+}
+
+/**
  * Build the `<PwaxJson>` component and the machinery behind it.
  *
  * @param {{
@@ -178,7 +227,20 @@ export function createJson({ config, loader, http, sync, navigate }) {
     const builtIn = {
         navigate: {
             description: 'Navigate to a path within the application.',
-            handler: (params) => navigate((params && params.to) || '/'),
+            handler: (params) => {
+                const path = sameOriginTarget((params && params.to) || '/');
+
+                if (path === null) {
+                    console.error(
+                        'pwax: the "navigate" action only goes to paths within this ' +
+                            `application, got "${params && params.to}". Nothing happened.`
+                    );
+
+                    return;
+                }
+
+                return navigate(path);
+            },
         },
         submit: {
             description: 'POST a payload to a URL, queued for later when offline.',
@@ -187,6 +249,17 @@ export function createJson({ config, loader, http, sync, navigate }) {
 
                 if (!url) {
                     console.warn('pwax: the "submit" action needs a "url" parameter.');
+
+                    return;
+                }
+
+                // Before anything is built, because what is built carries the CSRF token.
+                if (sameOriginTarget(url) === null) {
+                    console.error(
+                        'pwax: the "submit" action only posts to URLs on this origin, got ' +
+                            `"${url}". Nothing was sent — the request would have carried ` +
+                            "this session's CSRF token to another origin."
+                    );
 
                     return;
                 }

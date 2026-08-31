@@ -11,11 +11,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`<PwaxJson :json="…" />`**, a globally registered component that renders a JSON
   document — a tree of components and props — against a catalog declared in
-  `pwax.json.components`. A document can only name components the catalog lists and
-  only pass props it describes, which is what makes a structure assembled on the
-  server, stored in a database or produced by a language model safe to render. Nothing
-  about `pwaxRender()` or the payload format changes: the document is controller data
-  like any other, and the page around it is an ordinary Pwax component.
+  `pwax.json.components`. A document can only name components the catalog lists, and
+  cannot introduce markup, scripts or components of its own, which is what makes a
+  structure assembled on the server, stored in a database or produced by a language model
+  safe to render. Nothing about `pwaxRender()` or the payload format changes: the document
+  is controller data like any other, and the page around it is an ordinary Pwax component.
+
+- **The catalog is a boundary, not a suggestion.** Vue passes a prop a component did not
+  declare through to that component's root element, where a few names stop being data, so
+  a document's props are filtered before they are rendered: anything beginning with `on`,
+  the markup sinks (`innerHTML`, `outerHTML`, `textContent`, `innerText`, `srcdoc`) and any
+  value whose scheme is `javascript:`, `vbscript:` or `data:text/html` is dropped with a
+  console line naming the element and the prop. Vue's own `^prop` and `.prop` prefixes are
+  undone before the name is checked. The `submit` and `navigate` built-ins refuse a URL on
+  another origin for the same reason — one carries the session's CSRF token, the other
+  drives the application's router. What a component then does with the data it is given is
+  the component's own to validate, as it already was.
 
 - **A catalog component is an ordinary Pwax component.** Children arrive through one
   default `<slot />`, and whatever the component declares in `emits` is what a document

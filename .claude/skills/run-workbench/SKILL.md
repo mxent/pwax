@@ -116,6 +116,7 @@ empty page is worth nothing.
 | `/items` | a list fetched after mount, and still there offline |
 | `/sample` | half Blade template, half JSON document |
 | `/vocabulary` | every prop expression and element key in one document, plus a catalog component from a `window` global |
+| `/hostile` | a document that tries to set handlers, markup and a `javascript:` URL — the page audits its own DOM and prints a verdict |
 
 Offline is the claim most worth the trouble, and needs the worker warmed first:
 
@@ -136,6 +137,13 @@ because it injects them above the document's own and any index shifts.
 
 Cancelling a confirmed action logs an unhandled rejection. That is the renderer's,
 it is known, and it is not a failure of the page.
+
+`/hostile` must read **"Nothing got through"** on a green background, and the console
+must carry one `pwax:` line per dropped prop and no more. Screenshot it *before* clicking
+anything: its links are real `<a>` elements, and a click loop over them navigates away
+and leaves you photographing the wrong page. jsdom does not run inline handlers, so this
+route is the only place the `onclick` and `innerHTML` cases are actually proven — Vitest
+can only assert the attribute is absent.
 
 ## 6. Finally
 

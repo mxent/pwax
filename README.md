@@ -731,13 +731,21 @@ naming the element and the prop:
 | --- | --- |
 | any prop beginning with `on` | `onclick` becomes an inline handler and runs |
 | `innerHTML`, `outerHTML`, `textContent`, `innerText`, `srcdoc` | Vue sets each as a DOM property, so a string is parsed as HTML |
-| any prop *value* starting `javascript:`, `vbscript:` or `data:text/html` | a component that renders a prop as a URL — `<a :href>`, `<iframe :src>` — would otherwise run it |
+| any prop *value* whose scheme is `javascript:`, `vbscript:` or `data:text/html` | a component that renders a prop as a URL — `<a :href>`, `<iframe :src>` — would otherwise run it |
 
-Vue's own `^prop` and `.prop` prefixes are undone before the name is checked, and the URL
-match reads a scheme the way the URL parser does, so neither `^onClick` nor a
-`java&#9;script:` value gets past it. The rule for names is deliberately blunt — *anything*
-beginning with `on`, not a list of event names — so a prop legitimately called `online`
-is dropped too, and the console says so. Rename it.
+Vue's own `^prop` and `.prop` prefixes are undone before the name is checked, so neither
+`^onClick` nor `.innerHTML` gets past it. The rule for names is deliberately blunt —
+*anything* beginning with `on`, not a list of event names — so a prop legitimately called
+`online` is dropped too, and both the console and `php artisan pwax:doctor` say so. Rename
+it.
+
+The value rule looks **at every level of a prop, not just the top**, because the URL a
+document wants is usually a field of an entry in a list — a menu's `items`, a table's
+`columns` — rather than the prop itself. When one turns up, the whole prop is dropped:
+a list that smuggled in a URL should be conspicuously missing, not quietly one item short.
+The scheme is read the way the URL parser reads one, which strips leading control
+characters and removes tab, newline and carriage return from anywhere in the URL, so
+`java&#9;script:…` is caught as well.
 
 A document's proper channel for behaviour is the element's `on` key and an action, which
 is unaffected. See [Actions](#actions).
@@ -747,11 +755,13 @@ cross-origin URL and say so. `submit` sends the session's CSRF token with every 
 and `navigate` drives the application's own router; neither is something a document should
 be able to point elsewhere.
 
-**What it *can* reach is your component's own code.** A component that renders a prop with
-`v-html`, or puts one straight into an `href`, is accepting markup or a URL on purpose —
-that is the component author's decision, and the same one they make about a controller's
-data today. The catalog is a list of components you trust; treat writing one the way you
-treat writing any other component that takes input.
+**What it *can* reach is your component's own code.** None of this validates data, only
+the two channels through which a document could otherwise supply behaviour. A component
+that renders a prop with `v-html` is accepting markup on purpose, and one that renders a
+prop as a URL still gets any ordinary URL a document cares to write — `https://` included.
+Those are the component author's decisions, and the same ones they make about a
+controller's data today. The catalog is a list of components you trust; write one the way
+you would write any other component that takes input.
 
 ### Writing a document
 

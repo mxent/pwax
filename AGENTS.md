@@ -262,7 +262,21 @@ Vue's `^prop` and `.prop` prefixes are stripped before the name is tested,
 because they reach the same two sinks by another spelling. The name rule
 covers *everything* starting with `on` rather than a list of event names;
 that costs an innocent `online` prop, which is the intended trade and is
-what the console line is for.
+what the console line is for. `DoctorCommand::MARKUP_PROPS` mirrors the sink
+list in PHP so `pwax:doctor` reports a catalog that declares one, and
+`RuntimeContractTest` fails when the two drift.
+
+Two things about the value half are load-bearing and were each a live
+bypass before they were written. It walks **every level** of a prop, because
+the URL a document wants is a field of an entry in a list far more often than
+it is the prop itself — a `javascript:` URL inside an `items` array ran on
+click when the check looked only at the top. And it reads the scheme by
+walking the string rather than normalising a slice of it: padding is
+unbounded, so three hundred leading tabs step over any fixed window. There is
+no cycle guard and no depth limit, and there does not need to be — a document
+is parsed JSON, and `@json-render/vue` resolves these props with a walk of
+its own first, so a cyclic object handed to `:json` overflows the stack in the
+resolver and never reaches a render.
 
 For the same reason the `submit` and `navigate` built-ins in
 `src/js/json.js` resolve their URL and refuse another origin: `http.json()`

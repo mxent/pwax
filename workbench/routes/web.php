@@ -147,7 +147,7 @@ Route::get('/hostile', fn () => pwaxRender('pages.hostile', [
                 'props' => ['title' => 'Every one of these was dropped', 'variant' => 'raised'],
                 'children' => [
                     'handler', 'innocent', 'markup', 'prefixed', 'shouty',
-                    'scriptUrl', 'obfuscated', 'ok',
+                    'scriptUrl', 'obfuscated', 'nested', 'ok',
                 ],
             ],
 
@@ -209,6 +209,17 @@ Route::get('/hostile', fn () => pwaxRender('pages.hostile', [
             'obfuscated' => [
                 'type' => 'Link',
                 'props' => ['label' => 'obfuscated', 'href' => "  java\tscri\npt:window.__owned = true"],
+            ],
+
+            // Nested one level down, which is where a list of links keeps its URLs. The
+            // whole prop goes, so the nav renders empty rather than one item short —
+            // a document that smuggled a URL into a list should look broken.
+            'nested' => [
+                'type' => 'Menu',
+                'props' => ['items' => [
+                    ['label' => 'A real entry', 'href' => '/about'],
+                    ['label' => 'A script URL', 'href' => 'javascript:window.__owned = true'],
+                ]],
             ],
 
             // And the control: an ordinary URL, untouched.

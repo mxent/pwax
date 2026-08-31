@@ -46,6 +46,17 @@ Anything you add under `workbench/public/` needs a `sync` entry in `testbench.ya
 another `workbench:sync-skeleton`. The served docroot is the skeleton inside `vendor/`,
 not `workbench/public/`, so without both the file is emitted in the page and 404s.
 
+`workbench:sync-skeleton` clears the skeleton's `public/` before it copies, so a run that
+is interrupted — or one chained straight into `serve` in the same command — leaves the
+docroot empty and every page 404ing on `/img` and `/js`. The symptom is a console full of
+404s and the `Stamp` catalog component resolving to nothing. Re-run the sync on its own
+and check the result before serving:
+
+```bash
+php vendor/bin/testbench workbench:sync-skeleton
+ls vendor/orchestra/testbench-core/laravel/public/     # expect: img  index.php  js  vendor
+```
+
 ## 3. Serve
 
 **Use port 8000.** `pwax:doctor` probes `config('app.url')`, which testbench
@@ -116,7 +127,7 @@ empty page is worth nothing.
 | `/items` | a list fetched after mount, and still there offline |
 | `/sample` | half Blade template, half JSON document |
 | `/vocabulary` | every prop expression and element key in one document, plus a catalog component from a `window` global |
-| `/hostile` | a document that tries to set handlers, markup and a `javascript:` URL — the page audits its own DOM and prints a verdict |
+| `/hostile` | a document that tries to set handlers, markup, a `javascript:` URL and one buried in a list — the page audits its own DOM and prints a verdict |
 
 Offline is the claim most worth the trouble, and needs the worker warmed first:
 

@@ -23,10 +23,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the markup sinks (`innerHTML`, `outerHTML`, `textContent`, `innerText`, `srcdoc`) and any
   value whose scheme is `javascript:`, `vbscript:` or `data:text/html` is dropped with a
   console line naming the element and the prop. Vue's own `^prop` and `.prop` prefixes are
-  undone before the name is checked. The `submit` and `navigate` built-ins refuse a URL on
-  another origin for the same reason — one carries the session's CSRF token, the other
-  drives the application's router. What a component then does with the data it is given is
-  the component's own to validate, as it already was.
+  undone before the name is checked, the scheme is read the way the URL parser reads one,
+  and a value is looked for at every level of a prop — a menu's URL lives in
+  `items[n].href`, not in the prop itself — with the whole prop dropped when one turns up.
+  The `submit` and `navigate` built-ins refuse a URL on another origin for the same reason
+  — one carries the session's CSRF token, the other drives the application's router. What
+  a component then does with the data it is given is the component's own to validate, as it
+  already was.
 
 - **A catalog component is an ordinary Pwax component.** Children arrive through one
   default `<slot />`, and whatever the component declares in `emits` is what a document
@@ -71,8 +74,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   compile.
 
 - `php artisan pwax:doctor` checks the catalog: a reference that names no component, one
-  pointing at a view that does not exist, an unknown prop type, and an `enum` with no
-  values.
+  pointing at a view that does not exist, an unknown prop type, an `enum` with no values,
+  and a prop name the renderer drops — declaring one is futile rather than dangerous, since
+  it puts a prop in `prompt()` and `jsonSchema()` that no document can ever deliver.
 
 ## [1.0.0]
 

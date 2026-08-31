@@ -152,6 +152,41 @@ function unsafeProp(key) {
 }
 
 /**
+ * The scheme the URL parser would read off this string, lowercased.
+ *
+ * Not the characters as written. The parser strips C0 controls and spaces from the
+ * front of a URL and removes tab, newline and carriage return from *anywhere* in it, so
+ * `java&#9;scri&#10;pt:alert(1)` is a `javascript:` URL and a check against the literal
+ * prefix waves it through. Padding is unbounded — three hundred leading tabs are still a
+ * valid URL — which is why this walks the string rather than normalising a fixed slice:
+ * a slice long enough to be safe does not exist.
+ *
+ * Sixteen characters is enough to recognise every scheme below, and is where the walk
+ * stops. For an ordinary prop that is sixteen iterations and no work at all.
+ *
+ * @param {string} value
+ */
+function urlScheme(value) {
+    let head = '';
+
+    for (let i = 0; i < value.length && head.length < 16; i++) {
+        const character = value[i];
+
+        if (character === '\t' || character === '\n' || character === '\r') {
+            continue;
+        }
+
+        if (head === '' && character <= ' ') {
+            continue;
+        }
+
+        head += character;
+    }
+
+    return head.toLowerCase();
+}
+
+/**
  * Is this value a URL that is really a script?
  *
  * The prop-name check above stops a document putting a handler on an element. It does
@@ -161,11 +196,37 @@ function unsafeProp(key) {
  * page's own origin, and it does not even have to look like an attack: the expression's
  * result replaces the document, so the visible symptom is a blank page.
  *
- * Matched the way the URL parser reads a scheme, not the way the string looks. It strips
- * leading C0 controls and spaces, and removes tab, newline and carriage return from
- * anywhere in the URL — so `java&#9;script:…` is a `javascript:` URL and a check for the
- * literal prefix would wave it through. Only the head of the string is normalised; a
- * scheme cannot begin later than that.
+ * `data:text/html` is here for an `<iframe :src>`: browsers already refuse a top-level
+ * navigation to one, and a frame is where it still runs — with its own origin, but with
+ * the page in reach through `window.parent` if anything opts in.
+ *
+ * @param {string} value
+ */
+function isScriptUrl(value) {
+    const scheme = urlScheme(value);
+
+    return (
+        scheme.startsWith('javascript:') ||
+        scheme.startsWith('vbscript:') ||
+        scheme.startsWith('data:text/html')
+    );
+}
+
+/**
+ * Does this prop carry a script URL anywhere inside it?
+ *
+ * Every level, not just the top one. A prop is very often a list — a menu's `items`, a
+ * table's `columns` — and the component renders each entry's `href` exactly as it would
+ * render a `href` prop. Checked only at the top, the rule was a boundary an author
+ * stepped over by nesting one level, which was confirmed: a `javascript:` URL inside an
+ * `items` array ran on click.
+ *
+ * Unbounded, and safely so. A document is parsed JSON, which cannot contain a cycle,
+ * and `@json-render/vue` has already resolved these props with a walk of its own by the
+ * time they arrive — a cyclic object handed to `:json` by application code overflows the
+ * stack in the resolver and never reaches a render. So there is no cycle guard here, and
+ * no depth limit either: a limit is either a bypass or a legitimate prop dropped for
+ * being deep.
  *
  * `v-html` is deliberately not in scope. A component that renders a prop as markup is
  * accepting markup on purpose, which is the component author's decision to make and to
@@ -174,24 +235,15 @@ function unsafeProp(key) {
  * @param {unknown} value
  */
 function unsafeValue(value) {
-    if (typeof value !== 'string') {
+    if (typeof value === 'string') {
+        return isScriptUrl(value);
+    }
+
+    if (value === null || typeof value !== 'object') {
         return false;
     }
 
-    const head = value
-        .slice(0, 64)
-        .replace(/^[\u0000-\u0020]+/, '')
-        .replace(/[\t\n\r]/g, '')
-        .toLowerCase();
-
-    // `data:text/html` is here for an `<iframe :src>`: browsers already refuse a
-    // top-level navigation to one, and a frame is where it still runs — with its own
-    // origin, but with the page in reach through `window.parent` if anything opts in.
-    return (
-        head.startsWith('javascript:') ||
-        head.startsWith('vbscript:') ||
-        head.startsWith('data:text/html')
-    );
+    return (Array.isArray(value) ? value : Object.values(value)).some(unsafeValue);
 }
 
 /**

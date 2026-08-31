@@ -148,6 +148,42 @@ class JsonCatalogTest extends TestCase
         $this->artisan('pwax:doctor')->expectsOutputToContain('not all strings');
     }
 
+    /**
+     * Declaring one is futile rather than dangerous, which is why it needs saying out
+     * loud: the renderer drops it before the component sees it, so the only thing the
+     * declaration achieves is a prompt teaching a model to write a prop that never
+     * arrives.
+     */
+    public function test_the_doctor_names_a_prop_the_renderer_will_drop(): void
+    {
+        config()->set('pwax.json.components', [
+            'Status' => [
+                'component' => "@pwaxImport('components.badge')",
+                'props' => [
+                    'online' => ['type' => 'boolean'],
+                    'innerHTML' => ['type' => 'string'],
+                    'label' => ['type' => 'string'],
+                ],
+            ],
+        ]);
+
+        $this->artisan('pwax:doctor')
+            ->expectsOutputToContain('props["online"] is a name the renderer drops')
+            ->expectsOutputToContain('props["innerHTML"] is a name the renderer drops');
+    }
+
+    public function test_the_doctor_leaves_an_ordinary_prop_name_alone(): void
+    {
+        config()->set('pwax.json.components', [
+            'Status' => [
+                'component' => "@pwaxImport('components.badge')",
+                'props' => ['label' => ['type' => 'string'], 'tone' => ['type' => 'string']],
+            ],
+        ]);
+
+        $this->artisan('pwax:doctor')->doesntExpectOutputToContain('the renderer drops');
+    }
+
     public function test_the_runtime_is_told_where_to_fetch_the_renderer(): void
     {
         $runtime = $this->app->make(Shell::class)->runtimeConfig()['json']['runtime'];

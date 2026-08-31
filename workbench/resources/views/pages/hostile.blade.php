@@ -14,8 +14,8 @@
         <h1>@{{ heading }}</h1>
         <p class="hostile__lede">
             The document below sets an inline handler, three markup sinks, two of Vue's
-            own prop prefixes and a <code>javascript:</code> URL. Nothing it sets should
-            appear in the page.
+            own prop prefixes, a <code>javascript:</code> URL and another one buried
+            inside a list. Nothing it sets should appear in the page.
         </p>
 
         <p>

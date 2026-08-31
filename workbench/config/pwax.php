@@ -63,6 +63,14 @@ $config['json']['components'] = [
         ],
     ],
 
+    // A URL nested inside a prop rather than being one. `/hostile` checks that too,
+    // because the check that only looked at the top level was no check at all.
+    'Menu' => [
+        'component' => "@pwaxImport('components.menu')",
+        'description' => 'A row of links.',
+        'props' => ['items' => ['type' => 'array']],
+    ],
+
     // Renders a prop as a URL, which is the sink `/hostile` checks.
     'Link' => [
         'component' => "@pwaxImport('components.link')",

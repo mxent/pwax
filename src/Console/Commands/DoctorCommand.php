@@ -24,6 +24,18 @@ use Throwable;
  */
 class DoctorCommand extends Command
 {
+    /**
+     * Prop names the JSON renderer drops because Vue writes them into the DOM.
+     *
+     * The PHP mirror of `MARKUP_PROPS` in `src/js/json/index.js`, lowercased on both
+     * sides. `RuntimeContractTest` reads the JS list and fails when the two drift, so
+     * a name added there is reported here too rather than being warned about only in
+     * a browser console nobody is watching.
+     *
+     * @var list<string>
+     */
+    public const MARKUP_PROPS = ['innerhtml', 'outerhtml', 'textcontent', 'innertext', 'srcdoc'];
+
     protected $signature = 'pwax:doctor';
 
     protected $description = 'Check the Pwax installation for common misconfigurations';
@@ -304,6 +316,9 @@ class DoctorCommand extends Command
      *     happily and 400s when the browser asks for it.
      *   - A prop type the schema builder does not know. It falls back to accepting
      *     anything, which is a validation rule that quietly is not one.
+     *   - A prop name the runtime drops. `safeProps()` in the renderer refuses anything
+     *     beginning with `on` and the markup sinks, so declaring one puts a prop in
+     *     `prompt()` and `jsonSchema()` that a document can never actually deliver.
      */
     private function checkJson(Config $config): void
     {
@@ -327,6 +342,7 @@ class DoctorCommand extends Command
 
         $views = $this->laravel->make('view');
         $types = ['string', 'number', 'boolean', 'enum', 'array', 'object', 'any'];
+
         $directive = (string) $config->get('pwax.components.directive', 'pwaxImport');
         $pattern = '/^@' . preg_quote($directive, '/') . '\s*\(\s*[\'"]?(.+?)[\'"]?\s*\)$/';
         $healthy = true;
@@ -378,6 +394,21 @@ class DoctorCommand extends Command
 
             foreach ((array) ($entry['props'] ?? []) as $prop => $declaration) {
                 $type = is_array($declaration) ? ($declaration['type'] ?? null) : $declaration;
+                $lower = strtolower((string) $prop);
+
+                // Declaring one is not dangerous, it is futile: the renderer drops it
+                // before the component sees it, so the only effect is a prompt that
+                // teaches a model to write a prop which never arrives.
+                if (str_starts_with($lower, 'on') || in_array($lower, self::MARKUP_PROPS, true)) {
+                    $this->warn_(sprintf(
+                        'pwax.json.components["%s"].props["%s"] is a name the renderer drops '
+                        . '— it refuses anything starting with "on", and the props that write '
+                        . 'markup, whatever the catalog says. Rename it, and bind events under '
+                        . 'the element\'s "on" key.',
+                        $name,
+                        $prop
+                    ));
+                }
 
                 if (is_string($type) && ! in_array($type, $types, true)) {
                     $this->warn_(sprintf(

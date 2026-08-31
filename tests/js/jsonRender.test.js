@@ -56,6 +56,12 @@ const LINK = {
     template: '<a :href="href">{{ label }}</a>',
 };
 
+/** Renders each entry of an array prop as a URL — the nested sink. */
+const MENU = {
+    props: { items: { type: Array, default: () => [] } },
+    template: '<nav><a v-for="i in items" :key="i.label" :href="i.href">{{ i.label }}</a></nav>',
+};
+
 /** Renders its wrapper only when it was actually given content. */
 const SHELL = {
     template: '<div class="shell"><main v-if="$slots.default"><slot /></main></div>',
@@ -68,6 +74,7 @@ const MODULES = {
     '/c/shell.js': SHELL,
     '/c/text.js': TEXT,
     '/c/link.js': LINK,
+    '/c/menu.js': MENU,
 };
 
 /** Text and Shell together cover the expression cases: a leaf and a container. */
@@ -80,6 +87,7 @@ const VOCABULARY = {
 const CATALOG = {
     Card: { type: 'module', url: '/c/card.js', export: '' },
     Link: { type: 'module', url: '/c/link.js', export: '' },
+    Menu: { type: 'module', url: '/c/menu.js', export: '' },
     Button: {
         type: 'module',
         url: '/c/button.js',
@@ -1257,6 +1265,103 @@ describe('what a document may not put in a prop', () => {
         expect(view.html()).toContain('<h2>Grace</h2>');
         expect(warn.mock.calls.length).toBe(before);
         expect(before).toBe(1);
+    });
+
+    /**
+     * A prop is very often a list — a menu's `items`, a table's `columns` — and the
+     * component renders each entry's `href` exactly as it would a top-level one.
+     * Checked only at the top, the rule was a boundary an author stepped over by
+     * nesting once; confirmed in Chromium, where the nested URL ran on click.
+     */
+    it('finds a script URL nested inside an array prop', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const view = await render({
+            root: 'a',
+            elements: {
+                a: {
+                    type: 'Menu',
+                    props: {
+                        items: [
+                            { label: 'ok', href: '/about' },
+                            { label: 'bad', href: 'javascript:window.__owned = true' },
+                        ],
+                    },
+                },
+            },
+        });
+
+        // The whole prop goes, not the one entry. A document that smuggled a URL into a
+        // list should leave the list conspicuously missing, not quietly one item short.
+        expect(view.host.querySelectorAll('a')).toHaveLength(0);
+        expect(warn.mock.calls.flat().join(' ')).toContain('script URL to "items"');
+    });
+
+    it('finds one nested several levels down, through objects and arrays', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        await render({
+            root: 'a',
+            elements: {
+                a: {
+                    type: 'Card',
+                    props: {
+                        title: 'hi',
+                        config: { rows: [{ cell: { link: 'javascript:window.__owned = true' } }] },
+                    },
+                },
+            },
+        });
+
+        expect(warn.mock.calls.flat().join(' ')).toContain('script URL to "config"');
+    });
+
+    it('drops only the prop that carries it', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const view = await render({
+            root: 'a',
+            elements: {
+                a: {
+                    type: 'Link',
+                    props: { href: '/orders', label: 'Orders', extra: ['javascript:void 0'] },
+                },
+            },
+        });
+
+        expect(view.host.querySelector('a').getAttribute('href')).toBe('/orders');
+    });
+
+    /**
+     * The padding a URL may carry is unbounded — the parser strips leading control
+     * characters and removes tab, newline and carriage return from anywhere — so
+     * normalising a fixed-length slice is a bypass waiting to be found. Three hundred
+     * characters is well past any slice that would have looked generous.
+     */
+    it.each([
+        ['leading tabs', '\t'.repeat(300) + 'javascript:window.__owned = true'],
+        ['leading spaces', ' '.repeat(300) + 'javascript:window.__owned = true'],
+        ['leading control characters', '\u0001'.repeat(300) + 'javascript:window.__owned = true'],
+        ['newlines inside the scheme', 'ja' + '\n'.repeat(300) + 'vascript:window.__owned = true'],
+    ])('drops a script URL padded with %s', async (_label, href) => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const view = await render({
+            root: 'a',
+            elements: { a: { type: 'Link', props: { href, label: 'go' } } },
+        });
+
+        expect(view.host.querySelector('a').getAttribute('href')).toBeNull();
+    });
+
+    /** The check reads a scheme; it does not scan for the word anywhere in a string. */
+    it('leaves prose that merely mentions a scheme alone', async () => {
+        const { el, warn } = await withProps(
+            { href: '/faq', label: 'Are javascript: URLs safe?' },
+            { type: 'Link' }
+        );
+
+        expect(el.getAttribute('href')).toBe('/faq');
+        expect(el.textContent).toBe('Are javascript: URLs safe?');
+        expect(warn).not.toHaveBeenCalled();
     });
 
     /**

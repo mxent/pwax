@@ -278,17 +278,20 @@ to the component's root element where a few names stop being data:
 | --- | --- |
 | any prop beginning with `on` | `onclick` becomes an inline handler and runs |
 | `innerHTML`, `outerHTML`, `textContent`, `innerText`, `srcdoc` | Vue sets each as a DOM property, so a string is parsed as HTML |
-| a value starting `javascript:`, `vbscript:` or `data:text/html` | a component rendering a prop as a URL would run it |
+| a value whose scheme is `javascript:`, `vbscript:` or `data:text/html`, **at any depth** | a component rendering a prop as a URL would run it |
 
 Vue's `^prop` / `.prop` prefixes are undone first. The name rule is blunt on
-purpose, so an innocent `online` prop is dropped too — rename it. Behaviour
-belongs under the element's `on` key. `submit` and `navigate` refuse a
-cross-origin URL for the same reason: one carries the CSRF token, the other
-drives the router.
+purpose, so an innocent `online` prop is dropped too — rename it, and
+`pwax:doctor` names one declared in the catalog. The value rule walks nested
+arrays and objects, because a menu's URL lives in `items[n].href`, and drops
+the whole prop when it finds one. Behaviour belongs under the element's `on`
+key. `submit` and `navigate` refuse a cross-origin URL for the same reason:
+one carries the CSRF token, the other drives the router.
 
-A component that renders a prop with `v-html` or drops one into an `href` is
-accepting markup or a URL on purpose — that is the component's own decision
-to validate, exactly as with a controller's data.
+None of this validates data. A component that renders a prop with `v-html`,
+or renders one as a URL, still gets whatever ordinary value the document
+wrote — that is the component's own decision to validate, exactly as with a
+controller's data.
 
 The renderer is a second bundle, `dist/pwax-json.js`, ~82 kB gzipped. It
 is fetched by the first `<PwaxJson>` that renders and never on a page that

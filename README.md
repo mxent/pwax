@@ -593,7 +593,10 @@ component, served by an ordinary `pwaxRender()` route.
 <script>
     export default {
         data() {
-            return { doc: @json($doc) };
+            // `?? null` only matters if you run `pwax:compile`, which renders this view
+            // with no data to extract its template. See [Precompiling
+            // templates](#precompiling-templates).
+            return { doc: @json($doc ?? null) };
         },
     };
 </script>
@@ -2032,26 +2035,45 @@ served, and the changed component has no render function under its new key. Both
 are reported by `php artisan pwax:doctor`, the second as an error naming the components
 affected.
 
-**One constraint comes with it.** A template has to be the same for every visitor, because
-it is compiled once, at deploy time, with no request in flight. Keep controller data in
-`<script>` and out of `<template>`:
+**Two constraints come with it**, both because the view is rendered once at deploy time
+with no request in flight.
+
+*The template has to be the same for every visitor.* Keep controller data in `<script>`
+and out of `<template>`:
 
 ```blade
 <template>
     <h1>@{{ user.name }}</h1>          {{-- fine: Vue renders this in the browser --}}
     <h1>{{ $user->name }}</h1>         {{-- not precompilable: differs per visitor --}}
 </template>
+```
 
+*And the view has to render at all with no data.* The split above is necessary and not
+sufficient: `@json($user)` in `<script>` still raises `Undefined variable $user` when
+`pwax:compile` renders the view to extract its template. Give every controller variable a
+fallback:
+
+```blade
 <script>
     export default {
-        data: () => ({ user: @json($user) }),
+        data: () => ({ user: @json($user ?? null) }),
     };
 </script>
 ```
 
-That is the idiomatic split anyway, and `pwax:compile` names any view that breaks it —
-such a view raises on the undefined variable when rendered with no data, and the command
-reports it and exits non-zero rather than writing a store that looks complete.
+The fallback is only ever used during the compile pass — a real request always has the
+data — and it does not change the template, which is what gets compiled and keyed. A page
+that renders a JSON document always needs this, since the document comes from the
+controller by definition:
+
+```blade
+data() {
+    return { doc: @json($doc ?? null) };
+}
+```
+
+`pwax:compile` names any view that breaks either rule, and exits non-zero rather than
+writing a store that looks complete.
 
 `php artisan pwax:compile --clear` removes the store and goes back to compiling in the
 browser. `assets.node` sets the Node binary if it is not on `PATH`;

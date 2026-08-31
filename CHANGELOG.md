@@ -91,6 +91,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and a prop name the renderer drops — declaring one is futile rather than dangerous, since
   it puts a prop in `prompt()` and `jsonSchema()` that no document can ever deliver.
 
+### Documentation
+
+- **Precompiling needs a fallback on every controller variable, not just the
+  template/script split.** The section on `pwax:compile` gave the split as the constraint
+  and its own example, `data: () => ({ user: @json($user) })`, would have failed the
+  command it was describing: the view is rendered with no request in flight, so `$user` is
+  undefined whichever block it sits in. `@json($user ?? null)` is the missing half — used
+  only during the compile pass, and it does not change the template that gets keyed. A page
+  rendering a JSON document always needs it, since the document comes from the controller
+  by definition, and the workbench's three document pages now show it.
+
 ## [1.0.0]
 
 First release.

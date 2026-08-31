@@ -175,7 +175,8 @@ produced — renders a **JSON document** instead of a template:
 <script>
 export default {
     data() {
-        return { doc: @json($doc) };
+        // `?? null` so `pwax:compile` can render this view with no data.
+        return { doc: @json($doc ?? null) };
     },
 };
 </script>
@@ -903,10 +904,20 @@ written (defaults to `storage/app/pwax/render-functions.php`).
 `pwax.assets.node` is the Node binary it runs (defaults to whatever
 `node` resolves to).
 
-One constraint comes with the `runtime` build: a template must be the
-same for every visitor. Keep controller data in `<script>` (`@json($user)`)
-and out of `<template>`, which is the idiomatic split anyway.
-`pwax:compile` names any view that breaks it.
+Two constraints come with the `runtime` build, both because the view is
+rendered once at deploy time with no request in flight.
+
+A template must be the same for every visitor: keep controller data in
+`<script>` and out of `<template>`, which is the idiomatic split anyway.
+
+And the view must render **with no data at all**, which the split alone does
+not give you — `@json($user)` still raises `Undefined variable $user` during
+the compile pass. Give every controller variable a fallback:
+`@json($user ?? null)`. It is used only while compiling, and it does not
+change the template. A page rendering a JSON document always needs this,
+since the document comes from the controller by definition.
+
+`pwax:compile` names any view that breaks either rule and exits non-zero.
 
 ---
 

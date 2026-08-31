@@ -33,7 +33,10 @@
 <script>
     export default {
         data() {
-            return { doc: @json($doc), log: 'Nothing yet.' };
+            return { // `?? null` so `pwax:compile` can render this view with no data to
+                // extract its template. See the note in the README on precompiling a
+                // page that renders a document.
+                doc: @json($doc ?? null), log: 'Nothing yet.' };
         },
 
         methods: {

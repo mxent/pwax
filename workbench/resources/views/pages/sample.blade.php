@@ -38,7 +38,10 @@
         data() {
             return {
                 heading: 'A JSON document',
-                doc: @json($doc),
+                // `?? null` so `pwax:compile` can render this view with no data to
+                // extract its template. See the note in the README on precompiling a
+                // page that renders a document.
+                doc: @json($doc ?? null),
                 log: 'No action yet.',
             };
         },

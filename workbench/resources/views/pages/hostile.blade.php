@@ -41,7 +41,10 @@
         data() {
             return {
                 heading: 'What a document cannot do',
-                doc: @json($doc),
+                // `?? null` so `pwax:compile` can render this view with no data to
+                // extract its template. See the note in the README on precompiling a
+                // page that renders a document.
+                doc: @json($doc ?? null),
                 failures: [],
                 verdict: 'Checking…',
             };

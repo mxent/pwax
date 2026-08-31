@@ -191,8 +191,18 @@ can only assert the attribute is absent.
 ## 6. Finally
 
 ```bash
+php vendor/bin/testbench pwax:compile        # then --clear to go back
 php vendor/bin/testbench pwax:doctor
 ```
+
+**Run `pwax:compile` before you finish**, especially after adding a workbench page. It
+renders every view with *no data at all* to extract its template, so a page written
+`@json($doc)` raises `Undefined variable $doc` and the command exits non-zero — which is
+how three document pages broke it. Every controller variable in a workbench view needs a
+fallback (`@json($doc ?? null)`); the fallback is used only during the compile pass and
+does not change the template. Re-run the browser checks once compiled, then
+`pwax:compile --clear` and re-run them again: the two states serve different Vue builds
+and only one of them is the default.
 
 Two warnings are deliberate against this demo (no manifest screenshots, pages
 cached as visited). Anything else is yours.

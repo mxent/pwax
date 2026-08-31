@@ -461,6 +461,99 @@ describe('the document guard rails', () => {
         expect(warn.mock.calls.flat().join(' ')).toContain('removeState');
     });
 
+    /**
+     * The failure this warns about has no other symptom. `ActionConfirmSchema` requires
+     * both fields, an invalid binding is dropped before anything is wired, and the result
+     * is a control that does nothing at all — no dialog, no action, nothing in the
+     * console — on a page that otherwise renders perfectly.
+     */
+    it('names a confirm that is missing the fields the schema requires', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        disconnect = serveBundle(stubBundle());
+
+        mount(createJson(deps()).PwaxJson, {
+            json: {
+                root: 'a',
+                elements: {
+                    a: {
+                        type: 'Card',
+                        on: { press: { action: 'save', confirm: { title: 'Delete this?' } } },
+                    },
+                },
+            },
+        });
+
+        const said = warn.mock.calls.flat().join(' ');
+
+        expect(said).toContain('is missing message');
+        expect(said).toContain('dropped whole');
+    });
+
+    it('names both fields when a confirm has neither', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        disconnect = serveBundle(stubBundle());
+
+        mount(createJson(deps()).PwaxJson, {
+            json: {
+                root: 'a',
+                elements: {
+                    a: { type: 'Card', on: { press: { action: 'save', confirm: {} } } },
+                },
+            },
+        });
+
+        expect(warn.mock.calls.flat().join(' ')).toContain('is missing title and message');
+    });
+
+    /** `variant` is an enum, and an unknown one fails the same schema the same way. */
+    it('names a confirm variant the schema does not allow', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        disconnect = serveBundle(stubBundle());
+
+        mount(createJson(deps()).PwaxJson, {
+            json: {
+                root: 'a',
+                elements: {
+                    a: {
+                        type: 'Card',
+                        on: {
+                            press: {
+                                action: 'save',
+                                confirm: { title: 'Sure?', message: 'Really?', variant: 'scary' },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        expect(warn.mock.calls.flat().join(' ')).toContain('variant "scary"');
+    });
+
+    it('leaves a complete confirm alone', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        disconnect = serveBundle(stubBundle());
+
+        mount(createJson(deps()).PwaxJson, {
+            json: {
+                root: 'a',
+                elements: {
+                    a: {
+                        type: 'Card',
+                        on: {
+                            press: {
+                                action: 'save',
+                                confirm: { title: 'Sure?', message: 'Really?', variant: 'danger' },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        expect(warn.mock.calls.flat().join(' ')).not.toContain('confirm');
+    });
+
     it('leaves a confirm on an action of your own alone', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         disconnect = serveBundle(stubBundle());

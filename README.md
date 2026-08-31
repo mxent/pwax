@@ -960,17 +960,39 @@ Add `confirm` to a binding and the action waits for a dialog:
 'confirm' => ['title' => 'Delete this?', 'message' => 'This cannot be undone.', 'variant' => 'danger'],
 ```
 
+**`title` and `message` are both required**, and `variant` — when present — must be
+`default` or `danger`. This is worth knowing because getting it wrong has no other
+symptom: the renderer validates the whole binding, and a binding whose confirmation does
+not validate is dropped before anything is wired up, so `['title' => 'Delete this?']` on
+its own gives you a control that does nothing at all. No dialog, no action, nothing in the
+console, on a page that otherwise works. Pwax warns about it, naming the element and the
+missing field.
+
 **It only works on an action that reaches a handler.** The renderer handles `setState`,
 `pushState`, `removeState` and the rest of its own actions and returns before the
 confirmation is ever considered, so a `confirm` on one of those runs without asking —
 which for `removeState` is the difference between a prompt and a deletion. Pwax warns in
 the console when it sees one; put the confirmation on an action of your own instead.
 
-Two more things to weigh. The dialog is the renderer's own, with its own inline styling,
-and will not match your application. And cancelling surfaces as an unhandled promise
-rejection in the console — harmless, but enough to show up in an error reporter. For
-anything user-facing, prefer confirming inside your own handler and leaving `confirm`
-off.
+The dialog is the one piece of interface Pwax itself draws in this whole feature —
+everything else on the page is your own components — and a document can ask for it, so
+it is built to behave like a modal should. It is a labelled `role="dialog"` with
+`aria-modal`, so a screen reader announces it rather than reading past it. Opening it
+moves focus to **Cancel**, the safe half of a question that may be destructive, and
+closing it puts focus back where it was, which for a `press` binding is the button the
+visitor came from. Tab stays inside it. Escape cancels. Its colours are the CSS system
+colours, so it resolves against whatever `color-scheme` your application declares — light
+in an application that never opted into dark, and light or dark as the visitor prefers in
+one that did — rather than being a hardcoded white card on a dark page.
+
+Two things still to weigh. Its layout is fixed — every element carries a class
+(`pwax-confirm`, `pwax-confirm__panel`, and so on) but the defaults are inline styles, so
+overriding them means `!important`; when the look matters, confirm inside your own handler
+and leave `confirm` off. And cancelling surfaces in the console as an uncaught
+`Action cancelled`. That one is the renderer's: it rejects a promise it dispatched with
+`void`, so there is no handle anywhere to catch it, and no page-level hook fires for it
+either — measured in Chromium, where a listener on `unhandledrejection` sees a control
+rejection raised beside it and never sees this one.
 
 #### Watching the traffic
 

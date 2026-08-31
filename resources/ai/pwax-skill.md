@@ -260,6 +260,11 @@ A binding may also carry `params` (which may read state), `onSuccess` /
 `onError` (`{navigate}`, `{set}` or `{action}`), and `confirm`. An event may
 name a list of bindings and all of them run.
 
+`confirm` needs **both** `title` and `message` (and `variant`, if given, must
+be `default` or `danger`). An incomplete one is not ignored — the whole
+binding fails validation and is dropped, so the control does nothing at all.
+Pwax warns, naming the element and the missing field.
+
 Precedence where a name is defined twice: `:handlers` > `pwax.json.actions` >
 Pwax built-in.
 

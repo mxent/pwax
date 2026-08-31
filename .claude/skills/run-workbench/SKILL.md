@@ -168,8 +168,18 @@ remove change the list, and Save asks first then writes a status through
 `onSuccess`. Select the dialog's buttons by their label — `Confirm` and `Cancel` —
 because it injects them above the document's own and any index shifts.
 
-Cancelling a confirmed action logs an unhandled rejection. That is the renderer's,
-it is known, and it is not a failure of the page.
+Cancelling a confirmed action logs an uncaught `Action cancelled`. That is the
+renderer's — it rejects a promise it dispatched with `void`, and no page-level hook fires
+for it — it is known, and it is not a failure of the page.
+
+The dialog is the one interface the package itself draws, so check it as a modal, not
+just as a thing that appeared: `[role="dialog"]` with `aria-modal`, `aria-labelledby`
+pointing at an element that exists, focus on **Cancel** when it opens and back on the
+trigger when it closes, Tab cycling only its two buttons, and Escape cancelling. Its
+colours are CSS system colours, so it follows the *application's* `color-scheme` — a
+light-only demo like this one gets a light dialog whatever the browser's `colorScheme` is
+set to, which is correct and not a bug. To see it resolve dark, declare
+`:root { color-scheme: light dark }` first.
 
 `/hostile` must read **"Nothing got through"** on a green background, and the console
 must carry one `pwax:` line per dropped prop and no more. Screenshot it *before* clicking

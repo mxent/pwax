@@ -695,11 +695,14 @@ describe('actions', () => {
 
     /**
      * Cancelling rejects the promise the renderer is awaiting, and it rethrows into an
-     * `emit` that nobody awaited — so a cancel reaches the page as an unhandled
-     * rejection. That is the library's, not ours, and there is no handle on that promise
-     * to attach a catch to; it is caught here so the suite does not carry the noise, and
-     * called out in the README, which already steers people towards confirming inside
-     * their own handler.
+     * `emit` the library wrote as `void emitEvent(…)` — so a cancel reaches the page with
+     * no handle anywhere to attach a catch to. It is caught here so the suite does not
+     * carry the noise, and called out in the README.
+     *
+     * It cannot be suppressed from the page either, which was measured rather than
+     * assumed: in Chromium a listener on `unhandledrejection` sees a control rejection
+     * raised beside it and never sees this one, and neither `window.onerror` nor
+     * `app.config.errorHandler` is called. There is no hook. Do not try again.
      */
     it('does not run a confirmed action that was cancelled', async () => {
         const rejections = [];
@@ -723,6 +726,122 @@ describe('actions', () => {
         } finally {
             process.off('unhandledRejection', capture);
         }
+    });
+
+    /**
+     * The dialog is the only interface this package renders in the whole feature —
+     * everything else on the page is the application's own components — and a document
+     * can ask for it, so an application cannot decline it. The library's own is a `div`
+     * with two buttons: no role, no label, focus left wherever it was, no trap, no
+     * Escape. These pin the replacement.
+     */
+    it('announces the dialog as a labelled modal', async () => {
+        const view = await render(
+            PRESS('save', { confirm: { title: 'Sure?', message: 'This cannot be undone.' } }),
+            { handlers: { save: async () => {} } }
+        );
+
+        await view.click();
+
+        const dialog = view.host.querySelector('[role="dialog"]');
+
+        expect(dialog).not.toBeNull();
+        expect(dialog.getAttribute('aria-modal')).toBe('true');
+        // Pointing at an id is only useful if something has it.
+        expect(
+            view.host.querySelector(`#${dialog.getAttribute('aria-labelledby')}`).textContent
+        ).toBe('Sure?');
+        expect(
+            view.host.querySelector(`#${dialog.getAttribute('aria-describedby')}`).textContent
+        ).toBe('This cannot be undone.');
+    });
+
+    /** Cancel, not Confirm: the safe half of a question that may be destructive. */
+    it('moves focus into the dialog and gives it back afterwards', async () => {
+        const view = await render(
+            PRESS('save', { confirm: { title: 'Sure?', message: 'This cannot be undone.' } }),
+            {
+                handlers: { save: async () => {} },
+            }
+        );
+
+        const trigger = view.host.querySelector('button');
+        trigger.focus();
+
+        await view.click();
+        await settle();
+
+        expect(document.activeElement.textContent).toBe('Cancel');
+
+        await view.clickLabelled('Confirm');
+
+        expect(document.activeElement).toBe(trigger);
+    });
+
+    it('cancels on Escape, and does not run the action', async () => {
+        // Escape is a cancel, so it carries the same unreachable rejection the test
+        // above documents. Caught for the same reason: to keep it out of the run.
+        const capture = () => {};
+        process.on('unhandledRejection', capture);
+
+        try {
+            const ran = [];
+            const view = await render(
+                PRESS('save', { confirm: { title: 'Sure?', message: 'This cannot be undone.' } }),
+                { handlers: { save: async () => ran.push('save') } }
+            );
+
+            await view.click();
+            view.host
+                .querySelector('[role="dialog"]')
+                .dispatchEvent(
+                    new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+                );
+            await settle();
+
+            expect(view.host.querySelector('[role="dialog"]')).toBeNull();
+            expect(ran).toEqual([]);
+        } finally {
+            process.off('unhandledRejection', capture);
+        }
+    });
+
+    /**
+     * Tab must not walk out of a modal into the page behind it. Both directions, because
+     * a trap that only holds going forwards is not a trap.
+     */
+    it('keeps Tab inside the dialog', async () => {
+        const view = await render(
+            PRESS('save', { confirm: { title: 'Sure?', message: 'This cannot be undone.' } }),
+            {
+                handlers: { save: async () => {} },
+            }
+        );
+
+        await view.click();
+        await settle();
+
+        const dialog = view.host.querySelector('[role="dialog"]');
+        const tab = (shiftKey) => {
+            const event = new window.KeyboardEvent('keydown', {
+                key: 'Tab',
+                shiftKey,
+                bubbles: true,
+                cancelable: true,
+            });
+            dialog.dispatchEvent(event);
+
+            return event.defaultPrevented;
+        };
+
+        // Focus opens on Cancel, the first of the two.
+        expect(document.activeElement.textContent).toBe('Cancel');
+
+        expect(tab(true)).toBe(true);
+        expect(document.activeElement.textContent).toBe('Confirm');
+
+        expect(tab(false)).toBe(true);
+        expect(document.activeElement.textContent).toBe('Cancel');
     });
 
     it('calls a $computed function with resolved args', async () => {

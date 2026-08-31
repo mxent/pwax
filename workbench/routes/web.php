@@ -384,7 +384,13 @@ Route::get('/vocabulary', fn () => pwaxRender('pages.vocabulary', [
                     [
                         'action' => 'save',
                         'params' => ['note' => ['$state' => '/note']],
-                        'confirm' => ['title' => 'Save this note?', 'message' => 'The dialog is the renderer\'s own, and unstyled.'],
+                        // Both fields, because an incomplete `confirm` fails validation and takes
+                        // the whole binding with it — the button would simply do nothing.
+                        'confirm' => [
+                            'title' => 'Save this note?',
+                            'message' => 'Tab stays inside this dialog and Escape cancels it.',
+                            'variant' => 'danger',
+                        ],
                         'onSuccess' => ['set' => ['/status' => 'Saved.']],
                         'onError' => ['set' => ['/status' => '$error.message']],
                     ],

@@ -22,11 +22,12 @@ import {
     defineComponent,
     h,
     markRaw,
+    nextTick,
     shallowRef,
     toHandlerKey,
+    watch,
 } from 'vue';
 import {
-    ConfirmDialog,
     JSONUIProvider,
     Renderer,
     defineRegistry,
@@ -566,6 +567,68 @@ const Unknown = defineComponent({
 });
 
 /**
+ * Styles for the dialog below.
+ *
+ * Inline rather than a stylesheet, because a stylesheet injected from a bundle needs the
+ * CSP nonce and this component has no way to reach it. The trade is that an application
+ * overriding these needs `!important` — the class names are on every element for exactly
+ * that — which is why the README says the dialog will not match your design and suggests
+ * confirming in your own handler when the look matters.
+ *
+ * The colours are the CSS system colours, which resolve against the `color-scheme` in
+ * effect — so the dialog follows the application, not the operating system. Measured:
+ * with no `color-scheme` declared, `Canvas` is white whatever the visitor prefers, and in
+ * an application that declares `light dark` it is white or `#121212` as the visitor
+ * prefers. That is the behaviour to want, and it is the reason nothing here declares a
+ * `color-scheme` of its own: forcing `light dark` on this subtree would put a dark dialog
+ * over a light-only application whenever the visitor's system was set to dark. The
+ * library's own dialog hardcodes `white`, so it is a white card on a dark page instead.
+ */
+const DIALOG_STYLES = {
+    backdrop: {
+        position: 'fixed',
+        inset: '0',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '1rem',
+        background: 'rgba(0, 0, 0, .5)',
+        zIndex: '50',
+    },
+    panel: {
+        background: 'Canvas',
+        color: 'CanvasText',
+        border: '1px solid ButtonBorder',
+        borderRadius: '8px',
+        padding: '1.5rem',
+        maxWidth: '25rem',
+        width: '100%',
+        boxShadow: '0 20px 25px -5px rgba(0, 0, 0, .25)',
+    },
+    title: { margin: '0 0 .5rem', fontSize: '1.125rem', fontWeight: '600' },
+    message: { margin: '0 0 1.5rem', color: 'GrayText' },
+    actions: { display: 'flex', gap: '.75rem', justifyContent: 'flex-end' },
+    cancel: {
+        padding: '.5rem 1rem',
+        borderRadius: '6px',
+        border: '1px solid ButtonBorder',
+        background: 'ButtonFace',
+        color: 'ButtonText',
+        cursor: 'pointer',
+    },
+    confirm: {
+        padding: '.5rem 1rem',
+        borderRadius: '6px',
+        border: '1px solid transparent',
+        color: '#fff',
+        cursor: 'pointer',
+    },
+};
+
+/** Ids, so `aria-labelledby` points somewhere unique when two documents are on a page. */
+let dialogCount = 0;
+
+/**
  * The confirmation dialog for an action that asked to be confirmed.
  *
  * A binding may carry `confirm`, and the renderer honours it by parking the action on
@@ -577,17 +640,101 @@ const Unknown = defineComponent({
  *
  * The consequence is the worst shape a failure can take. No dialog appears, the awaited
  * promise is never settled, and the action neither runs nor fails — it hangs, silently,
- * for the life of the page.
+ * for the life of the page. This reads the same context without destructuring, so the
+ * render tracks the ref and updates. The library's own manager stays in the tree
+ * rendering nothing, as it already did; nothing is forked.
  *
- * This reads the same context without destructuring, so the render tracks the ref and
- * updates. Nothing is forked: `useActions` and `ConfirmDialog` are both exported, and
- * the library's own manager stays in the tree rendering nothing, as it already did.
+ * The dialog itself is ours rather than the library's `ConfirmDialog`, because that one
+ * is a `div` with two buttons: no `role`, no `aria-modal`, no label, focus left wherever
+ * it was, no focus trap and no Escape. It is the only interface this package renders in
+ * the whole feature — everything else on the page is the application's own components —
+ * and a document can ask for it, so an application cannot decline it. So it is:
+ *
+ *   - a labelled `role="dialog"` with `aria-modal`, which is what a screen reader needs
+ *     to announce it as a dialog rather than read past it as more page;
+ *   - focused on open, at Cancel — the safe half of a destructive question — and
+ *     returned afterwards to whatever the visitor was on, which for a `press` binding is
+ *     the button they came from;
+ *   - trapped, so Tab cycles the two buttons instead of walking into the page behind;
+ *   - dismissible with Escape, which for a confirmation means cancel.
  */
 const Confirmation = defineComponent({
     name: 'PwaxJsonConfirmation',
 
     setup() {
         const actions = useActions();
+        const id = `pwax-confirm-${++dialogCount}`;
+
+        /** Where focus was before the dialog took it. */
+        let restore = null;
+        /** The panel, for the trap: what is inside it is what Tab may reach. */
+        let panel = null;
+
+        const buttons = () => (panel ? [...panel.querySelectorAll('button')] : []);
+
+        watch(
+            () => Boolean(actions.pendingConfirmation),
+            (open) => {
+                if (open) {
+                    restore = document.activeElement;
+
+                    // After the render that puts the panel on screen; there is nothing to
+                    // focus until then.
+                    nextTick(() => {
+                        const [first] = buttons();
+
+                        if (first) {
+                            first.focus();
+                        }
+                    });
+
+                    return;
+                }
+
+                // Both branches of the dialog end here — confirm and cancel — so this is
+                // the one place that has to put focus back.
+                if (restore && typeof restore.focus === 'function') {
+                    restore.focus();
+                }
+
+                restore = null;
+                panel = null;
+            }
+        );
+
+        function onKeydown(event) {
+            if (event.key === 'Escape') {
+                // Stopped, so a page listening for Escape does not also close something
+                // of its own behind a dialog the visitor was answering.
+                event.stopPropagation();
+                actions.cancel();
+
+                return;
+            }
+
+            if (event.key !== 'Tab') {
+                return;
+            }
+
+            const items = buttons();
+
+            if (items.length === 0) {
+                return;
+            }
+
+            const first = items[0];
+            const last = items[items.length - 1];
+            const active = document.activeElement;
+            const outside = !panel || !panel.contains(active);
+
+            if (event.shiftKey && (outside || active === first)) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && (outside || active === last)) {
+                event.preventDefault();
+                first.focus();
+            }
+        }
 
         return () => {
             const pending = actions.pendingConfirmation;
@@ -596,11 +743,74 @@ const Confirmation = defineComponent({
                 return null;
             }
 
-            return h(ConfirmDialog, {
-                confirm: pending.action.confirm,
-                onConfirm: actions.confirm,
-                onCancel: actions.cancel,
-            });
+            const confirm = pending.action.confirm;
+            const danger = confirm.variant === 'danger';
+
+            return h('div', { class: 'pwax-confirm', style: DIALOG_STYLES.backdrop, onKeydown }, [
+                h(
+                    'div',
+                    {
+                        class: 'pwax-confirm__panel',
+                        style: DIALOG_STYLES.panel,
+                        role: 'dialog',
+                        'aria-modal': 'true',
+                        'aria-labelledby': `${id}-title`,
+                        'aria-describedby': confirm.message ? `${id}-message` : undefined,
+                        ref: (el) => {
+                            panel = el;
+                        },
+                    },
+                    [
+                        h(
+                            'h2',
+                            {
+                                class: 'pwax-confirm__title',
+                                style: DIALOG_STYLES.title,
+                                id: `${id}-title`,
+                            },
+                            confirm.title ?? 'Are you sure?'
+                        ),
+                        confirm.message
+                            ? h(
+                                  'p',
+                                  {
+                                      class: 'pwax-confirm__message',
+                                      style: DIALOG_STYLES.message,
+                                      id: `${id}-message`,
+                                  },
+                                  confirm.message
+                              )
+                            : null,
+                        h('div', { class: 'pwax-confirm__actions', style: DIALOG_STYLES.actions }, [
+                            h(
+                                'button',
+                                {
+                                    class: 'pwax-confirm__cancel',
+                                    type: 'button',
+                                    style: DIALOG_STYLES.cancel,
+                                    onClick: actions.cancel,
+                                },
+                                confirm.cancelLabel ?? 'Cancel'
+                            ),
+                            h(
+                                'button',
+                                {
+                                    class: danger
+                                        ? 'pwax-confirm__confirm pwax-confirm__confirm--danger'
+                                        : 'pwax-confirm__confirm',
+                                    type: 'button',
+                                    style: {
+                                        ...DIALOG_STYLES.confirm,
+                                        background: danger ? '#b91c1c' : '#1d4ed8',
+                                    },
+                                    onClick: actions.confirm,
+                                },
+                                confirm.confirmLabel ?? 'Confirm'
+                            ),
+                        ]),
+                    ]
+                ),
+            ]);
         };
     },
 });

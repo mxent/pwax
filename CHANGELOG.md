@@ -52,6 +52,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   demonstrates every one of them on a single page, alongside a catalog component reached
   by dotted path on `window` and an `onError` that surfaces the thrown message.
 
+  The confirmation dialog is Pwax's own rather than the library's, which was a `div`
+  with two buttons: it is a labelled `role="dialog"` with `aria-modal`, focuses Cancel
+  on open and restores focus on close, traps Tab, cancels on Escape, and uses the CSS
+  system colours so it follows whatever `color-scheme` the application declares rather
+  than being a hardcoded white card on a dark page. A `confirm` needs both `title` and
+  `message` — an incomplete one fails validation and the binding is dropped whole,
+  leaving a control that does nothing, so Pwax warns and names the missing field.
+
   `validateForm` is the one renderer action that does nothing here. It reports on fields
   registered through a composable a component calls in its own `setup()`, which a catalog
   component — loaded as a separate module from the server — cannot reach.

@@ -232,6 +232,40 @@ honour a `$bindState` (a composable needs a `setup()`).
 Simplify it back to a function and every document renders perfectly and
 does nothing: no `on:` binding fires, no two-way binding writes.
 
+### The confirmation dialog is ours, and has to be
+
+`Confirmation` in `src/js/json/index.js` renders its own dialog rather than
+the library's `ConfirmDialog`, which is a `div` with two buttons: no `role`,
+no `aria-modal`, no label, focus left wherever it was, no trap, no Escape,
+and `background: white` hardcoded so a dark theme gets a white card. It is
+the only interface this package draws in the whole feature — everything else
+on a page is the application's components — and a document can ask for it, so
+an application cannot decline it.
+
+So the replacement is a labelled `role="dialog"` with `aria-modal`, focused on
+Cancel when it opens (the safe half of a destructive question) and returning
+focus on close, with Tab trapped and Escape cancelling. Colours are the CSS
+system colours (`Canvas`, `CanvasText`, `ButtonFace`), which resolve against the
+`color-scheme` in effect — so the dialog follows the *application*, not the
+operating system. Nothing here declares a `color-scheme` of its own, and that
+is deliberate: forcing `light dark` on this subtree was tried and measured, and
+it puts a dark dialog over a light-only application whenever the visitor's
+system is set to dark.
+
+Styles are inline rather than a stylesheet because a stylesheet injected from
+this bundle would need the CSP nonce, which the bundle has no way to reach.
+Every element carries a class anyway, so an application can override with
+`!important`; the README says so rather than pretending otherwise.
+
+**Do not try to swallow the `Action cancelled` rejection.** It was tried. The
+library dispatches with `void emitEvent(…)`, so there is no handle to catch;
+and no page-level hook fires for it either — measured in Chromium, where a
+listener on `unhandledrejection` sees a control rejection raised beside it and
+never sees this one, and neither `window.onerror` nor `app.config.errorHandler`
+is called. A listener registered around the cancel and removed on
+`setTimeout(…, 0)` is gone before the event would arrive, which is what made
+the first attempt look plausible and do nothing.
+
 Two more things about actions are worth knowing before changing any of
 this. The renderer handles `setState`, `pushState`, `removeState`,
 `validateForm`, `push` and `pop` itself and returns before consulting the

@@ -108,6 +108,11 @@ const RENDERER_ACTIONS = ['setState', 'pushState', 'removeState', 'validateForm'
  *   - `confirm` on one of the renderer's own actions never asks. Those are handled and
  *     returned before the confirmation branch is reached, so the action simply happens —
  *     which for `removeState` is the difference between a prompt and a deletion.
+ *   - An incomplete `confirm` takes the whole binding with it. `ActionConfirmSchema`
+ *     requires both `title` and `message`, and a binding that fails validation is
+ *     dropped before anything is wired — so `confirm: {title: 'Delete this?'}`, which is
+ *     a reasonable thing to write, produces a control that does nothing at all: no
+ *     dialog, no action, no console output, on a page that otherwise works.
  *
  * Runs whenever the document changes, over its own elements only — a walk of a handful
  * of objects, next to a render that is about to load a bundle.
@@ -137,13 +142,41 @@ function warnAboutDocument(json) {
             );
         }
 
-        for (const binding of Object.values(element.on || {})) {
+        for (const [event, binding] of Object.entries(element.on || {})) {
             for (const one of Array.isArray(binding) ? binding : [binding]) {
-                if (one && one.confirm && RENDERER_ACTIONS.includes(one.action)) {
+                if (!one || !one.confirm) {
+                    continue;
+                }
+
+                if (RENDERER_ACTIONS.includes(one.action)) {
                     console.warn(
                         `pwax: element "${key}" puts a "confirm" on "${one.action}", which the ` +
                             'renderer handles before any confirmation — it will run without ' +
                             'asking. Confirm an action of your own instead.'
+                    );
+                }
+
+                const missing = ['title', 'message'].filter(
+                    (field) => typeof one.confirm[field] !== 'string'
+                );
+
+                if (missing.length > 0) {
+                    console.warn(
+                        `pwax: the "confirm" on "${event}" in element "${key}" is missing ` +
+                            `${missing.join(' and ')}. Both are required, and a binding whose ` +
+                            'confirmation does not validate is dropped whole — the control ' +
+                            'will do nothing at all rather than ask.'
+                    );
+                }
+
+                if (
+                    one.confirm.variant !== undefined &&
+                    !['default', 'danger'].includes(one.confirm.variant)
+                ) {
+                    console.warn(
+                        `pwax: the "confirm" on "${event}" in element "${key}" has variant ` +
+                            `"${one.confirm.variant}", which is not "default" or "danger". The ` +
+                            'binding will be dropped whole and the control will do nothing.'
                     );
                 }
             }

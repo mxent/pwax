@@ -41,6 +41,7 @@ export const h = Vue.h;
 export const inject = Vue.inject;
 export const isRef = Vue.isRef;
 export const markRaw = Vue.markRaw;
+export const nextTick = Vue.nextTick;
 export const onBeforeUnmount = Vue.onBeforeUnmount;
 export const onErrorCaptured = Vue.onErrorCaptured;
 export const onMounted = Vue.onMounted;

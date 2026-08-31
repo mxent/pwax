@@ -640,6 +640,10 @@ before answering.
 
 ## 14. Where to read more
 
+- `.claude/skills/run-workbench/SKILL.md` — how to serve the demo and drive
+  it in a real browser. Read it before trying to reproduce anything visual:
+  it carries the Composer, Chromium and shutdown details this container
+  needs, each of which costs an afternoon to rediscover.
 - `README.md` — the user-facing manual; its structure is the user's
   mental model of the package.
 - `CHANGELOG.md` — every release, grouped Added / Changed / Fixed /

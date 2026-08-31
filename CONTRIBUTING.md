@@ -111,8 +111,13 @@ adds `tests/fixtures/views` to the view finder — put new component fixtures th
 ```bash
 php vendor/bin/testbench vendor:publish --tag=pwax-assets --force   # once
 php vendor/bin/testbench workbench:sync-skeleton                    # once, for the icons
-php vendor/bin/testbench serve
+php vendor/bin/testbench serve --port=8000
 ```
+
+Port 8000 on purpose: `pwax:doctor` probes `config('app.url')`, which testbench defaults
+to `http://localhost:8000`, so serving anywhere else fails its service-worker check for
+no reason. `.claude/skills/run-workbench/SKILL.md` has the rest — driving it from a
+headless browser, and what this container needs to make that work.
 
 `testbench.yaml` registers the provider and `workbench/` holds the demo it serves: three
 pages with scoped styles, a component pulled in with `@pwaxImport` and held in `data()`,

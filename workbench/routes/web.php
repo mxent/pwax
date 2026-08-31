@@ -160,7 +160,7 @@ Route::get('/vocabulary', fn () => pwaxRender('pages.vocabulary', [
                     'stateRead', 'computed', 'cond', 'bound',
                     'toggle', 'secret',
                     'peopleList', 'addPerson',
-                    'status', 'save', 'home',
+                    'status', 'save', 'fail', 'stamp', 'home',
                 ],
             ],
 
@@ -280,6 +280,28 @@ Route::get('/vocabulary', fn () => pwaxRender('pages.vocabulary', [
                         'onError' => ['set' => ['/status' => '$error.message']],
                     ],
                     ['action' => 'setState', 'params' => ['statePath' => '/open', 'value' => false]],
+                ]],
+            ],
+
+            // The failing half of the pair. `$error.message` in an `onError` `set` is
+            // substituted with what the handler threw.
+            'fail' => [
+                'type' => 'Button',
+                'props' => ['label' => 'Save, but fail', 'variant' => 'secondary'],
+                'on' => ['press' => [
+                    'action' => 'explode',
+                    'onError' => ['set' => ['/status' => '$error.message']],
+                ]],
+            ],
+
+            // A component from `window`, reached by dotted path. Its event is named in
+            // config because a global has no `emits` the runtime can read.
+            'stamp' => [
+                'type' => 'Stamp',
+                'props' => ['label' => 'A component from a library'],
+                'on' => ['stamped' => [
+                    'action' => 'setState',
+                    'params' => ['statePath' => '/status', 'value' => 'Stamped.'],
                 ]],
             ],
 

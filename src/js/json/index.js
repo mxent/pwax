@@ -447,16 +447,20 @@ export function createRenderer({ components = {}, actions = {}, load }) {
             spec: { type: Object, required: true },
             state: { type: Object, default: null },
             handlers: { type: Object, default: () => ({}) },
-            // Forwarded to the provider rather than used here. Each one is a piece of
-            // vocabulary the renderer offers a document and cannot supply itself:
-            // `navigate` is what makes `onSuccess: {navigate}` work, `functions` is what
-            // `$computed` calls, `validationFunctions` is what `validateForm` runs.
-            // Left unforwarded, all three fail quietly — and the prompt the catalog
+            // Forwarded to the provider rather than used here. Both are vocabulary the
+            // renderer offers a document and cannot supply itself: `navigate` is what
+            // makes `onSuccess: {navigate}` work, and `functions` is what `$computed`
+            // calls. Left unforwarded they fail quietly — and the prompt the catalog
             // generates tells a model that `$computed` is available, so a document can
             // arrive using a feature that was never wired up.
+            //
+            // `validationFunctions` is deliberately absent. It only ever reaches a field
+            // registered with `useFieldValidation`, and that is a composable a component
+            // calls inside its own `setup()` — which a catalog component, loaded as a
+            // separate module from the server, has no way to reach. Forwarding it would
+            // be a prop that can never do anything.
             navigate: { type: Function, default: null },
             functions: { type: Object, default: null },
-            validationFunctions: { type: Object, default: null },
             onAction: { type: Function, default: null },
             onStateChange: { type: Function, default: null },
         },
@@ -491,7 +495,6 @@ export function createRenderer({ components = {}, actions = {}, load }) {
                         initialState: props.state || props.spec.state || {},
                         navigate: props.navigate || undefined,
                         functions: props.functions || undefined,
-                        validationFunctions: props.validationFunctions || undefined,
                         onStateChange: props.onStateChange || undefined,
                     },
                     {

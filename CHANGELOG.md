@@ -35,11 +35,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `$template`, `$cond`, `$item`, `$bindItem`, `$index`, `$computed`) and every element key
   (`children`, `visible`, `repeat`, `on`, `watch`), including nested `repeat` and the full
   set of `visible` comparisons. `workbench/resources/views/pages/vocabulary.blade.php`
-  demonstrates every one of them on a single page.
+  demonstrates every one of them on a single page, alongside a catalog component reached
+  by dotted path on `window` and an `onError` that surfaces the thrown message.
 
-- **`:functions` and `:validation-functions`**, for `$computed` props and the
-  `validateForm` action. Props rather than configuration, because they are JavaScript and
-  `config/pwax.php` carries data the runtime reads, never code it runs.
+  `validateForm` is the one renderer action that does nothing here. It reports on fields
+  registered through a composable a component calls in its own `setup()`, which a catalog
+  component — loaded as a separate module from the server — cannot reach.
+
+- **`:functions`**, for `$computed` props. A prop rather than configuration, because it
+  holds JavaScript and `config/pwax.php` carries data the runtime reads, never code it
+  runs. Catalog prop declarations shape `prompt()` and `jsonSchema()` — they constrain the
+  model that writes a document, and are not a runtime gate; the boundary that is enforced
+  is the component list.
 
 - **`window.pwax.json.{load,prompt,jsonSchema}`.** `prompt()` and `jsonSchema()`
   describe the configured catalog for a model that is generating documents.

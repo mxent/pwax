@@ -36,3 +36,8 @@ workbench:
   sync:
     - from: ./workbench/public/img
       to: public/img
+    # A component library the demo pretends to already have. `/vocabulary` reaches it by
+    # dotted path on `window`, which is the JSON catalog's third reference form and the
+    # only one that needs `events` spelled out in configuration.
+    - from: ./workbench/public/js
+      to: public/js

@@ -113,6 +113,7 @@ function mount(component, props = {}, ctx = {}) {
         json: { root: 'a', elements: {} },
         state: null,
         handlers: {},
+        functions: null,
         only: null,
         ...props,
     };
@@ -189,6 +190,69 @@ describe('the JSON renderer loader', () => {
     });
 });
 
+describe('what the component shows while and after loading', () => {
+    /** The slot a page supplies for the gap before the renderer arrives. */
+    it('renders the loading slot until the renderer is ready', () => {
+        disconnect = serveBundle(stubBundle());
+
+        const loading = vi.fn(() => 'waiting');
+        const render = mount(createJson(deps()).PwaxJson, {}, { slots: { loading } });
+
+        expect(render()).toBe('waiting');
+        expect(loading).toHaveBeenCalled();
+    });
+
+    /**
+     * A renderer that will not load is the one failure a page can present sensibly, so
+     * it gets an event and a slot rather than a blank space.
+     */
+    it('emits error and renders the error slot when the renderer will not load', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        disconnect = serveBundle(null, { fail: true });
+
+        const emit = vi.fn();
+        const error = vi.fn(({ error: e }) => `failed: ${e.message}`);
+        const render = mount(createJson(deps()).PwaxJson, {}, { emit, slots: { error } });
+
+        await new Promise((resolve) => setTimeout(resolve, 4));
+
+        expect(emit).toHaveBeenCalledWith('error', expect.any(Error));
+        expect(String(render())).toContain('failed:');
+    });
+
+    it('renders nothing rather than a slot there is none of', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        disconnect = serveBundle(null, { fail: true });
+
+        const render = mount(createJson(deps()).PwaxJson);
+
+        await new Promise((resolve) => setTimeout(resolve, 4));
+
+        expect(render()).toBeNull();
+    });
+
+    /**
+     * A script that loads and publishes nothing is what a proxy interstitial or a
+     * truncated response looks like. It must not resolve to `undefined`.
+     */
+    it('rejects when the bundle loads without publishing PwaxJson', async () => {
+        const observer = new MutationObserver((records) => {
+            for (const record of records) {
+                for (const node of record.addedNodes) {
+                    if (node.tagName === 'SCRIPT') {
+                        node.dispatchEvent(new window.Event('load'));
+                    }
+                }
+            }
+        });
+
+        observer.observe(document.head, { childList: true });
+        disconnect = () => observer.disconnect();
+
+        await expect(createJson(deps()).load()).rejects.toThrow(/did not publish PwaxJson/);
+    });
+});
+
 describe('the catalog it hands the renderer', () => {
     it('passes the configured components straight through', async () => {
         const bundle = stubBundle();
@@ -203,6 +267,16 @@ describe('the catalog it hands the renderer', () => {
             url: '/c/card.js',
             export: '',
         });
+    });
+
+    /** Both are on `window.pwax.json`, and both need the renderer loaded to answer. */
+    it('answers prompt() and jsonSchema() off the full catalog', async () => {
+        disconnect = serveBundle(stubBundle());
+
+        const json = createJson(deps());
+
+        await expect(json.prompt()).resolves.toBe('PROMPT');
+        await expect(json.jsonSchema()).resolves.toEqual({ stub: true });
     });
 
     it('declares the built-in actions so a document may dispatch them', async () => {
@@ -563,6 +637,26 @@ describe('the built-in actions', () => {
         expect(handlers.reload).toBe(configured);
         expect(handlers.navigate).toBe(page);
         expect(typeof handlers.submit).toBe('function');
+    });
+
+    it('reloads the page', async () => {
+        const reload = vi.fn();
+        const original = window.location;
+
+        // jsdom's `location` is not writable; swap it for this test only.
+        Object.defineProperty(window, 'location', {
+            configurable: true,
+            value: { ...original, reload },
+        });
+
+        try {
+            const handlers = await handlersOf(deps());
+            await handlers.reload();
+
+            expect(reload).toHaveBeenCalled();
+        } finally {
+            Object.defineProperty(window, 'location', { configurable: true, value: original });
+        }
     });
 
     it('names the missing parameter rather than posting to nowhere', async () => {

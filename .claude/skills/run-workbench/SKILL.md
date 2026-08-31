@@ -42,6 +42,10 @@ zipballs and will still fail. Drop them from `require-dev` to get a working
 `vendor/`, restore `composer.json` afterwards, and run those three from a shallow
 clone of their repos instead — each ships its phar or extension in-tree.
 
+Anything you add under `workbench/public/` needs a `sync` entry in `testbench.yaml` and
+another `workbench:sync-skeleton`. The served docroot is the skeleton inside `vendor/`,
+not `workbench/public/`, so without both the file is emitted in the page and 404s.
+
 ## 3. Serve
 
 **Use port 8000.** `pwax:doctor` probes `config('app.url')`, which testbench
@@ -111,7 +115,7 @@ empty page is worth nothing.
 | `/elsewhere` | a redirect travelling through the SPA router |
 | `/items` | a list fetched after mount, and still there offline |
 | `/sample` | half Blade template, half JSON document |
-| `/vocabulary` | every prop expression and element key in one document |
+| `/vocabulary` | every prop expression and element key in one document, plus a catalog component from a `window` global |
 
 Offline is the claim most worth the trouble, and needs the worker warmed first:
 

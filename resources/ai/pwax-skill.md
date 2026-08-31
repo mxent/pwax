@@ -241,9 +241,13 @@ a list (meaning and), or `$and`/`$or`.
 
 | Action | From | Handler? |
 | --- | --- | --- |
-| `setState`, `pushState`, `removeState`, `validateForm` | the renderer | no |
+| `setState`, `pushState`, `removeState` | the renderer | no |
 | `navigate`, `submit`, `reload` | Pwax | no |
 | anything else | you | yes — `pwax.json.actions` or `:handlers` |
+
+`validateForm` exists but is inert here: it reports on fields registered
+through a composable a component calls in its own `setup()`, which a
+catalog component cannot reach. Validate in a handler or on the server.
 
 `setState` is the one to reach for first: a document can show and hide its
 own panels with no PHP and no handler at all.
@@ -259,8 +263,12 @@ Pwax built-in.
 renderer's own state actions, which are handled before any handler is
 consulted. Use `@state-change` to see those; it reports the pointers written.
 
-`:functions` and `:validation-functions` are props, not config, because they
-are JavaScript — config carries data the runtime reads, never code it runs.
+`:functions` is a prop, not config, because it holds JavaScript — config
+carries data the runtime reads, never code it runs.
+
+Prop types in the catalog are **prompt material, not a runtime gate**: they
+shape `prompt()` and `jsonSchema()`, and nothing checks them once a document
+arrives. The enforced boundary is the component list.
 
 The renderer is a second bundle, `dist/pwax-json.js`, ~82 kB gzipped. It
 is fetched by the first `<PwaxJson>` that renders and never on a page that

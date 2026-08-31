@@ -116,7 +116,13 @@ declare namespace Pwax {
         load(): Promise<unknown>;
         /** The system prompt that constrains a model to this application's catalog. */
         prompt(options?: Record<string, unknown>): Promise<string>;
-        /** The JSON Schema for a model that supports structured output. */
+        /**
+         * The JSON Schema for a model that supports structured output.
+         *
+         * This and `prompt()` are what the catalog's prop declarations are for. Nothing
+         * checks a prop once a document has arrived — the enforced boundary is the
+         * component list, not the props.
+         */
         jsonSchema(options?: Record<string, unknown>): Promise<object>;
     }
 

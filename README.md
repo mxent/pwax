@@ -647,7 +647,15 @@ description and prop types — worth writing for anything a model will generate 
 and unnecessary for a document you build yourself in PHP.
 
 Prop types are `string`, `number`, `boolean`, `enum` (with `values`), `array`, `object`
-and `any`. A component that declares no props accepts whatever the document sends.
+and `any`.
+
+> **They are prompt material, not a runtime gate.** Declaring them shapes
+> `catalog.prompt()` and `catalog.jsonSchema()`, which is how a model is held to props
+> that exist and values that are allowed. Nothing checks them once a document has
+> arrived: every prop reaches the component, declared or not, and `required` is not
+> enforced. What *is* enforced is the component list — a type the catalog does not name
+> renders nothing and says so in the console. Treat a document from anywhere you do not
+> control the way you would treat any other input.
 
 A component reference reads exactly as it does everywhere else: `@pwaxImport('view.name')`,
 `module:view.name`, or a dotted path to look up on `window` for something a library put
@@ -794,9 +802,15 @@ This is the first thing to know, because most of it needs nothing from you at al
 | Action | Comes from | Needs a handler? |
 | --- | --- | --- |
 | `setState`, `pushState`, `removeState` | the renderer | **no** |
-| `validateForm` | the renderer | **no** |
 | `navigate`, `submit`, `reload` | Pwax | **no** |
 | anything else | you | yes — in config, or `:handlers` |
+
+> The renderer also defines `validateForm`, and it does nothing useful here. It reports
+> on fields registered through a composable that a component calls in its own `setup()`,
+> and a catalog component — loaded as a separate module from the server — has no way to
+> reach it. Dispatched, it writes `{"valid": true, "errors": {}}` and means nothing.
+> Validate in your own handler, or on the server.
+
 
 #### State actions: a document that drives itself
 
@@ -971,8 +985,7 @@ expressions cannot say:
 ```
 
 These are functions, so they are a prop rather than configuration — `config/pwax.php`
-holds data the runtime reads, never code it runs. `:validation-functions` works the same
-way for the `validateForm` action.
+holds data the runtime reads, never code it runs.
 
 ### Two-way binding
 
@@ -1016,7 +1029,6 @@ changed if the page wants to know.
 | `state` | | Initial state, when you keep it out of the document |
 | `handlers` | | Action handlers for this instance |
 | `functions` | | Functions a `$computed` prop may call |
-| `validation-functions` | | Validators the `validateForm` action runs |
 | `only` | | Names to narrow the catalog to, for this instance |
 
 `only` is worth reaching for when the document was generated: a page that should only ever
@@ -1024,10 +1036,10 @@ draw a chart and a caption can say so, and nothing else in the catalog is reacha
 if the document asks. An empty list means exactly that — nothing. It is read when the
 component mounts rather than watched, so give the component a `:key` if it has to change.
 
-`functions` and `validation-functions` are props rather than configuration because they
-are JavaScript. `config/pwax.php` carries data the runtime reads; it never carries code
-the runtime runs, and that line is what keeps a configuration value from becoming a way
-to execute something.
+`functions` is a prop rather than configuration because it holds JavaScript.
+`config/pwax.php` carries data the runtime reads; it never carries code the runtime runs,
+and that line is what keeps a configuration value from becoming a way to execute
+something.
 
 | Event | |
 | --- | --- |

@@ -936,3 +936,123 @@ describe('the document vocabulary', () => {
         expect(fired).toEqual(['save']);
     });
 });
+
+/**
+ * What a catalog's prop declarations are actually for.
+ *
+ * Nothing checks a prop once a document has arrived — not the renderer, and not
+ * `catalog.validate()`, which passes a wrong type and a missing required prop while
+ * failing a perfectly good element that omits `children`. The declarations exist to
+ * shape the prompt and the JSON Schema a model is held to, and that is the contract
+ * worth pinning: if `jsonSchema()` stops describing a declared type, the guard rail
+ * that constrains generation is gone and nothing else would notice.
+ */
+describe('the catalog as prompt material', () => {
+    const build = (props) =>
+        PwaxJson.createRenderer({
+            components: { Widget: { type: 'module', url: '/c/text.js', export: '', props } },
+            actions: { save: { description: 'Save the thing' } },
+            load: () => Promise.resolve(TEXT),
+        });
+
+    const schemaFor = (props) => {
+        const json = JSON.stringify(build(props).jsonSchema());
+
+        return json;
+    };
+
+    it('describes each declared prop type', () => {
+        const schema = schemaFor({
+            name: { type: 'string' },
+            size: { type: 'number' },
+            live: { type: 'boolean' },
+            tags: { type: 'array' },
+            meta: { type: 'object' },
+        });
+
+        expect(schema).toContain('"string"');
+        expect(schema).toContain('"number"');
+        expect(schema).toContain('"boolean"');
+        expect(schema).toContain('"array"');
+    });
+
+    it('holds a generator to the values an enum allows', () => {
+        expect(schemaFor({ tone: { type: 'enum', values: ['quiet', 'loud'] } })).toContain('quiet');
+    });
+
+    /**
+     * An enum whose values are not strings would throw inside `z.enum()` while the
+     * catalog is being built, taking the renderer down rather than loosening one prop.
+     */
+    it('falls back to a string rather than throwing on a malformed enum', () => {
+        expect(() => build({ n: { type: 'enum', values: [1, 2] } })).not.toThrow();
+        expect(() => build({ n: { type: 'enum', values: [] } })).not.toThrow();
+        expect(() => build({ n: { type: 'nonsense' } })).not.toThrow();
+    });
+
+    it('names the components and actions in the prompt it generates', () => {
+        const prompt = build({ name: { type: 'string' } }).prompt();
+
+        expect(prompt).toContain('Widget');
+        expect(prompt).toContain('Save the thing');
+    });
+});
+
+/**
+ * The third reference form. `@pwaxImport` and `module:` both resolve to a URL the
+ * runtime imports; a dotted path is looked up on `window` instead, for a component a
+ * library already put there. Only the failing lookup was covered.
+ */
+describe('a catalog component from a window global', () => {
+    afterEach(() => {
+        delete window.DemoLib;
+    });
+
+    it('renders a component found at a dotted path', async () => {
+        window.DemoLib = { Widget: TEXT };
+
+        const view = await render(
+            { root: 'a', elements: { a: { type: 'Widget', props: { value: 'from a global' } } } },
+            { components: { Widget: { type: 'global', path: 'DemoLib.Widget' } } }
+        );
+
+        expect(view.html()).toContain('<i>from a global</i>');
+    });
+
+    /**
+     * A global has no `emits` the bridge can read, which is what `events` in the catalog
+     * entry is for — the one case where configuration has to name an event.
+     */
+    it('wires an event named by the catalog when the component declares none', async () => {
+        window.DemoLib = {
+            Widget: {
+                props: { value: String },
+                template: '<button @click="$emit(\'poke\')">{{ value }}</button>',
+            },
+        };
+
+        const ran = [];
+        const view = await render(
+            {
+                root: 'a',
+                elements: {
+                    a: {
+                        type: 'Widget',
+                        props: { value: 'Poke me' },
+                        on: { poke: { action: 'save' } },
+                    },
+                },
+            },
+            {
+                components: {
+                    Widget: { type: 'global', path: 'DemoLib.Widget', events: ['poke'] },
+                },
+                handlers: { save: async () => ran.push('save') },
+            }
+        );
+
+        await view.click();
+
+        expect(ran).toEqual(['save']);
+    });
+});

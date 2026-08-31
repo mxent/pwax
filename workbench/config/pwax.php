@@ -64,10 +64,26 @@ $config['json']['components'] = [
     ],
 ];
 
+// A component that is not a Pwax component: `workbench/public/js/demo-lib.js` puts it
+// on `window`, and the catalog reaches it by dotted path. `events` is needed because a
+// global has no options the runtime can read `emits` from.
+$config['scripts'] = [
+    ['src' => '/js/demo-lib.js', 'head' => true],
+];
+
+$config['json']['components']['Stamp'] = [
+    'component' => 'DemoLib.Stamp',
+    'description' => 'A button from a library the application already loads.',
+    'events' => ['stamped'],
+    'props' => ['label' => ['type' => 'string', 'required' => true]],
+];
+
 // The one action on `/vocabulary` that needs a handler. Everything else in that
 // document is either a renderer action or one Pwax supplies.
 $config['json']['actions'] = [
     'save' => "@pwaxImport('actions.save')",
+    // Rejects on purpose, so the document's `onError` has something to react to.
+    'explode' => "@pwaxImport('actions.explode')",
 ];
 
 // A stable identity, so the demo is not reinstalled as a second app whenever `start_url`

@@ -336,8 +336,6 @@ export function createJson({ config, loader, http, sync, navigate }) {
              * evaluates. See `src/js/extensions.js` for why that line is where it is.
              */
             functions: { type: Object, default: null },
-            /** Field validators the `validateForm` action runs. Same reasoning. */
-            validationFunctions: { type: Object, default: null },
             /**
              * Restrict this instance to a subset of the catalog.
              *
@@ -421,7 +419,6 @@ export function createJson({ config, loader, http, sync, navigate }) {
                     state: props.state,
                     handlers: merged,
                     functions: props.functions,
-                    validationFunctions: props.validationFunctions,
                     // The same router push the built-in `navigate` action uses, so a
                     // document's `onSuccess: {navigate}` and its `{"action": "navigate"}`
                     // go the same way — through the SPA router, with no page load.

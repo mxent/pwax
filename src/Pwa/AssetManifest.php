@@ -369,6 +369,17 @@ class AssetManifest
         $urls[] = $this->shell->runtimeUrl();
         $critical[] = $this->shell->runtimeUrl();
 
+        // The JSON renderer, when the application has turned it on. Critical, and that is
+        // the point: it is fetched lazily online, so without precaching it a page that
+        // renders a `<PwaxJson>` is cached, opens offline, and shows an empty box where
+        // its content should be.
+        $jsonRuntime = $this->shell->jsonRuntimeUrl();
+
+        if ($jsonRuntime !== null) {
+            $urls[] = $jsonRuntime;
+            $critical[] = $jsonRuntime;
+        }
+
         $urls[] = $this->manifestPath();
 
         // The application's own extra scripts. Precached, never critical: whether an
@@ -795,6 +806,10 @@ class AssetManifest
             return $this->hashFile(dirname(__DIR__, 2) . '/dist/pwax.js');
         }
 
+        if ($url === $this->shell->jsonRuntimeUrl()) {
+            return $this->hashFile(dirname(__DIR__, 2) . '/dist/pwax-json.js');
+        }
+
         if ($url === $this->manifestPath()) {
             return $this->webManifest->hash();
         }
@@ -874,8 +889,13 @@ class AssetManifest
             // and a changed title template or sharing image is exactly the sort of edit that
             // otherwise leaves every installed client on the previous document.
             (string) json_encode($this->config->get('pwax.head', [])),
+            // The catalog decides which components a document may name, so changing it
+            // changes what the application is — and the components it points at are
+            // precached by name, which this is what invalidates.
+            (string) json_encode($this->config->get('pwax.json', [])),
             $this->webManifest->hash(),
             (string) $this->hashFile(dirname(__DIR__, 2) . '/dist/pwax.js'),
+            (string) $this->hashFile(dirname(__DIR__, 2) . '/dist/pwax-json.js'),
         ];
 
         return substr(hash('xxh128', implode("\0", $inputs)), 0, 16);

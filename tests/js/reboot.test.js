@@ -23,12 +23,19 @@ function stubVue() {
         use: vi.fn(),
         mount: vi.fn(),
         unmount: vi.fn(),
+        directive: vi.fn(),
+        // `<PwaxJson>` is registered globally during boot, so the stub needs this even
+        // though no test here renders one.
+        component: vi.fn(),
     };
 
     const Vue = {
         createApp: vi.fn(() => app),
         markRaw: vi.fn((v) => v),
         defineAsyncComponent: vi.fn((loader) => ({ __asyncLoader: loader })),
+        defineComponent: vi.fn((options) => options),
+        shallowRef: vi.fn((value) => ({ value })),
+        h: vi.fn(),
     };
 
     vi.stubGlobal('Vue', Vue);

@@ -7,7 +7,100 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`<PwaxJson :json="…" />`**, a globally registered component that renders a JSON
+  document — a tree of components and props — against a catalog declared in
+  `pwax.json.components`. A document can only name components the catalog lists, and
+  cannot introduce markup, scripts or components of its own, which is what makes a
+  structure assembled on the server, stored in a database or produced by a language model
+  safe to render. Nothing about `pwaxRender()` or the payload format changes: the document
+  is controller data like any other, and the page around it is an ordinary Pwax component.
+
+- **The catalog is a boundary, not a suggestion.** Vue passes a prop a component did not
+  declare through to that component's root element, where a few names stop being data, so
+  a document's props are filtered before they are rendered: anything beginning with `on`,
+  the markup sinks (`innerHTML`, `outerHTML`, `textContent`, `innerText`, `srcdoc`) and any
+  value whose scheme is `javascript:`, `vbscript:` or `data:text/html` is dropped with a
+  console line naming the element and the prop. Vue's own `^prop` and `.prop` prefixes are
+  undone before the name is checked, the scheme is read the way the URL parser reads one,
+  and a value is looked for at every level of a prop — a menu's URL lives in
+  `items[n].href`, not in the prop itself — with the whole prop dropped when one turns up.
+  The `submit` and `navigate` built-ins refuse a URL on another origin for the same reason
+  — one carries the session's CSRF token, the other drives the application's router. What
+  a component then does with the data it is given is the component's own to validate, as it
+  already was.
+
+- **A catalog component is an ordinary Pwax component.** Children arrive through one
+  default `<slot />`, and whatever the component declares in `emits` is what a document
+  may bind with `on` — configuration never repeats it. Scoped styles, lazy loading and
+  offline precaching all work as they already did.
+
+- **Actions.** A binding carries an action name, `params` that may read state,
+  `onSuccess` / `onError`, and an optional `confirm`. Most need no handler: the renderer
+  supplies `setState`, `pushState`, `removeState` and `validateForm`, and Pwax adds
+  `navigate` (through the SPA router), `submit` (with the CSRF token, queued through
+  `window.pwax.sync` when the connection is gone) and `reload`. Applications add their own
+  under `pwax.json.actions`, resolved exactly like `pwax.vue.middleware`, or pass
+  `:handlers` for one instance — where a name is defined twice, the page wins over
+  configuration, and configuration over a built-in.
+
+  The confirmation dialog is Pwax's own rather than the library's, which was a `div`
+  with two buttons: it is a labelled `role="dialog"` with `aria-modal`, focuses Cancel
+  on open and restores focus on close, traps Tab, cancels on Escape, and uses the CSS
+  system colours so it follows whatever `color-scheme` the application declares rather
+  than being a hardcoded white card on a dark page. A `confirm` needs both `title` and
+  `message` — an incomplete one fails validation and the binding is dropped whole,
+  leaving a control that does nothing, so Pwax warns and names the missing field.
+
+  `validateForm` is the one renderer action that does nothing here. It reports on fields
+  registered through a composable a component calls in its own `setup()`, which a catalog
+  component — loaded as a separate module from the server — cannot reach.
+
+- **The whole document vocabulary.** All eight prop expressions (`$state`, `$bindState`,
+  `$template`, `$cond`, `$item`, `$bindItem`, `$index`, `$computed`) and every element key
+  (`children`, `visible`, `repeat`, `on`, `watch`), including nested `repeat` and the full
+  set of `visible` comparisons. `workbench/resources/views/pages/vocabulary.blade.php`
+  demonstrates every one of them on a single page, alongside a catalog component reached
+  by dotted path on `window` and an `onError` that surfaces the thrown message.
+
+- **`:functions`**, for `$computed` props. A prop rather than configuration, because it
+  holds JavaScript and `config/pwax.php` carries data the runtime reads, never code it
+  runs. Catalog prop declarations shape `prompt()` and `jsonSchema()` — they constrain the
+  model that writes a document, and are not a runtime gate; what is enforced is the
+  component list and the props no document may set at all, described above.
+
+- **`window.pwax.json.{load,prompt,jsonSchema}`.** `prompt()` and `jsonSchema()`
+  describe the configured catalog for a model that is generating documents — each
+  component with its description, its declared props and the events it emits, so a model
+  binding an `on` key writes an event the component actually has instead of guessing.
+  Event names come from the component's own `emits`, so describing the catalog loads
+  every component in it; rendering is unaffected and still fetches only what a document
+  names.
+
+- **`dist/pwax-json.js`**, a second prebuilt bundle carrying
+  [json-render](https://github.com/vercel-labs/json-render) and its dependencies. It is
+  about 82 kB gzipped against the runtime's 9.7 kB, so it is served, precached and
+  fetched only when `pwax.json.enabled` is on and a `<PwaxJson>` actually renders — and
+  hinted at with a `<link rel="preload">` on the pages whose templates use one. Like
+  every other bundle it ships built, so there is still nothing to install and nothing to
+  compile.
+
+- `php artisan pwax:doctor` checks the catalog: a reference that names no component, one
+  pointing at a view that does not exist, an unknown prop type, an `enum` with no values,
+  and a prop name the renderer drops — declaring one is futile rather than dangerous, since
+  it puts a prop in `prompt()` and `jsonSchema()` that no document can ever deliver.
+
+### Documentation
+
+- **Precompiling needs a fallback on every controller variable, not just the
+  template/script split.** The section on `pwax:compile` gave the split as the constraint
+  and its own example, `data: () => ({ user: @json($user) })`, would have failed the
+  command it was describing: the view is rendered with no request in flight, so `$user` is
+  undefined whichever block it sits in. `@json($user ?? null)` is the missing half — used
+  only during the compile pass, and it does not change the template that gets keyed. A page
+  rendering a JSON document always needs it, since the document comes from the controller
+  by definition, and the workbench's three document pages now show it.
 
 ## [1.0.0]
 

@@ -72,6 +72,15 @@ Route::group(array_filter([
     Route::get($prefix . '/pwax-sw.js.map', [PwaxController::class, 'workerSourceMap'])
         ->name('pwax.worker-map');
 
+    // The JSON renderer, fetched by the first `<PwaxJson>` that renders. Registered
+    // unconditionally so that toggling `json.enabled` at runtime takes effect without
+    // rebuilding the route table; the controller returns 404 when it is off.
+    Route::get($prefix . '/pwax-json.js', [PwaxController::class, 'jsonRuntime'])
+        ->name('pwax.json-runtime');
+
+    Route::get($prefix . '/pwax-json.js.map', [PwaxController::class, 'jsonRuntimeSourceMap'])
+        ->name('pwax.json-runtime-map');
+
     Route::get(
         ltrim((string) config('pwax.manifest_path', '/manifest.json'), '/'),
         [PwaxController::class, 'manifest']

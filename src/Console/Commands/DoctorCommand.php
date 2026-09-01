@@ -24,6 +24,18 @@ use Throwable;
  */
 class DoctorCommand extends Command
 {
+    /**
+     * Prop names the JSON renderer drops because Vue writes them into the DOM.
+     *
+     * The PHP mirror of `MARKUP_PROPS` in `src/js/json/index.js`, lowercased on both
+     * sides. `RuntimeContractTest` reads the JS list and fails when the two drift, so
+     * a name added there is reported here too rather than being warned about only in
+     * a browser console nobody is watching.
+     *
+     * @var list<string>
+     */
+    public const MARKUP_PROPS = ['innerhtml', 'outerhtml', 'textcontent', 'innertext', 'srcdoc'];
+
     protected $signature = 'pwax:doctor';
 
     protected $description = 'Check the Pwax installation for common misconfigurations';
@@ -51,6 +63,7 @@ class DoctorCommand extends Command
         $this->checkAssets($config);
         $this->checkCrossOriginPolicy($config);
         $this->checkRuntimeBundle();
+        $this->checkJson($config);
         $this->checkPrecompiledTemplates($pwax);
         $this->checkManifest($config);
         $this->checkServiceWorker($config);
@@ -287,6 +300,163 @@ class DoctorCommand extends Command
             'Client runtime bundle is present',
             'dist/pwax.js is missing from the package. Reinstall with `composer reinstall mxent/pwax`.'
         );
+    }
+
+    /**
+     * The JSON catalog, and the bundle that renders against it.
+     *
+     * Everything here fails at render time in the browser if it fails at all, which for a
+     * config typo means an empty node and a console line nobody is watching. The four
+     * things worth catching before then:
+     *
+     *   - The renderer is missing from the package while the feature is on. The one that
+     *     is a problem rather than a warning: every `<PwaxJson>` on the site is blank.
+     *   - An entry that names no component, so the catalog silently loses it.
+     *   - An entry pointing at a view that does not exist. Signing means the URL is minted
+     *     happily and 400s when the browser asks for it.
+     *   - A prop type the schema builder does not know. It falls back to accepting
+     *     anything, which is a validation rule that quietly is not one.
+     *   - A prop name the runtime drops. `safeProps()` in the renderer refuses anything
+     *     beginning with `on` and the markup sinks, so declaring one puts a prop in
+     *     `prompt()` and `jsonSchema()` that a document can never actually deliver.
+     */
+    private function checkJson(Config $config): void
+    {
+        if (! $config->get('pwax.json.enabled', true)) {
+            return;
+        }
+
+        /** @var array<string, mixed> $components */
+        $components = (array) $config->get('pwax.json.components', []);
+
+        if ($components === []) {
+            return;
+        }
+
+        $this->assert(
+            is_file(dirname(__DIR__, 3) . '/dist/pwax-json.js'),
+            'JSON renderer bundle is present',
+            'dist/pwax-json.js is missing but pwax.json.components names components. '
+            . 'Every <PwaxJson> will render nothing. Reinstall with `composer reinstall mxent/pwax`.'
+        );
+
+        $views = $this->laravel->make('view');
+        $types = ['string', 'number', 'boolean', 'enum', 'array', 'object', 'any'];
+
+        $directive = (string) $config->get('pwax.components.directive', 'pwaxImport');
+        $pattern = '/^@' . preg_quote($directive, '/') . '\s*\(\s*[\'"]?(.+?)[\'"]?\s*\)$/';
+        $healthy = true;
+
+        foreach ($components as $name => $entry) {
+            $reference = is_array($entry) ? ($entry['component'] ?? null) : $entry;
+
+            if (! is_string($reference) || trim($reference) === '') {
+                $this->fail_(sprintf(
+                    'pwax.json.components["%s"] names no component. A value is either the '
+                    . 'component reference itself or an array with a "component" key.',
+                    $name
+                ));
+                $healthy = false;
+
+                continue;
+            }
+
+            $reference = trim($reference);
+            $view = null;
+
+            if (preg_match($pattern, $reference, $matches) === 1) {
+                $view = $matches[1];
+            } elseif (str_starts_with($reference, 'module:')) {
+                $view = substr($reference, 7);
+            }
+
+            if ($view !== null) {
+                // The export half of `Modal from components.modal` is not a view name.
+                $view = str_contains($view, ' from ')
+                    ? trim(explode(' from ', $view, 2)[1])
+                    : trim($view);
+
+                if (! $views->exists($view)) {
+                    $this->fail_(sprintf(
+                        'pwax.json.components["%s"] points at the view "%s", which does not '
+                        . 'exist. A document naming "%s" will render nothing.',
+                        $name,
+                        $view,
+                        $name
+                    ));
+                    $healthy = false;
+                }
+            }
+
+            if (! is_array($entry)) {
+                continue;
+            }
+
+            foreach ((array) ($entry['props'] ?? []) as $prop => $declaration) {
+                $type = is_array($declaration) ? ($declaration['type'] ?? null) : $declaration;
+                $lower = strtolower((string) $prop);
+
+                // Declaring one is not dangerous, it is futile: the renderer drops it
+                // before the component sees it, so the only effect is a prompt that
+                // teaches a model to write a prop which never arrives.
+                if (str_starts_with($lower, 'on') || in_array($lower, self::MARKUP_PROPS, true)) {
+                    $this->warn_(sprintf(
+                        'pwax.json.components["%s"].props["%s"] is a name the renderer drops '
+                        . '— it refuses anything starting with "on", and the props that write '
+                        . 'markup, whatever the catalog says. Rename it, and bind events under '
+                        . 'the element\'s "on" key.',
+                        $name,
+                        $prop
+                    ));
+                }
+
+                if (is_string($type) && ! in_array($type, $types, true)) {
+                    $this->warn_(sprintf(
+                        'pwax.json.components["%s"].props["%s"] has type "%s", which is not '
+                        . 'one of %s. It will accept any value.',
+                        $name,
+                        $prop,
+                        $type,
+                        implode(', ', $types)
+                    ));
+                }
+
+                if (! is_array($declaration) || ($declaration['type'] ?? null) !== 'enum') {
+                    continue;
+                }
+
+                /** @var list<mixed> $values */
+                $values = (array) ($declaration['values'] ?? []);
+
+                if ($values === []) {
+                    $this->warn_(sprintf(
+                        'pwax.json.components["%s"].props["%s"] is an enum with no "values", '
+                        . 'so it accepts any string.',
+                        $name,
+                        $prop
+                    ));
+
+                    continue;
+                }
+
+                // The schema builder needs strings. It falls back to accepting any string
+                // rather than throwing — a number here would otherwise take down the whole
+                // renderer while the catalog was being built — so this is the only place
+                // the mistake is ever reported.
+                if (count(array_filter($values, 'is_string')) !== count($values)) {
+                    $this->warn_(sprintf(
+                        'pwax.json.components["%s"].props["%s"] is an enum whose "values" are '
+                        . 'not all strings. It will accept any string instead.',
+                        $name,
+                        $prop
+                    ));
+                }
+            }
+        }
+
+        if ($healthy) {
+            $this->ok(sprintf('JSON catalog resolves (%d component(s))', count($components)));
+        }
     }
 
     /**

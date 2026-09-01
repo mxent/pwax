@@ -9,9 +9,9 @@ export default defineConfig({
         include: ['tests/js/**/*.test.js'],
         globals: false,
         restoreMocks: true,
-        // Builds the service worker into memory once, so the harness runs the real thing
-        // rather than a stale copy from `dist/`.
-        globalSetup: ['tests/js/helpers/buildWorker.js'],
+        // Builds the service worker and the JSON renderer into memory once, so the
+        // harnesses run the real thing rather than a stale copy from `dist/`.
+        globalSetup: ['tests/js/helpers/buildWorker.js', 'tests/js/helpers/buildJson.js'],
         setupFiles: ['tests/js/helpers/setup.js'],
     },
     define: {

@@ -6,5 +6,7 @@
  */
 import { inject } from 'vitest';
 import { setWorkerBundle } from './serviceWorkerHarness.js';
+import { setJsonBundle } from './jsonHarness.js';
 
 setWorkerBundle(inject('pwaxWorkerBundle'));
+setJsonBundle(inject('pwaxJsonBundle'));

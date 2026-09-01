@@ -17,6 +17,8 @@
         "types": "tsc --noEmit --strict --lib es2022,dom types/pwax.d.ts"
     },
     "devDependencies": {
+        "@json-render/core": "0.20.0",
+        "@json-render/vue": "0.20.0",
         "@vue/compiler-dom": "^3.5.41",
         "esbuild": "^0.28.2",
         "eslint": "^10.9.0",
@@ -24,7 +26,9 @@
         "jsdom": "^30.0.1",
         "prettier": "^3.9.6",
         "typescript": "^7.0.2",
-        "vitest": "^4.1.11"
+        "vitest": "^4.1.11",
+        "vue": "3.5.41",
+        "zod": "^4.4.3"
     },
     "peerDependencies": {
         "@vue/compiler-dom": "^3.5.41"

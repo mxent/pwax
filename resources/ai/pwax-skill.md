@@ -158,6 +158,157 @@ a path on `window`. Inside a `<script>` block, a string is just a string.
 
 ---
 
+## 3b. `<PwaxJson>` — the other way to wire components up
+
+A page whose shape is not known when you write it — a dashboard assembled
+from what a user enabled, a form driven by a schema, a screen a model
+produced — renders a **JSON document** instead of a template:
+
+```blade
+<template>
+    <div class="page">
+        <h1>Your report</h1>
+        <PwaxJson :json="doc" />
+    </div>
+</template>
+
+<script>
+export default {
+    data() {
+        // `?? null` so `pwax:compile` can render this view with no data.
+        return { doc: @json($doc ?? null) };
+    },
+};
+</script>
+```
+
+The route is unchanged — `pwaxRender('pages.report', ['doc' => $doc])`.
+`<PwaxJson>` is registered globally, so there is nothing to import, and it
+works anywhere a component works.
+
+**What a document may contain is `pwax.json.components`**, and only that:
+
+```php
+'json' => [
+    'components' => [
+        'Card' => "@pwaxImport('components.card')",
+        'Button' => [
+            'component' => "@pwaxImport('components.button')",
+            'description' => 'A clickable button that emits a "press" event.',
+            'props' => ['label' => ['type' => 'string', 'required' => true]],
+        ],
+    ],
+],
+```
+
+Same reference vocabulary as `pwax.vue.*`: `@pwaxImport(...)`,
+`module:view.name`, or a dotted path on `window`. Never evaluated.
+
+**A catalog component is an ordinary Pwax component.** Two rules:
+
+- Children arrive through **one default `<slot />`**. A document lists
+  child keys under `children` and cannot address a named slot.
+- **`emits` is the contract.** Whatever the component declares there is
+  what a document can bind with `on`. Configuration never repeats it —
+  `prompt()` reads it off the component and lists it as `[events: press]`,
+  so a model binds an event that exists. A `global` reached by dotted path
+  has no options to read, and is the one case where the catalog entry has
+  to name `events` itself.
+
+A document is a flat map, not a nested tree:
+
+```php
+[
+    'root' => 'card',
+    'state' => ['user' => ['name' => 'Ada']],
+    'elements' => [
+        'card' => [
+            'type' => 'Card',
+            'props' => ['title' => ['$template' => 'Hello, ${/user/name}!']],
+            'children' => ['go'],
+        ],
+        'go' => [
+            'type' => 'Button',
+            'props' => ['label' => 'Settings'],
+            'on' => ['press' => ['action' => 'navigate', 'params' => ['to' => '/settings']]],
+        ],
+    ],
+]
+```
+
+Eight prop expressions: `$state`, `$bindState`, `$template`, `$cond`
+(with `$then`/`$else`), `$item`, `$bindItem`, `$index`, `$computed`
+(with `args`). Elements may carry `children`, `visible`, `repeat`, `on`
+and `watch`. `visible` takes `eq`/`neq`/`gt`/`gte`/`lt`/`lte` plus `not`,
+a list (meaning and), or `$and`/`$or`.
+
+**Actions divide into three, and most need nothing from you:**
+
+| Action | From | Handler? |
+| --- | --- | --- |
+| `setState`, `pushState`, `removeState` | the renderer | no |
+| `navigate`, `submit`, `reload` | Pwax | no |
+| anything else | you | yes — `pwax.json.actions` or `:handlers` |
+
+`validateForm` exists but is inert here: it reports on fields registered
+through a composable a component calls in its own `setup()`, which a
+catalog component cannot reach. Validate in a handler or on the server.
+
+`setState` is the one to reach for first: a document can show and hide its
+own panels with no PHP and no handler at all.
+
+A binding may also carry `params` (which may read state), `onSuccess` /
+`onError` (`{navigate}`, `{set}` or `{action}`), and `confirm`. An event may
+name a list of bindings and all of them run.
+
+`confirm` needs **both** `title` and `message` (and `variant`, if given, must
+be `default` or `danger`). An incomplete one is not ignored — the whole
+binding fails validation and is dropped, so the control does nothing at all.
+Pwax warns, naming the element and the missing field.
+
+Precedence where a name is defined twice: `:handlers` > `pwax.json.actions` >
+Pwax built-in.
+
+`@action` fires for every action **that reaches a handler** — not for the
+renderer's own state actions, which are handled before any handler is
+consulted. Use `@state-change` to see those; it reports the pointers written.
+
+`:functions` is a prop, not config, because it holds JavaScript — config
+carries data the runtime reads, never code it runs.
+
+Prop types in the catalog are **prompt material, not a runtime gate**: they
+shape `prompt()` and `jsonSchema()`, and nothing checks them once a document
+arrives. An undeclared prop still reaches the component.
+
+**What a document may never set**, whatever the catalog says — these are
+dropped with a console line, because Vue passes an undeclared prop through
+to the component's root element where a few names stop being data:
+
+| Dropped | Why |
+| --- | --- |
+| any prop beginning with `on` | `onclick` becomes an inline handler and runs |
+| `innerHTML`, `outerHTML`, `textContent`, `innerText`, `srcdoc` | Vue sets each as a DOM property, so a string is parsed as HTML |
+| a value whose scheme is `javascript:`, `vbscript:` or `data:text/html`, **at any depth** | a component rendering a prop as a URL would run it |
+
+Vue's `^prop` / `.prop` prefixes are undone first. The name rule is blunt on
+purpose, so an innocent `online` prop is dropped too — rename it, and
+`pwax:doctor` names one declared in the catalog. The value rule walks nested
+arrays and objects, because a menu's URL lives in `items[n].href`, and drops
+the whole prop when it finds one. Behaviour belongs under the element's `on`
+key. `submit` and `navigate` refuse a cross-origin URL for the same reason:
+one carries the CSRF token, the other drives the router.
+
+None of this validates data. A component that renders a prop with `v-html`,
+or renders one as a URL, still gets whatever ordinary value the document
+wrote — that is the component's own decision to validate, exactly as with a
+controller's data.
+
+The renderer is a second bundle, `dist/pwax-json.js`, ~82 kB gzipped. It
+is fetched by the first `<PwaxJson>` that renders and never on a page that
+has none. It is precached, so a `->cacheable()` page works offline.
+
+---
+
 ## 4. The `@pwaxImport` directive
 
 One component reaches another with `@pwaxImport('view.name')`, **inside the
@@ -753,10 +904,20 @@ written (defaults to `storage/app/pwax/render-functions.php`).
 `pwax.assets.node` is the Node binary it runs (defaults to whatever
 `node` resolves to).
 
-One constraint comes with the `runtime` build: a template must be the
-same for every visitor. Keep controller data in `<script>` (`@json($user)`)
-and out of `<template>`, which is the idiomatic split anyway.
-`pwax:compile` names any view that breaks it.
+Two constraints come with the `runtime` build, both because the view is
+rendered once at deploy time with no request in flight.
+
+A template must be the same for every visitor: keep controller data in
+`<script>` and out of `<template>`, which is the idiomatic split anyway.
+
+And the view must render **with no data at all**, which the split alone does
+not give you — `@json($user)` still raises `Undefined variable $user` during
+the compile pass. Give every controller variable a fallback:
+`@json($user ?? null)`. It is used only while compiling, and it does not
+change the template. A page rendering a JSON document always needs this,
+since the document comes from the controller by definition.
+
+`pwax:compile` names any view that breaks either rule and exits non-zero.
 
 ---
 
@@ -834,6 +995,27 @@ a Pwax component, every Vue interpolation **must be** `@{{ }}` so
 Blade passes it through. Forgetting the `@` makes Blade consume it and
 ship an empty template — the symptom is a runtime warning and a blank
 value where one was expected.
+
+### A JSON document that renders nothing
+
+Three shapes look right and draw an empty box. Pwax warns about the first
+two in the console; the third is a catalog problem.
+
+- **`slots` on an element.** The renderer reads `children` and never
+  `slots`, so content placed under `slots` never renders. List child keys
+  under `children`, and give the component one default `<slot />`.
+- **`repeat` on the row.** `repeat` repeats an element's *children*, so it
+  goes on the container. On an element with no `children` it produces one
+  empty row.
+- **A `type` that is not in the catalog.** Renders nothing and names
+  itself in the console. Add it to `pwax.json.components`.
+- **`confirm` on `setState`/`pushState`/`removeState`.** The renderer
+  handles its own actions and returns before the confirmation, so the
+  action runs without asking. Confirm an action of your own instead.
+
+Two more worth knowing: `@state-change` emits the *changed pointers*, not
+a state snapshot; and props are camelCase in a document because they are
+Vue props (`modelValue`, not `model-value`).
 
 ### The `@` literal in JSON-LD
 

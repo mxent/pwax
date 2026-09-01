@@ -63,6 +63,7 @@ table in JavaScript.
 - [Navigating](#navigating)
 - [Redirects and errors](#redirects-and-errors)
 - [Importing components](#importing-components)
+- [JSON documents](#json-documents)
 - [Scoped styles](#scoped-styles)
 - [Plugins, directives and middleware](#plugins-directives-and-middleware)
 - [Progressive web app](#progressive-web-app)
@@ -568,6 +569,615 @@ Backdrop: @pwaxImport('Backdrop from components.modal'),
 > `@import url(...)` inside every `<style>` block in the application and replace it with
 > JavaScript. You can rename the directive with `pwax.components.directive`; the name
 > `import` is rejected at boot.
+
+## JSON documents
+
+Sometimes the shape of a page is not known when you write it. A dashboard assembled from
+whatever a user has enabled, a form driven by a schema in the database, a screen a
+language model produced — all of them are the same page template rendering a structure
+that arrives as data.
+
+`<PwaxJson>` renders that structure. You give it a **document** — a JSON tree of
+components and props — and it draws it using the components you have declared in a
+**catalog**. Everything else about the page is unchanged: it is an ordinary Pwax
+component, served by an ordinary `pwaxRender()` route.
+
+```blade
+<template>
+    <div class="page">
+        <h1>Your report</h1>
+        <PwaxJson :json="doc" />
+    </div>
+</template>
+
+<script>
+    export default {
+        data() {
+            // `?? null` only matters if you run `pwax:compile`, which renders this view
+            // with no data to extract its template. See [Precompiling
+            // templates](#precompiling-templates).
+            return { doc: @json($doc ?? null) };
+        },
+    };
+</script>
+```
+
+```php
+Route::get('/report', fn () => pwaxRender('pages.report', [
+    'doc' => $report->toDocument(),
+])->title('Your report'));
+```
+
+The catalog is the point. A document can only name components you have listed, and it
+cannot introduce markup, scripts or components of its own — so a structure that came from
+somewhere you do not fully trust, a model's output or a row in a database, picks from what
+you have offered rather than bringing its own. [What a document cannot
+do](#what-a-document-cannot-do) says exactly where that line falls.
+
+`<PwaxJson>` is registered globally, so there is nothing to import. It works anywhere a
+component works: in a page, inside a component you imported with `@pwaxImport`, several
+times on one screen, or beside hand-written markup as above.
+
+> **The renderer is a separate download.** It is [json-render](https://github.com/vercel-labs/json-render)
+> plus its dependencies — about 82 kB gzipped, against 9.7 kB for the Pwax runtime itself.
+> It ships prebuilt inside the package, so there is still nothing to install and nothing
+> to build, but it is fetched only when a `<PwaxJson>` actually renders. A page without
+> one never downloads it, and an application that never uses one never serves it.
+
+### The catalog
+
+Declare the components a document may use in `config/pwax.php`:
+
+```php
+'json' => [
+    'components' => [
+        'Card' => "@pwaxImport('components.card')",
+
+        'Button' => [
+            'component' => "@pwaxImport('components.button')",
+            'description' => 'A clickable button that emits a "press" event.',
+            'props' => [
+                'label' => ['type' => 'string', 'required' => true],
+                'variant' => ['type' => 'enum', 'values' => ['primary', 'secondary']],
+            ],
+        ],
+    ],
+],
+```
+
+The short form is the whole component: props pass through as written, and the events a
+document can bind are whatever the component declares in `emits`. The long form adds a
+description and prop types — worth writing for anything a model will generate against,
+and unnecessary for a document you build yourself in PHP.
+
+Prop types are `string`, `number`, `boolean`, `enum` (with `values`), `array`, `object`
+and `any`.
+
+> **They are prompt material, not a runtime gate.** Declaring them shapes
+> `catalog.prompt()` and `catalog.jsonSchema()`, which is how a model is held to props
+> that exist and values that are allowed. Nothing checks them once a document has
+> arrived: an undeclared prop still reaches the component, and `required` is not enforced.
+> What *is* enforced is the component list, and the small set of props no document may set
+> at all — see [What a document cannot do](#what-a-document-cannot-do).
+
+A component reference reads exactly as it does everywhere else: `@pwaxImport('view.name')`,
+`module:view.name`, or a dotted path to look up on `window` for something a library put
+there. None of them is ever evaluated as code.
+
+### Writing a catalog component
+
+There is nothing special about one. It is a component:
+
+```blade
+{{-- resources/views/components/card.blade.php --}}
+<template>
+    <section class="card">
+        <h2 v-if="title">@{{ title }}</h2>
+        <div class="card__body"><slot /></div>
+    </section>
+</template>
+
+<script>
+    export default {
+        props: { title: { type: String, default: '' } },
+    };
+</script>
+
+<style scoped>
+    .card { border: 1px solid #ddd; border-radius: .5rem; padding: 1rem; }
+</style>
+```
+
+Two things are worth knowing.
+
+**Children arrive through one default `<slot />`.** A document lists its children under
+`children`, and there is no way for it to address a named slot — so a component meant for
+a document renders all of them in one place. Named slots still work when you use the same
+component from hand-written Vue.
+
+**`emits` is the contract.** Whatever a component declares there is what a document can
+bind with `on`, and you do not repeat it in configuration:
+
+```blade
+<script>
+    export default {
+        props: { label: { type: String, required: true } },
+        emits: ['press'],
+    };
+</script>
+```
+
+Catalog components are ordinary components in every other way: they are fetched the first
+time a document actually renders one, their scoped styles work, they are cached by the
+browser, and the service worker precaches them like any other.
+
+### What a document cannot do
+
+A document is data. It may be generated by a model, stored in a column, or edited by
+somebody with far less access than the people who write your components — so it is worth
+being precise about what it can reach.
+
+**It can only name components in the catalog.** A `type` the catalog does not list renders
+nothing and says which name was missing in the console. `:only` narrows that further, per
+instance:
+
+```blade
+<PwaxJson :json="doc" :only="['Card', 'Text']" />
+```
+
+**It cannot set an event handler or write markup.** Vue passes any prop a component did
+not declare through to that component's root element as an attribute, and a handful of
+attribute names are DOM sinks rather than data. Those are dropped, with a console line
+naming the element and the prop:
+
+| Dropped | Why |
+| --- | --- |
+| any prop beginning with `on` | `onclick` becomes an inline handler and runs |
+| `innerHTML`, `outerHTML`, `textContent`, `innerText`, `srcdoc` | Vue sets each as a DOM property, so a string is parsed as HTML |
+| any prop *value* whose scheme is `javascript:`, `vbscript:` or `data:text/html` | a component that renders a prop as a URL — `<a :href>`, `<iframe :src>` — would otherwise run it |
+
+Vue's own `^prop` and `.prop` prefixes are undone before the name is checked, so neither
+`^onClick` nor `.innerHTML` gets past it. The rule for names is deliberately blunt —
+*anything* beginning with `on`, not a list of event names — so a prop legitimately called
+`online` is dropped too, and both the console and `php artisan pwax:doctor` say so. Rename
+it.
+
+The value rule looks **at every level of a prop, not just the top**, because the URL a
+document wants is usually a field of an entry in a list — a menu's `items`, a table's
+`columns` — rather than the prop itself. When one turns up, the whole prop is dropped:
+a list that smuggled in a URL should be conspicuously missing, not quietly one item short.
+The scheme is read the way the URL parser reads one, which strips leading control
+characters and removes tab, newline and carriage return from anywhere in the URL, so
+`java&#9;script:…` is caught as well.
+
+A document's proper channel for behaviour is the element's `on` key and an action, which
+is unaffected. See [Actions](#actions).
+
+**Its URLs stay on this origin.** The `submit` and `navigate` built-ins refuse a
+cross-origin URL and say so. `submit` sends the session's CSRF token with every request,
+and `navigate` drives the application's own router; neither is something a document should
+be able to point elsewhere.
+
+**What it *can* reach is your component's own code.** None of this validates data, only
+the two channels through which a document could otherwise supply behaviour. A component
+that renders a prop with `v-html` is accepting markup on purpose, and one that renders a
+prop as a URL still gets any ordinary URL a document cares to write — `https://` included.
+Those are the component author's decisions, and the same ones they make about a
+controller's data today. The catalog is a list of components you trust; write one the way
+you would write any other component that takes input.
+
+### Writing a document
+
+```php
+[
+    'root' => 'card',
+    'state' => ['user' => ['name' => 'Ada']],
+    'elements' => [
+        'card' => [
+            'type' => 'Card',
+            'props' => ['title' => ['$template' => 'Hello, ${/user/name}!']],
+            'children' => ['greet'],
+        ],
+        'greet' => [
+            'type' => 'Button',
+            'props' => ['label' => 'Say hello'],
+            'on' => ['press' => ['action' => 'navigate', 'params' => ['to' => '/hello']]],
+        ],
+    ],
+]
+```
+
+Elements are a flat map rather than a nested tree, and `children` holds keys. That is what
+lets a document be streamed or patched a piece at a time — and it means a deeply nested
+layout is no harder to build in PHP than a shallow one.
+
+A prop can be a literal, or any of these eight expressions:
+
+| | |
+| --- | --- |
+| `{"$state": "/user/name"}` | read a value from state, by [JSON Pointer](https://datatracker.ietf.org/doc/html/rfc6901) |
+| `{"$bindState": "/user/name"}` | read it *and* write it back — see [Two-way binding](#two-way-binding) |
+| `{"$template": "Hi ${/user/name}"}` | interpolate state into a string |
+| `{"$cond": …, "$then": …, "$else": …}` | choose between two values |
+| `{"$item": "name"}` | a field of the current item, inside a `repeat`; `""` is the item itself |
+| `{"$bindItem": "name"}` | read and write a field of the current item |
+| `{"$index": true}` | the current index, inside a `repeat` |
+| `{"$computed": "fullName", "args": {…}}` | call a function you supplied — see [Computed values](#computed-values) |
+
+And an element itself can carry:
+
+| | |
+| --- | --- |
+| `children` | keys of the elements rendered inside it |
+| `visible` | a condition, below |
+| `repeat` | `{"statePath": "/rows", "key": "id"}` — renders this element's **children** once per item |
+| `on` | events to actions — `{"press": {"action": "save"}}` |
+| `watch` | pointers to actions — `{"/note": {"action": "save"}}`, run when the pointer changes |
+
+A `visible` condition names a source — `$state`, `$item` or `$index` — and one comparison:
+
+| | |
+| --- | --- |
+| `{"$state": "/n", "eq": 3}` | `eq`, `neq`, `gt`, `gte`, `lt`, `lte` |
+| `{"$state": "/n", "eq": 3, "not": true}` | `not` inverts whatever the rest decided |
+| `[{…}, {…}]` | a list means **and** |
+| `{"$and": [{…}, {…}]}` / `{"$or": […]}` | spelled out, and nestable |
+
+`repeat` nests: an inner `repeat` can walk into the current item with
+`{"statePath": {"$item": "items"}}`.
+
+> **Three things render quietly wrong, so Pwax warns about each in the console.** `repeat`
+> goes on the container whose children repeat, not on the row — an element with a `repeat`
+> and no `children` renders one empty row. An element using `slots` renders nothing,
+> because the renderer reads only `children`. And a `confirm` on one of the renderer's own
+> actions never asks; see [Asking first](#asking-first).
+
+### Actions
+
+An `on` binding dispatches a named action when a component raises an event. In full, a
+binding looks like this — every key but `action` is optional:
+
+```php
+'on' => [
+    'press' => [
+        'action' => 'submit',
+        'params' => ['url' => '/orders', 'data' => ['id' => ['$state' => '/order/id']]],
+        'confirm' => ['title' => 'Place this order?', 'message' => 'This cannot be undone.'],
+        'onSuccess' => ['navigate' => '/thanks'],
+        'onError' => ['set' => ['/error' => 'Could not place the order.']],
+    ],
+],
+```
+
+`params` may use the same expressions props do, so an action can read state without the
+page passing anything down. Give an event a list instead of one binding and all of them
+run, in order.
+
+#### What needs a handler, and what does not
+
+This is the first thing to know, because most of it needs nothing from you at all:
+
+| Action | Comes from | Needs a handler? |
+| --- | --- | --- |
+| `setState`, `pushState`, `removeState` | the renderer | **no** |
+| `navigate`, `submit`, `reload` | Pwax | **no** |
+| anything else | you | yes — in config, or `:handlers` |
+
+> The renderer also defines `validateForm`, and it does nothing useful here. It reports
+> on fields registered through a composable that a component calls in its own `setup()`,
+> and a catalog component — loaded as a separate module from the server — has no way to
+> reach it. Dispatched, it writes `{"valid": true, "errors": {}}` and means nothing.
+> Validate in your own handler, or on the server.
+
+
+#### State actions: a document that drives itself
+
+`setState` writes a value; anything reading that pointer re-renders. A disclosure panel
+needs no PHP, no handler and no configuration:
+
+```php
+'toggle' => [
+    'type' => 'Button',
+    'props' => ['label' => 'Show details'],
+    'on' => ['press' => ['action' => 'setState', 'params' => ['statePath' => '/open', 'value' => true]]],
+],
+'details' => [
+    'type' => 'Card',
+    'props' => ['title' => 'Details'],
+    'visible' => ['$state' => '/open', 'eq' => true],
+],
+```
+
+`pushState` appends to an array — `{"statePath": "/rows", "value": {…}}`, with an optional
+`clearStatePath` to blank the input it came from — and `removeState` takes one out by
+`index`. Together with `repeat`, that is an editable list with no server round trip.
+
+#### Pwax's actions
+
+| | |
+| --- | --- |
+| `navigate` | `{"to": "/settings"}` — routes through the SPA router, no page load |
+| `submit` | `{"url": "/orders", "data": {…}}` — posts with the CSRF token, and queues the write when the connection is gone |
+| `reload` | reloads the page |
+
+Both URLs must be on this origin. `submit` sends the session's CSRF token and `navigate`
+drives the application's own router, so a document that points either one somewhere else
+is refused with a console line rather than followed — see [What a document cannot
+do](#what-a-document-cannot-do).
+
+#### Your own actions
+
+Declare one in configuration when several documents use it. The value resolves exactly
+like client middleware, and the module default-exports the handler:
+
+```php
+'json' => [
+    'actions' => [
+        'addToCart' => "@pwaxImport('actions.add-to-cart')",
+    ],
+],
+```
+
+```blade
+{{-- resources/views/actions/add-to-cart.blade.php --}}
+<script>
+    export default async function (params) {
+        await window.pwax.http.json('/cart', {
+            method: 'POST',
+            body: JSON.stringify({ id: params.id }),
+        });
+    };
+</script>
+```
+
+Or pass one on the page, which is simpler for something only this document does:
+
+```blade
+<PwaxJson :json="doc" :handlers="{ addToCart: add }" />
+```
+
+Where a name is defined more than once, the page wins over configuration, and
+configuration wins over a Pwax built-in — so you can replace `submit` for one document
+without touching anything else.
+
+#### After the action
+
+`onSuccess` runs when the handler resolves, `onError` when it throws. Each takes one of
+three shapes:
+
+| | |
+| --- | --- |
+| `{"navigate": "/thanks"}` | route there, through the SPA router |
+| `{"set": {"/saved": true}}` | write to state — in `onError`, the value `"$error.message"` becomes the thrown message |
+| `{"action": "refresh"}` | dispatch another action |
+
+A handler receives the resolved `params` and nothing else — no state setter — so writing
+a result back is what `onSuccess` is for. A handler that throws is contained: `onError`
+runs and the rest of the document keeps working.
+
+#### Asking first
+
+Add `confirm` to a binding and the action waits for a dialog:
+
+```php
+'confirm' => ['title' => 'Delete this?', 'message' => 'This cannot be undone.', 'variant' => 'danger'],
+```
+
+**`title` and `message` are both required**, and `variant` — when present — must be
+`default` or `danger`. This is worth knowing because getting it wrong has no other
+symptom: the renderer validates the whole binding, and a binding whose confirmation does
+not validate is dropped before anything is wired up, so `['title' => 'Delete this?']` on
+its own gives you a control that does nothing at all. No dialog, no action, nothing in the
+console, on a page that otherwise works. Pwax warns about it, naming the element and the
+missing field.
+
+**It only works on an action that reaches a handler.** The renderer handles `setState`,
+`pushState`, `removeState` and the rest of its own actions and returns before the
+confirmation is ever considered, so a `confirm` on one of those runs without asking —
+which for `removeState` is the difference between a prompt and a deletion. Pwax warns in
+the console when it sees one; put the confirmation on an action of your own instead.
+
+The dialog is the one piece of interface Pwax itself draws in this whole feature —
+everything else on the page is your own components — and a document can ask for it, so
+it is built to behave like a modal should. It is a labelled `role="dialog"` with
+`aria-modal`, so a screen reader announces it rather than reading past it. Opening it
+moves focus to **Cancel**, the safe half of a question that may be destructive, and
+closing it puts focus back where it was, which for a `press` binding is the button the
+visitor came from. Tab stays inside it. Escape cancels. Its colours are the CSS system
+colours, so it resolves against whatever `color-scheme` your application declares — light
+in an application that never opted into dark, and light or dark as the visitor prefers in
+one that did — rather than being a hardcoded white card on a dark page.
+
+Two things still to weigh. Its layout is fixed — every element carries a class
+(`pwax-confirm`, `pwax-confirm__panel`, and so on) but the defaults are inline styles, so
+overriding them means `!important`; when the look matters, confirm inside your own handler
+and leave `confirm` off. And cancelling surfaces in the console as an uncaught
+`Action cancelled`. That one is the renderer's: it rejects a promise it dispatched with
+`void`, so there is no handle anywhere to catch it, and no page-level hook fires for it
+either — measured in Chromium, where a listener on `unhandledrejection` sees a control
+rejection raised beside it and never sees this one.
+
+#### Watching the traffic
+
+`@action` fires for every action that reaches a handler — every Pwax built-in, everything
+in `pwax.json.actions`, and every `:handlers` key — which makes it a good place to hang
+analytics or a debug log:
+
+```blade
+<PwaxJson :json="doc" @action="(name, params) => console.log(name, params)" />
+```
+
+It does **not** report `setState` and the other renderer actions. Those are handled before
+any handler is consulted, so nothing in Pwax ever sees them; watch `@state-change`
+instead, which reports the pointers each one wrote.
+
+#### A form, end to end
+
+Everything above, in the shape most documents actually take — a bound field, a submit
+carrying its value, an error on failure and a redirect on success:
+
+```php
+Route::get('/order', fn () => pwaxRender('pages.order', [
+    'doc' => [
+        'root' => 'form',
+        'state' => ['note' => '', 'error' => null],
+        'elements' => [
+            'form' => [
+                'type' => 'Card',
+                'props' => ['title' => 'Place an order'],
+                'children' => ['note', 'error', 'place'],
+            ],
+            'note' => [
+                'type' => 'Field',
+                'props' => ['label' => 'Note', 'modelValue' => ['$bindState' => '/note']],
+            ],
+            'error' => [
+                'type' => 'Card',
+                'props' => ['title' => ['$state' => '/error']],
+                'visible' => [['$state' => '/error', 'neq' => null]],
+            ],
+            'place' => [
+                'type' => 'Button',
+                'props' => ['label' => 'Place order'],
+                'on' => ['press' => [
+                    'action' => 'submit',
+                    'params' => ['url' => '/orders', 'data' => ['note' => ['$state' => '/note']]],
+                    'onSuccess' => ['navigate' => '/thanks'],
+                    'onError' => ['set' => ['/error' => 'Could not place the order.']],
+                ]],
+            ],
+        ],
+    ],
+]));
+```
+
+No handler, no JavaScript, and no page reload on the way to `/thanks`.
+
+#### Computed values
+
+A prop can call a function you supply, which is the escape hatch for anything the
+expressions cannot say:
+
+```blade
+<PwaxJson :json="doc" :functions="{ fullName: ({ first, last }) => `${first} ${last}` }" />
+```
+
+```php
+'props' => ['title' => [
+    '$computed' => 'fullName',
+    'args' => ['first' => ['$state' => '/first'], 'last' => ['$state' => '/last']],
+]],
+```
+
+These are functions, so they are a prop rather than configuration — `config/pwax.php`
+holds data the runtime reads, never code it runs.
+
+### Two-way binding
+
+`$bindState` reads a value and writes it back, which is how a document builds a form:
+
+```php
+'name' => [
+    'type' => 'Field',
+    'props' => ['label' => 'Your name', 'modelValue' => ['$bindState' => '/user/name']],
+],
+```
+
+The component wires it the way any Vue component does — declare `update:modelValue` in
+`emits` and emit it:
+
+```blade
+<template>
+    <label>
+        @{{ label }}
+        <input :value="modelValue" @input="$emit('update:modelValue', $event.target.value)">
+    </label>
+</template>
+
+<script>
+    export default {
+        props: { label: String, modelValue: String },
+        emits: ['update:modelValue'],
+    };
+</script>
+```
+
+Anything else in the document reading `/user/name` — a `$template`, a `visible` condition
+— updates as it is typed. `@state-change` on `<PwaxJson>` reports the pointers that
+changed if the page wants to know.
+
+### Props and events
+
+| Prop | | |
+| --- | --- | --- |
+| `json` | required | The document |
+| `state` | | Initial state, when you keep it out of the document |
+| `handlers` | | Action handlers for this instance |
+| `functions` | | Functions a `$computed` prop may call |
+| `only` | | Names to narrow the catalog to, for this instance |
+
+`only` is worth reaching for when the document was generated: a page that should only ever
+draw a chart and a caption can say so, and nothing else in the catalog is reachable even
+if the document asks. An empty list means exactly that — nothing. It is read when the
+component mounts rather than watched, so give the component a `:key` if it has to change.
+
+`functions` is a prop rather than configuration because it holds JavaScript.
+`config/pwax.php` carries data the runtime reads; it never carries code the runtime runs,
+and that line is what keeps a configuration value from becoming a way to execute
+something.
+
+| Event | |
+| --- | --- |
+| `@action` | `(name, params)` for every action that reaches a handler |
+| `@state-change` | the state pointers that changed |
+| `@error` | the renderer failed to load |
+
+There are `#loading` and `#error` slots for the moment before the renderer arrives and for
+when it does not.
+
+### Offline
+
+A page rendering a document works offline on the same terms as any other Pwax page: its
+payload is `no-store` because it was rendered with controller data, and `->cacheable()` is
+how a page that renders the same for everyone opts in.
+
+```php
+Route::get('/report', fn () => pwaxRender('pages.report', ['doc' => $doc])->cacheable());
+```
+
+The renderer itself and the catalog's components are precached with the rest of the
+application, so nothing else is needed. As always, do not call `->cacheable()` on a page
+whose document differs per visitor.
+
+### Generating a document
+
+`catalog.prompt()` produces a system prompt describing exactly the components you have
+declared, and `jsonSchema()` the schema for a model that supports structured output. Both
+are reachable from the browser once the renderer has loaded:
+
+```js
+const prompt = await window.pwax.json.prompt();
+```
+
+Each component appears with its description, its declared props, and **the events it
+emits** — so a model binding an `on` key writes an event the component actually has,
+rather than guessing at `click` for something that emits `press`:
+
+```
+- Button: { label: string } - A clickable button. [accepts children] [events: press]
+```
+
+Those event names come from the component's own `emits`, which is why describing the
+catalog fetches every component in it. It happens once, on a call that is already
+asynchronous, and rendering is unaffected — a page still fetches only the components its
+document names.
+
+Generating server-side is the more usual arrangement, and there the honest answer today is
+that you write the prompt yourself from the same catalog you configured — Pwax does not
+run JavaScript on the server to call `prompt()` for you. Whatever produces the document,
+validate it the way you would validate any other input, and rely on the catalog for the
+rest: a document naming a component you did not declare renders nothing and says so in the
+console.
 
 ## Scoped styles
 
@@ -1425,26 +2035,45 @@ served, and the changed component has no render function under its new key. Both
 are reported by `php artisan pwax:doctor`, the second as an error naming the components
 affected.
 
-**One constraint comes with it.** A template has to be the same for every visitor, because
-it is compiled once, at deploy time, with no request in flight. Keep controller data in
-`<script>` and out of `<template>`:
+**Two constraints come with it**, both because the view is rendered once at deploy time
+with no request in flight.
+
+*The template has to be the same for every visitor.* Keep controller data in `<script>`
+and out of `<template>`:
 
 ```blade
 <template>
     <h1>@{{ user.name }}</h1>          {{-- fine: Vue renders this in the browser --}}
     <h1>{{ $user->name }}</h1>         {{-- not precompilable: differs per visitor --}}
 </template>
+```
 
+*And the view has to render at all with no data.* The split above is necessary and not
+sufficient: `@json($user)` in `<script>` still raises `Undefined variable $user` when
+`pwax:compile` renders the view to extract its template. Give every controller variable a
+fallback:
+
+```blade
 <script>
     export default {
-        data: () => ({ user: @json($user) }),
+        data: () => ({ user: @json($user ?? null) }),
     };
 </script>
 ```
 
-That is the idiomatic split anyway, and `pwax:compile` names any view that breaks it —
-such a view raises on the undefined variable when rendered with no data, and the command
-reports it and exits non-zero rather than writing a store that looks complete.
+The fallback is only ever used during the compile pass — a real request always has the
+data — and it does not change the template, which is what gets compiled and keyed. A page
+that renders a JSON document always needs this, since the document comes from the
+controller by definition:
+
+```blade
+data() {
+    return { doc: @json($doc ?? null) };
+}
+```
+
+`pwax:compile` names any view that breaks either rule, and exits non-zero rather than
+writing a store that looks complete.
 
 `php artisan pwax:compile --clear` removes the store and goes back to compiling in the
 browser. `assets.node` sets the Node binary if it is not on `PATH`;
@@ -1854,6 +2483,9 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 | `styles`, `scripts` | `[]` | Extra tags; string or attribute array |
 | `scripts[].head` | `false` | Render this script in `<head>` rather than at the end of `<body>` |
 | `vue.plugins`, `vue.directives`, `vue.middleware` | `[]` | Vue extensions |
+| `json.enabled` | `true` | Serve, precache and load the JSON document renderer |
+| `json.components` | `[]` | The catalog a `<PwaxJson>` document may draw from |
+| `json.actions` | `[]` | Action handlers, on top of `navigate`, `submit` and `reload` |
 | `minify.enabled` | production only | Minify component sources |
 | `minify.store`, `minify.ttl` | `null` | Cache for minified output |
 | `cache.asset_ttl` | `3600` | `max-age` for component assets |
@@ -1948,7 +2580,8 @@ Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 
 ## JavaScript API
 
-The runtime publishes `window.pwax`:
+The runtime publishes `window.pwax`, and registers one global component,
+[`<PwaxJson>`](#json-documents):
 
 | Member | Description |
 | --- | --- |
@@ -1973,6 +2606,9 @@ The runtime publishes `window.pwax`:
 | `pwax.share(data)` | The platform share sheet |
 | `pwax.prefetch(path)` | Fetch a page's payload before it is asked for |
 | `pwax.progress` | The navigation progress bar, for your own long tasks |
+| `pwax.json.load()` | Fetch the JSON renderer now rather than on first render |
+| `pwax.json.prompt()` | A system prompt describing the catalog, for a model |
+| `pwax.json.jsonSchema()` | The catalog as a JSON Schema, for structured output |
 | `pwax.app`, `pwax.router` | The Vue app and router instances |
 | `pwax.config`, `pwax.version` | Runtime configuration and package version |
 

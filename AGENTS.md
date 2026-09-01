@@ -218,6 +218,127 @@ distinct namespaces by design; the two were once confused for each other,
 and grouping all client-side Vue extensions under `pwax.vue.*` was the
 fix.
 
+### A JSON catalog entry is a component, not a render function
+
+`src/js/json/index.js` gives every `pwax.json.components` entry its own
+generated Vue component rather than the arrow function
+`@json-render/vue`'s README shows. This looks like ceremony and is not.
+A registry entry is handed `{props, children, emit, on, bindings,
+loading}` — no element, no slot map, no instance — so a plain function
+cannot discover which events the document bound (it reads them off the
+loaded component's own `emits`) and cannot reach `useStateStore()` to
+honour a `$bindState` (a composable needs a `setup()`).
+
+Simplify it back to a function and every document renders perfectly and
+does nothing: no `on:` binding fires, no two-way binding writes.
+
+### The confirmation dialog is ours, and has to be
+
+`Confirmation` in `src/js/json/index.js` renders its own dialog rather than
+the library's `ConfirmDialog`, which is a `div` with two buttons: no `role`,
+no `aria-modal`, no label, focus left wherever it was, no trap, no Escape,
+and `background: white` hardcoded so a dark theme gets a white card. It is
+the only interface this package draws in the whole feature — everything else
+on a page is the application's components — and a document can ask for it, so
+an application cannot decline it.
+
+So the replacement is a labelled `role="dialog"` with `aria-modal`, focused on
+Cancel when it opens (the safe half of a destructive question) and returning
+focus on close, with Tab trapped and Escape cancelling. Colours are the CSS
+system colours (`Canvas`, `CanvasText`, `ButtonFace`), which resolve against the
+`color-scheme` in effect — so the dialog follows the *application*, not the
+operating system. Nothing here declares a `color-scheme` of its own, and that
+is deliberate: forcing `light dark` on this subtree was tried and measured, and
+it puts a dark dialog over a light-only application whenever the visitor's
+system is set to dark.
+
+Styles are inline rather than a stylesheet because a stylesheet injected from
+this bundle would need the CSP nonce, which the bundle has no way to reach.
+Every element carries a class anyway, so an application can override with
+`!important`; the README says so rather than pretending otherwise.
+
+**Do not try to swallow the `Action cancelled` rejection.** It was tried. The
+library dispatches with `void emitEvent(…)`, so there is no handle to catch;
+and no page-level hook fires for it either — measured in Chromium, where a
+listener on `unhandledrejection` sees a control rejection raised beside it and
+never sees this one, and neither `window.onerror` nor `app.config.errorHandler`
+is called. A listener registered around the cancel and removed on
+`setTimeout(…, 0)` is gone before the event would arrive, which is what made
+the first attempt look plausible and do nothing.
+
+Two more things about actions are worth knowing before changing any of
+this. The renderer handles `setState`, `pushState`, `removeState`,
+`validateForm`, `push` and `pop` itself and returns before consulting the
+handler map — so `@action` cannot report them, and "fixing" that is not
+possible from our side. And `Root` renders its own confirmation dialog
+host: the library's `ConfirmationDialogManager` destructures a
+getter-backed context in `setup()`, capturing `null` for good, so a
+`confirm` binding otherwise hangs its action forever with no dialog and no
+error.
+`tests/js/jsonRender.test.js` runs the real bundle against the real Vue
+for exactly this reason, and pins three more behaviours of version
+0.20.0 that are not documented contracts — `children` rather than named
+slots, `repeat` on the container, and the patch-shaped `onStateChange`.
+
+### `prompt()` describes a catalog the registry never builds
+
+`createRenderer` builds two catalogs from the same declarations. The one the
+registry uses is synchronous and knows no events; `describedCatalog()` loads
+every component, reads `emits` off each, and builds a second one that
+`prompt()` and `jsonSchema()` answer from.
+
+The split is the point. Event names are the component's own `emits` — that is
+why a catalog entry does not repeat them — so they cannot be known until the
+component is fetched, and fetching them all at `createRenderer` would make
+every page pay for the whole catalog. Describing it is a generation-time call
+that is already asynchronous, so it pays instead. Collapse the two and either
+rendering stops being lazy or the prompt goes back to telling a model to bind
+"an event name (from the component's supported events)" without ever naming
+one — which is what it did, and a bound `click` on something that emits
+`press` is silent on both sides.
+
+`eventsOf()` is shared with the render path so the two cannot disagree about
+what an event is; `update:x` is not one, in either.
+
+### A document's props are filtered before they reach `h()`
+
+`safeProps()` in `src/js/json/index.js` drops any prop whose name begins
+with `on`, the five markup sinks (`innerHTML` and friends), and any value
+whose scheme is `javascript:`, `vbscript:` or `data:text/html`. This is not
+defensive tidiness: Vue passes every prop a component did not declare
+through to its root element as an attribute, `setAttribute('onclick', …)`
+is a live inline handler, and `innerHTML` is set as a DOM property. Both
+were confirmed executing in Chromium before the filter existed. The
+catalog's whole claim — that a document brings no markup and no script of
+its own — rests on this function, so widening it needs the same proof.
+
+Vue's `^prop` and `.prop` prefixes are stripped before the name is tested,
+because they reach the same two sinks by another spelling. The name rule
+covers *everything* starting with `on` rather than a list of event names;
+that costs an innocent `online` prop, which is the intended trade and is
+what the console line is for. `DoctorCommand::MARKUP_PROPS` mirrors the sink
+list in PHP so `pwax:doctor` reports a catalog that declares one, and
+`RuntimeContractTest` fails when the two drift.
+
+Two things about the value half are load-bearing and were each a live
+bypass before they were written. It walks **every level** of a prop, because
+the URL a document wants is a field of an entry in a list far more often than
+it is the prop itself — a `javascript:` URL inside an `items` array ran on
+click when the check looked only at the top. And it reads the scheme by
+walking the string rather than normalising a slice of it: padding is
+unbounded, so three hundred leading tabs step over any fixed window. There is
+no cycle guard and no depth limit, and there does not need to be — a document
+is parsed JSON, and `@json-render/vue` resolves these props with a walk of
+its own first, so a cyclic object handed to `:json` overflows the stack in the
+resolver and never reaches a render.
+
+For the same reason the `submit` and `navigate` built-ins in
+`src/js/json.js` resolve their URL and refuse another origin: `http.json()`
+attaches the session's CSRF token to every request it makes, and
+`sync.enqueue()` already refused cross-origin for that exact reason — so
+without the check the same document leaked the token while online and was
+refused while offline.
+
 ### Components are Blade views, but their compile output is JavaScript
 
 `src/Compiler/ComponentCompiler` (and its helpers `BlockExtractor`,
@@ -305,6 +426,11 @@ reachable from this object is part of the contract:
 - `window.pwax.share(data)` — Web Share integration.
 - `window.pwax.prefetch(path)` — explicit prefetch.
 - `window.pwax.progress.{start,done,reset}` — the progress bar.
+- `window.pwax.json.{load,prompt,jsonSchema}` — the JSON document renderer.
+  `load()` fetches `dist/pwax-json.js` early; `prompt()` and `jsonSchema()`
+  describe the configured catalog for a model. Rendering itself is the
+  globally registered `<PwaxJson :json="…" />` component, which is also part
+  of the contract — see §5.
 
 `types/pwax.d.ts` is the authority for every shape above and is type-checked in
 CI (`npm run types`). When this list and that file disagree, the file is right —
@@ -424,7 +550,27 @@ If a setting needs to reach the client runtime:
    its purpose.
 5. CHANGELOG entry under `### Added` (not `### Internal`).
 
-### 9.5 Adding a new prefab shell partial or extension point
+### 9.5 Adding a component to the JSON catalog
+
+1. Write it as an ordinary component. Children come through **one default
+   `<slot />`** — a document cannot address a named one — and whatever it
+   declares in `emits` is what a document may bind with `on`.
+2. Add it to `pwax.json.components` in `config/pwax.php`. A bare
+   reference is enough; the array form adds `description` and `props`,
+   which is what constrains a generated document.
+3. Nothing else. It is precached by `ComponentRegistry` like any other
+   component, and `Shell::json()` resolves the reference with the same
+   `moduleEntry()` the `vue.*` groups use.
+4. `php artisan pwax:doctor` names a reference that points at no view, a
+   prop `type` the schema builder does not know, an `enum` with no values,
+   and a prop name the renderer will drop.
+5. Do not name a prop `online`, `once`, or anything else beginning with
+   `on`: `safeProps()` drops those, since it cannot tell them from
+   `onclick`. Whatever the component does with a prop it renders as
+   markup or as a URL is its own to validate — the filter stops the
+   document supplying a handler, not the component trusting one.
+
+### 9.6 Adding a new prefab shell partial or extension point
 
 The shell ships several partials (`layouts/shell`, `components/includes/head`,
 `components/includes/foot`, `components/content`, `components/loader`,
@@ -439,7 +585,7 @@ Adding a new partial:
 3. Document it in `resources/ai/pwax-skill.md` and the README so consumers
    know it exists.
 
-### 9.6 Adding a new runner config key (CLI)
+### 9.7 Adding a new runner config key (CLI)
 
 `pwax.assets.{render_functions,node,vue_build}` controls the `pwax:compile`
 runner. Adding another option:
@@ -593,6 +739,10 @@ before answering.
 
 ## 14. Where to read more
 
+- `.claude/skills/run-workbench/SKILL.md` — how to serve the demo and drive
+  it in a real browser. Read it before trying to reproduce anything visual:
+  it carries the Composer, Chromium and shutdown details this container
+  needs, each of which costs an afternoon to rediscover.
 - `README.md` — the user-facing manual; its structure is the user's
   mental model of the package.
 - `CHANGELOG.md` — every release, grouped Added / Changed / Fixed /

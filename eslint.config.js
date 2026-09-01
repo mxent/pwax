@@ -20,6 +20,14 @@ export default [
             'no-var': 'error',
             'prefer-const': 'error',
             eqeqeq: ['error', 'smart'],
+            // A free variable in browser code does not throw where you would expect it
+            // to. The DOM defines a great many globals — `Comment`, `Option`, `Event`,
+            // `name`, `status` — so a mistyped or unimported identifier often resolves
+            // to one of them and the code quietly does the wrong thing instead of
+            // failing. That is not hypothetical here: `src/js/json/index.js` compares a
+            // vnode against Vue's `Comment`, and an import that never landed left the
+            // comparison running against the DOM interface, silently.
+            'no-undef': 'error',
         },
     },
     {
@@ -55,13 +63,22 @@ export default [
         languageOptions: {
             ecmaVersion: 2022,
             sourceType: 'module',
-            globals: { ...globals.browser, ...globals.node },
+            // The same globals the runtime is linted against: a test stubs `Vue` and
+            // reads it back, and the runtime under test resolves it off `window`.
+            globals: {
+                ...globals.browser,
+                ...globals.node,
+                Vue: 'readonly',
+                VueRouter: 'readonly',
+                Pinia: 'readonly',
+            },
         },
         rules: {
             'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
             'no-var': 'error',
             'prefer-const': 'error',
             eqeqeq: ['error', 'smart'],
+            'no-undef': 'error',
         },
     },
 ];

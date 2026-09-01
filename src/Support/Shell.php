@@ -21,8 +21,16 @@ use Throwable;
  */
 class Shell
 {
-    /** The bundle's digest once resolved; `?string` covers both "unreadable" and "haven't checked yet". */
-    private ?string $runtimeVersion = null;
+    /**
+     * Each shipped bundle's digest, once resolved.
+     *
+     * Keyed by path and holding null for an unreadable file, so "checked, and there is
+     * nothing there" is distinguishable from "not checked yet" — which a bare `?string`
+     * is not, and which made the miss re-`hash_file()` on every call.
+     *
+     * @var array<string, string|null>
+     */
+    private array $bundleVersions = [];
 
     /** The resolved CSP nonce. Null is a legitimate answer, so the flag below is what says "resolved". */
     private ?string $nonce = null;
@@ -71,7 +79,92 @@ class Shell
             'directives' => $this->extensions('pwax.vue.directives'),
             'middleware' => $this->extensions('pwax.vue.middleware'),
             'templates' => $this->templates(),
+            'json' => $this->json(),
         ];
+    }
+
+    /**
+     * Everything `<PwaxJson>` needs, resolved to data.
+     *
+     * The catalog travels in the configuration island rather than from an endpoint of
+     * its own. It is a handful of names and prop declarations — configuration, and about
+     * as large as `vue.plugins` — so a second request, a second cache entry and a second
+     * thing to precache would all cost more than the bytes they saved.
+     *
+     * Disabled, every field is empty rather than absent: the runtime reads `runtime`
+     * being null as "say why, then render nothing", and a missing key would instead read
+     * as a runtime that had not been told anything.
+     *
+     * @return array{enabled: bool, runtime: string|null, components: array<string, mixed>, actions: array<string, mixed>}
+     */
+    private function json(): array
+    {
+        $enabled = (bool) $this->config->get('pwax.json.enabled', true);
+
+        if (! $enabled) {
+            return ['enabled' => false, 'runtime' => null, 'components' => [], 'actions' => []];
+        }
+
+        return [
+            'enabled' => true,
+            'runtime' => $this->jsonRuntimeUrl(),
+            'components' => $this->jsonComponents(),
+            'actions' => $this->extensions('pwax.json.actions'),
+        ];
+    }
+
+    /**
+     * The JSON catalog, each entry resolved to a component the runtime can reach.
+     *
+     * Two config shapes, one output. A bare string is the component and nothing else; an
+     * array adds the description and prop types that constrain a generated document. The
+     * reference itself is resolved by the same {@see moduleEntry()} the `vue` group uses,
+     * so `@pwaxImport('components.card')`, `module:components.card` and a dotted path on
+     * `window` all mean here exactly what they mean there.
+     *
+     * `description`, `slots`, `props` and `events` pass through untouched. They are read
+     * inside `dist/pwax-json.js`, which turns them into the catalog schema — this side
+     * has no opinion about them beyond carrying them.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private function jsonComponents(): array
+    {
+        $directive = (string) $this->config->get('pwax.components.directive', 'pwaxImport');
+        $pattern = '/^@' . preg_quote($directive, '/') . '\s*\(\s*[\'"]?(.+?)[\'"]?\s*\)$/';
+
+        $catalog = [];
+
+        /** @var array<string, mixed> $configured */
+        $configured = (array) $this->config->get('pwax.json.components', []);
+
+        foreach ($configured as $name => $value) {
+            $extra = [];
+
+            if (is_array($value)) {
+                $extra = $value;
+                $value = $extra['component'] ?? null;
+                unset($extra['component']);
+            }
+
+            if (! is_string($value) || trim($value) === '') {
+                continue;
+            }
+
+            $value = trim($value);
+
+            if (preg_match($pattern, $value, $matches) === 1) {
+                $entry = $this->moduleEntry($matches[1]);
+            } elseif (str_starts_with($value, 'module:')) {
+                $entry = $this->moduleEntry(substr($value, 7));
+            } else {
+                $entry = ['type' => 'global', 'path' => $value];
+            }
+
+            $catalog[(string) $name] = $entry + $extra;
+        }
+
+        return $catalog;
     }
 
     /**
@@ -307,32 +400,79 @@ class Shell
     public function runtimeUrl(): string
     {
         $url = $this->pwax->route('pwax.runtime');
-        $version = $this->runtimeVersion();
+        $version = $this->bundleVersion('pwax.js');
 
         return $version === null ? $url : $url . (str_contains($url, '?') ? '&' : '?') . 'v=' . $version;
     }
 
     /**
-     * A short digest of the shipped bundle, or null if it is not readable.
+     * The JSON renderer's URL, when this page is going to need it.
+     *
+     * Read back out of the compiled template rather than emitted on every page, the same
+     * way {@see Pwax::importedUrls()} finds the modules a script is about to import. The
+     * renderer is fetched by the first `<PwaxJson>` that renders — which is after Vue has
+     * loaded, compiled the page and got as far as that node — so without this the one
+     * thing on the page that needs the largest asset is also the last to ask for it, and
+     * the visitor watches the loading slot while it arrives.
+     *
+     * A page with no `<PwaxJson>` in it gets nothing, which is the point: this is an
+     * 82 kB hint and it must not land on pages that will never use it.
+     */
+    public function jsonPreloadUrl(?Component $component): ?string
+    {
+        if ($component === null || $component->template === '') {
+            return null;
+        }
+
+        // Both spellings, because Vue resolves either and an author may write the tag
+        // however the rest of their template reads.
+        if (! str_contains($component->template, 'PwaxJson')
+            && ! str_contains($component->template, 'pwax-json')) {
+            return null;
+        }
+
+        return $this->jsonRuntimeUrl();
+    }
+
+    /**
+     * The URL the JSON renderer is served from, fingerprinted the same way.
+     *
+     * Null when `pwax.json.enabled` is off, which is what the runtime reads to decide
+     * that `<PwaxJson>` should explain itself rather than try to load anything.
+     */
+    public function jsonRuntimeUrl(): ?string
+    {
+        if (! $this->config->get('pwax.json.enabled', true)) {
+            return null;
+        }
+
+        $url = $this->pwax->route('pwax.json-runtime');
+        $version = $this->bundleVersion('pwax-json.js');
+
+        return $version === null ? $url : $url . (str_contains($url, '?') ? '&' : '?') . 'v=' . $version;
+    }
+
+    /**
+     * A short digest of one shipped bundle, or null if it is not readable.
      *
      * Its contents rather than the package version: a version is what someone remembered
      * to bump, and this has to be right when they did not.
      */
-    private function runtimeVersion(): ?string
+    private function bundleVersion(string $file): ?string
     {
-        if ($this->runtimeVersion !== null) {
-            return $this->runtimeVersion;
+        if (array_key_exists($file, $this->bundleVersions)) {
+            return $this->bundleVersions[$file];
         }
 
-        $path = dirname(__DIR__, 2) . '/dist/pwax.js';
+        $path = dirname(__DIR__, 2) . '/dist/' . $file;
 
         if (! is_file($path)) {
-            return $this->runtimeVersion = null;
+            return $this->bundleVersions[$file] = null;
         }
 
         $hash = @hash_file('xxh128', $path);
 
-        return $this->runtimeVersion = $hash === false ? null : substr($hash, 0, 12);
+        return $this->bundleVersions[$file] = $hash === false ? null : substr($hash, 0, 12);
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace Mxent\Pwax\Tests\Feature;
 
+use Mxent\Pwax\Console\Commands\DoctorCommand;
 use Mxent\Pwax\Pwax;
 use Mxent\Pwax\Support\Shell;
 use Mxent\Pwax\Tests\TestCase;
@@ -60,6 +61,52 @@ class RuntimeContractTest extends TestCase
             $sent,
             'types/pwax.d.ts `Config` and `Shell::runtimeConfig()` disagree. '
             . 'Adding a runtime config key means adding it to both.'
+        );
+    }
+
+    /**
+     * `pwax:doctor` knows the same prop names the renderer drops.
+     *
+     * The renderer refuses a prop that would write into the DOM, and the doctor warns
+     * about a catalog that declares one — a prop in `prompt()` and `jsonSchema()` that
+     * no document can ever deliver. Two lists, two languages, and only this test
+     * connecting them: add `srcset` to the JS and the doctor goes quiet about it
+     * without anybody noticing.
+     */
+    public function test_the_doctor_knows_the_prop_names_the_renderer_drops(): void
+    {
+        $js = $this->runtimeSource('src/js/json/index.js');
+
+        $matched = preg_match('/const MARKUP_PROPS = new Set\(\[(.*?)\]\)/s', $js, $found);
+
+        $this->assertSame(
+            1,
+            $matched,
+            'src/js/json/index.js no longer declares MARKUP_PROPS as a Set literal. '
+            . 'DoctorCommand::MARKUP_PROPS mirrors it and cannot be checked against it now.'
+        );
+
+        preg_match_all("/'([^']+)'/", $found[1], $names);
+
+        $declared = $names[1];
+        $mirrored = DoctorCommand::MARKUP_PROPS;
+
+        sort($declared);
+        sort($mirrored);
+
+        $this->assertSame(
+            $declared,
+            $mirrored,
+            'DoctorCommand::MARKUP_PROPS and MARKUP_PROPS in src/js/json/index.js disagree. '
+            . 'A prop name the renderer drops has to be one the doctor reports.'
+        );
+
+        // The other half of the rule, which the doctor mirrors as `str_starts_with`.
+        $this->assertStringContainsString(
+            "lower.startsWith('on')",
+            $js,
+            'The renderer no longer drops every prop beginning with "on". '
+            . 'DoctorCommand mirrors that rule and needs updating with it.'
         );
     }
 

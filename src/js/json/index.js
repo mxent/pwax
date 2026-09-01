@@ -999,7 +999,10 @@ export function createRenderer({ components = {}, actions = {}, load }) {
 
     return {
         Root,
-        catalog,
+        // `catalog` is deliberately not returned. It is the synchronous one the registry
+        // renders from, which knows no events — so handing it out alongside `prompt()`
+        // would be two answers to the same question, differing in the one part a model
+        // needs. Nothing read it.
         /** The system prompt that constrains a model to this catalog. */
         prompt: (options) => describedCatalog().then((described) => described.prompt(options)),
         /** The JSON Schema for structured output, for a model that supports it. */

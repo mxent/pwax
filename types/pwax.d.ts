@@ -104,7 +104,9 @@ declare namespace Pwax {
      *
      * Rendering is done with the global `<PwaxJson :json="…" />` component; this is the
      * surface for the things around it. `prompt()` and `jsonSchema()` load the renderer
-     * if it is not already loaded, because the catalog they describe lives inside it.
+     * if it is not already loaded, because the catalog they describe lives inside it —
+     * and every component in that catalog, to read the events off each one's `emits`.
+     * Rendering is unaffected: a page still fetches only what its document names.
      */
     interface Json {
         /**
@@ -119,9 +121,10 @@ declare namespace Pwax {
         /**
          * The JSON Schema for a model that supports structured output.
          *
-         * This and `prompt()` are what the catalog's prop declarations are for. Nothing
-         * checks a prop once a document has arrived — the enforced boundary is the
-         * component list, not the props.
+         * This and `prompt()` are what the catalog's prop declarations are for: nothing
+         * checks a declared prop's *type* once a document has arrived. What is enforced
+         * is the component list, and the props no document may set at all — anything
+         * beginning with `on`, the names that write markup, and script URLs.
          */
         jsonSchema(options?: Record<string, unknown>): Promise<object>;
     }

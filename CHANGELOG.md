@@ -67,8 +67,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`:functions`**, for `$computed` props. A prop rather than configuration, because it
   holds JavaScript and `config/pwax.php` carries data the runtime reads, never code it
   runs. Catalog prop declarations shape `prompt()` and `jsonSchema()` — they constrain the
-  model that writes a document, and are not a runtime gate; the boundary that is enforced
-  is the component list.
+  model that writes a document, and are not a runtime gate; what is enforced is the
+  component list and the props no document may set at all, described above.
 
 - **`window.pwax.json.{load,prompt,jsonSchema}`.** `prompt()` and `jsonSchema()`
   describe the configured catalog for a model that is generating documents — each

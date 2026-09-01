@@ -561,8 +561,9 @@ If a setting needs to reach the client runtime:
 3. Nothing else. It is precached by `ComponentRegistry` like any other
    component, and `Shell::json()` resolves the reference with the same
    `moduleEntry()` the `vue.*` groups use.
-4. `php artisan pwax:doctor` names a reference that points at no view,
-   and a prop `type` the schema builder does not know.
+4. `php artisan pwax:doctor` names a reference that points at no view, a
+   prop `type` the schema builder does not know, an `enum` with no values,
+   and a prop name the renderer will drop.
 5. Do not name a prop `online`, `once`, or anything else beginning with
    `on`: `safeProps()` drops those, since it cannot tell them from
    `onclick`. Whatever the component does with a prop it renders as

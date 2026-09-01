@@ -12,11 +12,21 @@
  * the global, so the bundled package gets the same Vue the rest of the application is
  * using, and the bundle stays free of Vue itself.
  *
- * The list is exactly what `@json-render/vue` imports, plus the four helpers
- * `src/js/json/index.js` needs for the catalog wrappers. `assertVueExports()` in
- * `build.js` fails the build if the package ever reaches for one that is not here —
- * without it, an upgrade would produce a bundle whose missing import is `undefined`
- * and whose failure is a `TypeError` at render time, far from its cause.
+ * The list is exactly the union of two sets: what `@json-render/vue` and
+ * `@json-render/core` import from `vue`, and the five names
+ * `src/js/json/index.js` needs of its own for the catalog wrappers and the
+ * confirmation dialog — `Comment`, `camelize`, `markRaw`, `nextTick` and
+ * `toHandlerKey`.
+ *
+ * A name the packages need and this file lacks fails the build: esbuild reports
+ * `No matching export in "src/js/json/vue-global.js" for import "…"`, naming the
+ * file to edit and the name to add, which is the tripwire for a json-render upgrade
+ * reaching for a Vue API the shim has never had to cover. See the note above
+ * `vueAlias()` in `build.js`, which is where the decision not to check this
+ * separately is recorded.
+ *
+ * Nothing catches the other direction — an export nothing imports is silently
+ * dead — so keep the list tight by hand when trimming an import.
  *
  * Read once, at module scope: the bundle is loaded on demand, long after the Vue
  * script tag has evaluated, so there is no ordering hazard to defend against.
@@ -33,7 +43,6 @@ if (!Vue) {
 }
 
 export const camelize = Vue.camelize;
-export const capitalize = Vue.capitalize;
 export const Comment = Vue.Comment;
 export const computed = Vue.computed;
 export const defineComponent = Vue.defineComponent;

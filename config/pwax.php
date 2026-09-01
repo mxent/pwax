@@ -326,9 +326,18 @@ return [
     | What they are for is worth being exact about. They shape the system prompt
     | and the JSON Schema the catalog generates, which is how a model is kept to
     | props that exist and values that are allowed. Nothing enforces them once a
-    | document has arrived: any prop reaches the component, declared or not, and
-    | `required` is not checked. The boundary that *is* enforced is the component
-    | list — a type the catalog does not name renders nothing and says so.
+    | document has arrived: an undeclared prop still reaches the component, and
+    | `required` is not checked.
+    |
+    | Two things *are* enforced. The component list — a type the catalog does not
+    | name renders nothing and says so. And a small set of props no document may
+    | set whatever the catalog says: anything beginning with `on`, the names that
+    | write markup (`innerHTML` and its siblings), and any value whose scheme is
+    | `javascript:`. Vue passes an undeclared prop through to the component's root
+    | element, where those stop being data and start being DOM, so they are dropped
+    | with a console line naming the element and the prop. `pwax:doctor` reports a
+    | catalog that declares one, since it could never arrive. See "What a document
+    | cannot do" in the README.
     |
     | So declare them for anything a model will write, and treat a document from
     | anywhere you do not control the way you would treat any other input.

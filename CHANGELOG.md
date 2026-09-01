@@ -45,13 +45,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `:handlers` for one instance — where a name is defined twice, the page wins over
   configuration, and configuration over a built-in.
 
-- **The whole document vocabulary.** All eight prop expressions (`$state`, `$bindState`,
-  `$template`, `$cond`, `$item`, `$bindItem`, `$index`, `$computed`) and every element key
-  (`children`, `visible`, `repeat`, `on`, `watch`), including nested `repeat` and the full
-  set of `visible` comparisons. `workbench/resources/views/pages/vocabulary.blade.php`
-  demonstrates every one of them on a single page, alongside a catalog component reached
-  by dotted path on `window` and an `onError` that surfaces the thrown message.
-
   The confirmation dialog is Pwax's own rather than the library's, which was a `div`
   with two buttons: it is a labelled `role="dialog"` with `aria-modal`, focuses Cancel
   on open and restores focus on close, traps Tab, cancels on Escape, and uses the CSS
@@ -63,6 +56,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `validateForm` is the one renderer action that does nothing here. It reports on fields
   registered through a composable a component calls in its own `setup()`, which a catalog
   component — loaded as a separate module from the server — cannot reach.
+
+- **The whole document vocabulary.** All eight prop expressions (`$state`, `$bindState`,
+  `$template`, `$cond`, `$item`, `$bindItem`, `$index`, `$computed`) and every element key
+  (`children`, `visible`, `repeat`, `on`, `watch`), including nested `repeat` and the full
+  set of `visible` comparisons. `workbench/resources/views/pages/vocabulary.blade.php`
+  demonstrates every one of them on a single page, alongside a catalog component reached
+  by dotted path on `window` and an `onError` that surfaces the thrown message.
 
 - **`:functions`**, for `$computed` props. A prop rather than configuration, because it
   holds JavaScript and `config/pwax.php` carries data the runtime reads, never code it
